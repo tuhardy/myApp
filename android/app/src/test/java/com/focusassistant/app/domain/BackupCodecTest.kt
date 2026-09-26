@@ -45,6 +45,25 @@ class BackupCodecTest {
     @Test fun missingMandatoryFieldsAreRejected() {
         val root = root(); root.getJSONArray("projects").getJSONObject(0).remove("title"); rejected(root)
     }
+    @Test fun unlimitedCountupTargetRoundTripsAsNull() {
+        val unlimited = state().let { base ->
+            base.copy(projects = listOf(project.copy(targetMinutes = null)),
+                sessions = listOf(session.copy(targetMinutes = null)))
+        }
+        val encoded = BackupCodec.encode(unlimited)
+        assertTrue(JSONObject(encoded).getJSONArray("projects").getJSONObject(0).isNull("targetMinutes"))
+        val restored = BackupCodec.decode(encoded)
+        assertNull(restored.projects.single().targetMinutes)
+        assertNull(restored.sessions.single().targetMinutes)
+    }
+    @Test fun missingTargetKeyIsRejectedRatherThanTreatedAsUnlimited() {
+        val root = root(); root.getJSONArray("projects").getJSONObject(0).remove("targetMinutes"); rejected(root)
+    }
+    @Test fun countdownWithoutTargetIsRejected() {
+        val root = root()
+        root.getJSONArray("projects").getJSONObject(0).put("timerMode", TimerMode.COUNTDOWN.name).put("targetMinutes", JSONObject.NULL)
+        rejected(root)
+    }
     @Test fun numericStringsAndFractionalIntegersAreRejected() {
         val text = root(); text.getJSONArray("projects").getJSONObject(0).put("targetMinutes", "25"); rejected(text)
         val fraction = root(); fraction.getJSONArray("projects").getJSONObject(0).put("targetMinutes", 25.5); rejected(fraction)

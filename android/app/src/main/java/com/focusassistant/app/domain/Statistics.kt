@@ -100,7 +100,7 @@ object Statistics {
             val latest = latestForSession(progress, session.id)
             rows += listOf(date(session, zone).toString(), session.taskTitle, session.category, timestamp(session.startedAt), timestamp(session.endedAt),
                 session.durationSeconds / 60.0, "专注计时", if (session.timerMode == TimerMode.COUNTUP) "正计时" else "倒计时", session.projectTitle,
-                session.targetMinutes, session.durationSeconds, latest?.note, latest?.percent, latest?.updatedAt?.let { timestamp(it) })
+                session.targetMinutes ?: "不限时", session.durationSeconds, latest?.note, latest?.percent, latest?.updatedAt?.let { timestamp(it) })
         }
         return "\uFEFF" + rows.joinToString("\r\n") { it.joinToString(",") { value -> field(value) } } + "\r\n"
     }

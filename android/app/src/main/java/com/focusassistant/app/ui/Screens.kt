@@ -77,9 +77,21 @@ private fun EmptyMessage(title: String, detail: String) {
     }
 }
 
+/** 按分类给项目一个稳定的图标与配色，纯展示，不参与任何统计。 */
+private fun projectGlyph(project: Project): Pair<androidx.compose.ui.graphics.vector.ImageVector, Pair<Color, Color>> {
+    val palette = listOf(
+        Icons.Outlined.Headphones to (Color(0xFFF6EEE8) to Color(0xFFA36743)),
+        Icons.Outlined.MenuBook to (Color(0xFFEFEDF5) to Color(0xFF77668B)),
+        Icons.Outlined.Code to (Color(0xFFEDF0F4) to Color(0xFF63768B))
+    )
+    val index = ((project.category.hashCode() % palette.size) + palette.size) % palette.size
+    return palette[index]
+}
+
 @Composable
 internal fun ProjectsScreen(
     state: AppState,
+    today: LocalDate,
     onOpen: (Project) -> Unit,
     onCreate: () -> Unit,
     onStatistics: () -> Unit,
@@ -91,17 +103,31 @@ internal fun ProjectsScreen(
 ) {
     ScreenBody {
         PageTitle("专注") {
-            IconButton(onClick = onStatistics) { Icon(Icons.Outlined.BarChart, "专注统计") }
+            IconButton(onClick = onStatistics) { Icon(Icons.Outlined.TrendingUp, "专注统计") }
             IconButton(onClick = onCreate) { Icon(Icons.Outlined.Add, "新建学习项目") }
         }
+        Caption("从一件小事，进入状态。")
+        // 今日摘要：只汇总本机真实完成记录，没有记录就显示 0。
+        val todaySessions = Statistics.select(state.sessions, Period.DAY, today)
+        val todaySeconds = todaySessions.sumOf { it.durationSeconds }
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.Bottom) {
+            Text("今日专注", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(end = 6.dp, bottom = 2.dp))
+            Text(targetText((todaySeconds / UiLimits.SECONDS_PER_MINUTE).toInt()), fontSize = 20.sp, fontWeight = FontWeight.Medium)
+            Text(" / ", color = Color(0xFFB8B3AE), modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+            Text("${todaySessions.size}", fontSize = 20.sp, fontWeight = FontWeight.Medium)
+            Text("次完成", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
+        }
+        HorizontalDivider()
         state.timer?.let { timer ->
-            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(16.dp)) {
-                Row(Modifier.fillMaxWidth().clickable(onClick = onResumeTimer).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(if (timer.phase == TimerPhase.FOCUS) timer.projectTitle else phaseName(timer.phase), fontWeight = FontWeight.Medium)
-                        Caption(if (timer.status == TimerStatus.PAUSED) "计时已暂停 · 返回继续" else "计时进行中 · 返回查看")
+            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(14.dp)) {
+                Row(Modifier.fillMaxWidth().clickable(onClick = onResumeTimer).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Timer, null, tint = Accent, modifier = Modifier.padding(end = 11.dp))
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(if (timer.phase == TimerPhase.FOCUS) timer.projectTitle else phaseName(timer.phase),
+                            fontWeight = FontWeight.Medium, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Caption(if (timer.status == TimerStatus.PAUSED) "已暂停 · 返回继续" else "正在专注 · 返回查看")
                     }
-                    Icon(Icons.Outlined.ChevronRight, "返回计时")
+                    Icon(Icons.Outlined.ChevronRight, "返回计时", tint = Muted)
                 }
             }
         }
@@ -109,27 +135,59 @@ internal fun ProjectsScreen(
             EmptyMessage("为重要的事，留一段时间", "创建一个可反复使用的学习项目。从一次专注开始，慢慢积累自己的进度。")
             Button(onClick = onCreate, modifier = Modifier.fillMaxWidth()) { Text("创建第一个项目") }
         } else {
-            Caption("点项目开始专注，点右侧箭头查看进度。")
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("我的项目", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(" ${state.projects.size}", color = Muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                TextButton(onClick = onCreate, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    Icon(Icons.Outlined.Add, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("新建", fontSize = 12.sp)
+                }
+            }
             state.projects.forEach { project ->
                 key(project.id) {
                     var expanded by rememberSaveable(project.id) { mutableStateOf(false) }
                     val latest = Statistics.latestProgress(state.progress, project.id)
                     val sessions = state.sessions.filter { it.projectId == project.id }.sortedByDescending { it.endedAt }
-                    Surface(shape = RoundedCornerShape(16.dp), color = SoftSurface) {
-                        Column(Modifier.fillMaxWidth()) {
+                    val (glyph, tones) = projectGlyph(project)
+                    Surface(shape = RoundedCornerShape(18.dp), color = Color.White,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (expanded) Color(0xFFDCB29F) else Color(0xFFEAE7E4))) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f).clickable { onOpen(project) }.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Text(project.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
-                                    Caption("${project.category} · ${projectSubtitle(project)}")
-                                    latest?.percent?.let { Caption("当前进度 $it%") }
+                                Row(Modifier.weight(1f).clickable { onOpen(project) }.padding(vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Box(Modifier.size(35.dp).clip(RoundedCornerShape(11.dp)).background(tones.first), contentAlignment = Alignment.Center) {
+                                        Icon(glyph, null, tint = tones.second, modifier = Modifier.size(18.dp))
+                                    }
+                                    Column(Modifier.weight(1f).padding(start = 11.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                        Text(project.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                        Caption(projectSubtitle(project))
+                                    }
                                 }
                                 IconButton(onClick = { expanded = !expanded }) {
-                                    Icon(if (expanded) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight, if (expanded) "收起项目进度" else "展开项目进度")
+                                    Icon(if (expanded) Icons.Outlined.ExpandMore else Icons.Outlined.MoreHoriz,
+                                        if (expanded) "收起项目进度" else "展开项目进度", tint = Muted)
+                                }
+                            }
+                            // 最近一条进度直接可见，不必展开。
+                            Row(Modifier.fillMaxWidth().clickable { onHistory(project) }.padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.Notes, null, tint = Color(0xFF92908D), modifier = Modifier.size(13.dp))
+                                Text(latest?.note?.let { "上次：$it" } ?: "还没有进度记录",
+                                    color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f).padding(start = 6.dp))
+                                Icon(Icons.Outlined.ChevronRight, null, tint = Color(0xFF92908D), modifier = Modifier.size(13.dp))
+                            }
+                            HorizontalDivider(color = Color(0xFFF2EFED))
+                            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Caption("累计 ${durationText(sessions.sumOf { it.durationSeconds })}")
+                                Spacer(Modifier.weight(1f))
+                                Row(Modifier.clickable { onOpen(project) }, verticalAlignment = Alignment.CenterVertically) {
+                                    Text("打开", color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                                    Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(15.dp))
                                 }
                             }
                             if (expanded) {
-                                HorizontalDivider(Modifier.padding(horizontal = 16.dp))
-                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                HorizontalDivider(color = Color(0xFFF2EFED))
+                                Column(Modifier.padding(vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                     Text("已专注 ${durationText(sessions.sumOf { it.durationSeconds })} · ${sessions.size} 次", style = MaterialTheme.typography.bodySmall, color = Muted)
                                     if (latest == null) Caption("尚未填写学习进度。完成专注后可记录，也可以稍后补写。")
                                     else {
@@ -159,7 +217,8 @@ internal fun ProjectsScreen(
                     }
                 }
             }
-            OutlinedButton(onClick = onCreate, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(8.dp)); Text("新建学习项目") }
+            Text("一点点投入，会慢慢有答案。", color = Muted, fontSize = 11.sp,
+                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
         }
     }
 }
@@ -191,43 +250,81 @@ internal fun TimerScreen(
 ) {
     val resting = timer != null && timer.phase != TimerPhase.FOCUS
     val mode = timer?.timerMode ?: project?.timerMode ?: TimerMode.COUNTDOWN
-    val targetMinutes = timer?.targetMinutes ?: project?.targetMinutes ?: 0
-    val targetSeconds = targetMinutes * UiLimits.SECONDS_PER_MINUTE
+    val targetMinutes = if (timer != null) timer.targetMinutes else project?.targetMinutes
+    val targetSeconds = targetMinutes?.let { it * UiLimits.SECONDS_PER_MINUTE }
     val elapsedMillis = timer?.elapsedMs(nowElapsed) ?: 0L
     val elapsedSeconds = elapsedMillis / UiLimits.MILLIS_PER_SECOND
-    val shownSeconds = if (mode == TimerMode.COUNTUP) elapsedSeconds else timer?.remainingSeconds(nowElapsed) ?: targetSeconds
+    val shownSeconds = if (mode == TimerMode.COUNTUP) elapsedSeconds else timer?.remainingSeconds(nowElapsed) ?: targetSeconds ?: 0L
     ScreenBody {
         PageTitle(if (resting) phaseName(timer!!.phase) else "专注计时", onBack) {
-            IconButton(onClick = onStatistics) { Icon(Icons.Outlined.BarChart, "专注统计") }
+            IconButton(onClick = onStatistics) { Icon(Icons.Outlined.TrendingUp, "专注统计") }
             if (project != null) IconButton(onClick = onSettings) { Icon(Icons.Outlined.Settings, "项目计时设置") }
         }
         if (project == null && timer == null) {
             EmptyMessage("先选择一个学习项目", "在专注首页创建或选择项目，即可开始计时。也可以先给自己一段休息。")
             Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("返回项目") }
         } else {
-            Text(if (resting) "休息一下，再继续" else timer?.projectTitle ?: project!!.title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-            if (!resting && project != null) {
+            Column(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (!resting) Text((timer?.category ?: project?.category).orEmpty(), color = Muted, fontSize = 11.sp, letterSpacing = 2.sp)
+                Text(if (resting) "休息一下，再继续" else timer?.projectTitle ?: project!!.title,
+                    fontSize = 23.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
+            }
+            // 计时中收起模式切换，避免分心；只有待开始时可调整。
+            if (!resting && project != null && timer == null) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                     TimerMode.entries.forEach { value ->
                         FilterChip(selected = mode == value, onClick = { if (mode != value) onMode(value) }, label = { Text(modeName(value)) }, modifier = Modifier.padding(horizontal = 4.dp))
                     }
                 }
             }
-            Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
-                Box(Modifier.sizeIn(maxWidth = 260.dp, maxHeight = 260.dp).fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(
-                        progress = { if (targetSeconds == 0L) 0f else (elapsedSeconds.toFloat() / targetSeconds).coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxSize(), strokeWidth = 6.dp, trackColor = SoftSurface
-                    )
-                    Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Caption(if (timer?.status == TimerStatus.PAUSED) "已暂停" else if (resting) "休息剩余" else if (mode == TimerMode.COUNTUP) "已专注" else "专注剩余")
-                        Text(clockText(shownSeconds), fontSize = 42.sp, fontWeight = FontWeight.Light)
-                        Caption("${if (mode == TimerMode.COUNTUP) "目标" else "本次"} $targetMinutes 分钟")
+            Box(Modifier.fillMaxWidth().padding(vertical = 14.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.sizeIn(maxWidth = 272.dp, maxHeight = 272.dp).fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
+                    // 无目标（不限时正计时）不画进度弧，只保留轨道，避免出现没有意义的进度。
+                    val ringColor = if (timer?.status == TimerStatus.PAUSED) Color(0xFFB7AAA0) else Accent
+                    Canvas(Modifier.fillMaxSize()) {
+                        val stroke = 3.dp.toPx()
+                        val diameter = size.minDimension - stroke
+                        val corner = Offset((size.width - diameter) / 2f, (size.height - diameter) / 2f)
+                        val box = androidx.compose.ui.geometry.Size(diameter, diameter)
+                        drawArc(Color(0xFFF0EDEB), 0f, 360f, false, topLeft = corner, size = box,
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+                        if (targetSeconds != null && targetSeconds > 0L && timer != null) {
+                            val sweep = (elapsedSeconds.toFloat() / targetSeconds).coerceIn(0f, 1f) * 360f
+                            drawArc(ringColor, -90f, sweep, false, topLeft = corner, size = box,
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+                        }
+                    }
+                    Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(5.dp).clip(RoundedCornerShape(50)).background(
+                                when { timer == null -> Color(0xFFB4ADA7); timer.status == TimerStatus.PAUSED -> Color(0xFFA49C95); else -> Accent }))
+                            Text(when {
+                                timer == null -> "准备好，就开始"
+                                timer.status == TimerStatus.PAUSED -> "已暂停"
+                                resting -> "休息中"
+                                else -> "正在专注"
+                            }, color = Muted, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
+                        }
+                        Text(clockText(shownSeconds), fontSize = if (shownSeconds >= 3600) 42.sp else 56.sp,
+                            fontWeight = FontWeight.Light, letterSpacing = (-2).sp)
+                        Caption(when {
+                            timer == null && targetMinutes == null -> "不限时，按自己的节奏结束"
+                            timer == null -> "给这件事一段完整的时间"
+                            timer.status == TimerStatus.PAUSED -> "休息一下，再继续"
+                            targetMinutes == null -> "已专注 · 手动结束"
+                            mode == TimerMode.COUNTUP -> "已专注 · 达到目标后继续"
+                            else -> "剩余时间"
+                        })
                     }
                 }
             }
             if (mode == TimerMode.COUNTUP && !resting) {
-                Text(if (timer?.targetReached(nowElapsed) == true) "已达到目标，计时仍在继续。按自己的节奏结束。" else "达到目标只提醒，不会停止。手动结束后记录实际专注时长。", color = Muted, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                val note = when {
+                    targetMinutes == null -> "未设目标，按自己的节奏结束。手动结束后记录实际专注时长。"
+                    timer?.targetReached(nowElapsed) == true -> "已达到目标，计时仍在继续。按自己的节奏结束。"
+                    else -> "达到目标只提醒，不会停止。手动结束后记录实际专注时长。"
+                }
+                Text(note, color = Muted, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             }
             if (timer == null) {
                 Button(onClick = onStart, enabled = project != null, modifier = Modifier.fillMaxWidth()) { Text("开始专注") }
@@ -490,7 +587,7 @@ private fun SessionRow(session: FocusSession, progress: ProgressEntry?, onProgre
         Text(session.projectTitle, style = MaterialTheme.typography.titleMedium)
         Caption("${timestampText(session.endedAt)} · ${session.category}")
         Text(durationText(session.durationSeconds), color = Accent, fontWeight = FontWeight.Medium)
-        Caption("${modeName(session.timerMode)} · 目标 ${session.targetMinutes} 分钟")
+        Caption("${modeName(session.timerMode)} · ${session.targetMinutes?.let { "目标 ${targetText(it)}" } ?: "不限时"}")
         session.taskTitle?.let { Caption("关联待办：$it") }
         if (progress != null) {
             progress.percent?.let { Caption("完成度 $it%") }

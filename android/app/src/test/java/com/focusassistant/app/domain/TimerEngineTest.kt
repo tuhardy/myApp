@@ -123,6 +123,33 @@ class TimerEngineTest {
     @Test(expected = IllegalArgumentException::class) fun invalidProjectTargetRejected() {
         TimerEngine.start(project.copy(targetMinutes = 0), "s", 0, 0, 1)
     }
+    @Test(expected = IllegalArgumentException::class) fun targetBeyondTwentyThreeHoursRejected() {
+        TimerEngine.start(project.copy(targetMinutes = 24 * 60), "s", 0, 0, 1)
+    }
+    @Test(expected = IllegalArgumentException::class) fun countdownWithoutTargetRejected() {
+        TimerEngine.start(project.copy(timerMode = TimerMode.COUNTDOWN, targetMinutes = null), "s", 0, 0, 1)
+    }
+    @Test fun unlimitedCountupNeverReachesTargetAndNeverAutoCompletes() {
+        val timer = TimerEngine.start(project.copy(targetMinutes = null), "s", 100_000, 10_000, 7)
+        assertNull(timer.targetMs)
+        assertFalse(timer.targetReached(10_000_000))
+        assertEquals(0L, timer.remainingSeconds(10_000_000))
+        // 不限时不应触发到点完成，也不应发出到达目标提醒。
+        val tick = TimerEngine.tick(timer, 10_000_000)
+        assertNull(tick.session)
+        assertNull(tick.event)
+        assertNotNull(tick.timer)
+    }
+    @Test fun unlimitedCountupFinishesManuallyWithActualSeconds() {
+        val timer = TimerEngine.start(project.copy(targetMinutes = null), "s", 100_000, 10_000, 7)
+        val session = TimerEngine.finish(timer, 70_000)!!
+        assertEquals(60L, session.durationSeconds)
+        assertNull(session.targetMinutes)
+    }
+    @Test fun unlimitedTargetAcceptedOnlyForCountup() {
+        Validation.target(TimerMode.COUNTUP, null)
+        Validation.target(TimerMode.COUNTDOWN, 23 * 60 + 59)
+    }
     @Test(expected = IllegalArgumentException::class) fun blankProgressRejected() { Validation.progress("  ", null) }
     @Test(expected = IllegalArgumentException::class) fun invalidPercentRejected() { Validation.progress("记录", 101) }
 }

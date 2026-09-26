@@ -38,13 +38,14 @@ object TimerAlarmScheduler {
     @Synchronized
     internal fun schedule(context: Context, timer: ActiveTimer?) {
         val manager = context.getSystemService(AlarmManager::class.java)
-        if (timer == null || timer.status != TimerStatus.RUNNING || (timer.timerMode == TimerMode.COUNTUP && timer.targetNotified)) {
+        val limit = timer?.targetMs
+        if (timer == null || limit == null || timer.status != TimerStatus.RUNNING || (timer.timerMode == TimerMode.COUNTUP && timer.targetNotified)) {
             manager.cancel(pending(context))
             scheduledKey = null
             return
         }
         val now = SystemClock.elapsedRealtime()
-        val remaining = (timer.targetMinutes * 60_000L - timer.elapsedMs(now)).coerceAtLeast(0)
+        val remaining = (limit - timer.elapsedMs(now)).coerceAtLeast(0)
         val deadline = now + remaining
         val exact = canScheduleExactAlarms(context)
         val key = "${timer.sessionId}:${timer.anchorElapsed}:${timer.accumulatedMs}:$exact"

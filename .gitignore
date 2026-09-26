@@ -1,4 +1,5 @@
 /docs/
+/.docs/
 /.tools/
 __pycache__/
 *.py[cod]

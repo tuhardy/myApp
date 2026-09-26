@@ -6,12 +6,12 @@ enum class TimerStatus { RUNNING, PAUSED }
 enum class Period { DAY, WEEK, MONTH, YEAR }
 enum class TimerEventKind { COMPLETED, TARGET_REACHED, RECOVERED }
 
-data class Project(val id: String, val title: String, val category: String, val timerMode: TimerMode, val targetMinutes: Int)
+data class Project(val id: String, val title: String, val category: String, val timerMode: TimerMode, val targetMinutes: Int?)
 data class Todo(val id: String, val title: String, val category: String, val important: Boolean = false, val done: Boolean = false, val estimate: Int = 1)
 data class TimeSegment(val startedAt: Long, val endedAt: Long)
 data class FocusSession(
     val id: String, val projectId: String, val projectTitle: String, val category: String,
-    val timerMode: TimerMode, val targetMinutes: Int, val taskId: String? = null, val taskTitle: String? = null,
+    val timerMode: TimerMode, val targetMinutes: Int?, val taskId: String? = null, val taskTitle: String? = null,
     val startedAt: Long, val endedAt: Long, val durationSeconds: Long,
     val segments: List<TimeSegment>, val progressPrompted: Boolean = false
 )
@@ -19,19 +19,28 @@ data class ProgressEntry(val id: String, val sessionId: String, val projectId: S
 data class AppSettings(val dailyGoalMinutes: Int = 240, val usageReminders: Boolean = false, val shortBreakMinutes: Int = 5, val longBreakMinutes: Int = 15)
 data class ActiveTimer(
     val sessionId: String, val projectId: String, val projectTitle: String, val category: String,
-    val timerMode: TimerMode, val targetMinutes: Int, val phase: TimerPhase, val status: TimerStatus,
+    val timerMode: TimerMode, val targetMinutes: Int?, val phase: TimerPhase, val status: TimerStatus,
     val startedAt: Long, val taskId: String? = null, val taskTitle: String? = null,
     val accumulatedMs: Long = 0, val anchorElapsed: Long = 0, val anchorWall: Long = startedAt,
     val bootCount: Int = 0, val segments: List<TimeSegment> = emptyList(),
     val targetNotified: Boolean = false, val recoveryPending: Boolean = false
 ) {
-    val targetMs: Long get() = targetMinutes * 60_000L
+    /** 不限时的正计时没有目标，此时为 null；倒计时必定有目标。 */
+    val targetMs: Long? get() = targetMinutes?.let { it * 60_000L }
     fun elapsedMs(nowElapsed: Long): Long {
         val active = accumulatedMs + if (status == TimerStatus.RUNNING) (nowElapsed - anchorElapsed).coerceAtLeast(0) else 0
-        return if (timerMode == TimerMode.COUNTDOWN) active.coerceAtMost(targetMs) else active
+        val limit = targetMs
+        return if (timerMode == TimerMode.COUNTDOWN && limit != null) active.coerceAtMost(limit) else active
     }
-    fun remainingSeconds(nowElapsed: Long): Long = ((targetMs - elapsedMs(nowElapsed)).coerceAtLeast(0) + 999) / 1000
-    fun targetReached(nowElapsed: Long): Boolean = elapsedMs(nowElapsed) >= targetMs
+    fun remainingSeconds(nowElapsed: Long): Long {
+        val limit = targetMs ?: return 0
+        return ((limit - elapsedMs(nowElapsed)).coerceAtLeast(0) + 999) / 1000
+    }
+    /** 无目标时永远返回 false：不限时的正计时不会“到点”。 */
+    fun targetReached(nowElapsed: Long): Boolean {
+        val limit = targetMs ?: return false
+        return elapsedMs(nowElapsed) >= limit
+    }
 }
 data class AppState(
     val projects: List<Project> = emptyList(), val todos: List<Todo> = emptyList(),
@@ -44,11 +53,22 @@ data class BackupData(val projects: List<Project>, val todos: List<Todo>, val se
 object Validation {
     const val MAX_TITLE = 80
     const val MAX_NOTE = 2000
+    /** 小时 0–23、分钟 0–59，合计至少 1 分钟。 */
+    const val MIN_MINUTES = 1
+    const val MAX_MINUTES = 23 * 60 + 59
     fun project(value: Project) {
         require(value.id.isNotBlank() && value.id.length <= 128) { "项目标识无效" }
         require(value.title.isNotBlank() && value.title.length <= MAX_TITLE) { "项目名称须为 1–80 个字符" }
         require(value.category.length <= MAX_TITLE) { "分类过长" }
-        require(value.targetMinutes in 1..120) { "目标时长须为 1–120 分钟" }
+        target(value.timerMode, value.targetMinutes)
+    }
+    /** 倒计时必须有目标；正计时可以不设目标（不限时）。 */
+    fun target(mode: TimerMode, minutes: Int?) {
+        if (minutes == null) {
+            require(mode == TimerMode.COUNTUP) { "倒计时必须设置时长" }
+            return
+        }
+        require(minutes in MIN_MINUTES..MAX_MINUTES) { "时长须为 1 分钟至 23 小时 59 分钟" }
     }
     fun todo(value: Todo) {
         require(value.id.isNotBlank() && value.id.length <= 128) { "待办标识无效" }

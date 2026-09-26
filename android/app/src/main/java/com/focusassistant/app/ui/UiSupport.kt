@@ -2,8 +2,15 @@ package com.focusassistant.app.ui
 
 import android.content.Context
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -13,10 +20,13 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -34,14 +44,16 @@ internal object UiLimits {
     const val MINUTES_PER_HOUR = 60L
     const val SECONDS_PER_MINUTE = 60L
     const val MILLIS_PER_SECOND = 1000L
-    const val MIN_TIMER = 1
-    const val MAX_TIMER = 120
+    const val MIN_TIMER = Validation.MIN_MINUTES
+    const val MAX_TIMER = Validation.MAX_MINUTES
+    const val MAX_HOURS = 23
     const val MAX_TITLE = 80
     const val MAX_NOTE = 2000
     const val MAX_PERCENT = 100
     const val RECORD_PAGE = 20
     val CATEGORIES = listOf("个人成长", "工作", "生活")
     val PRESETS = listOf(15, 25, 45, 60)
+    const val MIN_PRESET = 25
 }
 
 internal val Accent = Color(0xFFC44E22)
@@ -62,10 +74,29 @@ internal fun FocusTheme(content: @Composable () -> Unit) {
 }
 
 internal fun modeName(mode: TimerMode) = if (mode == TimerMode.COUNTUP) "正计时" else "倒计时"
-internal fun projectSubtitle(project: Project) = "${modeName(project.timerMode)} · ${if (project.timerMode == TimerMode.COUNTUP) "目标 " else ""}${project.targetMinutes} 分钟"
+/** 把分钟数写成「1 小时 30 分钟」；null 表示不限时的正计时目标。 */
+internal fun targetText(minutes: Int?): String {
+    if (minutes == null) return "不限时"
+    val hours = minutes / UiLimits.MINUTES_PER_HOUR.toInt()
+    val remainder = minutes % UiLimits.MINUTES_PER_HOUR.toInt()
+    return listOfNotNull(
+        hours.takeIf { it > 0 }?.let { "$it 小时" },
+        remainder.takeIf { it > 0 }?.let { "$it 分钟" }
+    ).joinToString(" ").ifEmpty { "0 分钟" }
+}
+internal fun projectSubtitle(project: Project): String {
+    val target = project.targetMinutes
+    val detail = if (target == null) "不限时" else "${if (project.timerMode == TimerMode.COUNTUP) "目标 " else ""}${targetText(target)}"
+    return "${modeName(project.timerMode)} · $detail"
+}
+/** 超过一小时显示 HH:MM:SS，否则 MM:SS。 */
 internal fun clockText(seconds: Long): String {
     val safe = seconds.coerceAtLeast(0)
-    return "%02d:%02d".format(Locale.ROOT, safe / UiLimits.SECONDS_PER_MINUTE, safe % UiLimits.SECONDS_PER_MINUTE)
+    val hours = safe / (UiLimits.MINUTES_PER_HOUR * UiLimits.SECONDS_PER_MINUTE)
+    val minutes = safe / UiLimits.SECONDS_PER_MINUTE % UiLimits.MINUTES_PER_HOUR
+    val remainder = safe % UiLimits.SECONDS_PER_MINUTE
+    return if (hours > 0) "%d:%02d:%02d".format(Locale.ROOT, hours, minutes, remainder)
+    else "%02d:%02d".format(Locale.ROOT, minutes, remainder)
 }
 internal fun durationText(seconds: Long): String {
     val safe = seconds.coerceAtLeast(0)
@@ -113,40 +144,226 @@ internal fun ConfirmDialog(title: String, message: String, busy: Boolean, onDism
         dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("取消") } })
 }
 
+/** 解析小时与分钟输入。countup 且未启用目标时返回 null 值表示不限时。 */
+internal fun parseTarget(hours: String, minutes: String, mode: TimerMode, enabled: Boolean): Result<Int?> {
+    if (mode == TimerMode.COUNTUP && !enabled) return Result.success(null)
+    val hourText = hours.trim()
+    val minuteText = minutes.trim()
+    val hourValue = if (hourText.isEmpty()) 0 else hourText.toIntOrNull()
+    val minuteValue = if (minuteText.isEmpty()) 0 else minuteText.toIntOrNull()
+    if (hourValue == null || minuteValue == null || hourValue !in 0..UiLimits.MAX_HOURS || minuteValue !in 0 until UiLimits.MINUTES_PER_HOUR.toInt()) {
+        return Result.failure(IllegalArgumentException("小时须为 0–${UiLimits.MAX_HOURS}，分钟须为 0–${UiLimits.MINUTES_PER_HOUR - 1}，且均为整数。"))
+    }
+    val total = hourValue * UiLimits.MINUTES_PER_HOUR.toInt() + minuteValue
+    if (total < UiLimits.MIN_TIMER) {
+        return Result.failure(IllegalArgumentException(
+            if (mode == TimerMode.COUNTUP) "目标时长至少为 1 分钟；不想设目标请点「取消目标」。" else "专注时长至少为 1 分钟。"))
+    }
+    return Result.success(total)
+}
+
+/**
+ * 自绘滚轮选择器：LazyColumn + 吸附滚动，上下各留一行空白，居中行即为当前值。
+ * 只能选出 0 until count 的整数，不存在非法文本输入。
+ */
 @Composable
-internal fun ProjectEditorDialog(project: Project?, busy: Boolean, onDismiss: () -> Unit, onSave: (Project) -> Unit) {
-    var title by rememberSaveable(project?.id, project?.title) { mutableStateOf(project?.title.orEmpty()) }
-    var category by rememberSaveable(project?.id, project?.category) { mutableStateOf(project?.category ?: UiLimits.CATEGORIES.first()) }
-    var mode by rememberSaveable(project?.id, project?.timerMode) { mutableStateOf(project?.timerMode?.name ?: TimerMode.COUNTDOWN.name) }
-    var minutes by rememberSaveable(project?.id, project?.targetMinutes) { mutableStateOf((project?.targetMinutes ?: 25).toString()) }
-    var error by remember { mutableStateOf<String?>(null) }
-    AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, title = { Text(if (project == null) "新建学习项目" else "项目设置") }, text = {
-        Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedTextField(value = title, onValueChange = { if (it.length <= UiLimits.MAX_TITLE) title = it }, label = { Text("项目名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            Text("分类", color = Muted)
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                UiLimits.CATEGORIES.forEach { value -> FilterChip(selected = category == value, onClick = { category = value }, label = { Text(value, fontSize = 11.sp) }) }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TimerMode.entries.forEach { value -> FilterChip(selected = mode == value.name, onClick = { mode = value.name }, label = { Text(modeName(value)) }) }
-            }
-            OutlinedTextField(value = minutes, onValueChange = { minutes = it }, label = { Text(if (mode == TimerMode.COUNTUP.name) "目标时长（分钟）" else "倒计时时长（分钟）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.fillMaxWidth())
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                UiLimits.PRESETS.forEach { value -> OutlinedButton(onClick = { minutes = value.toString() }, contentPadding = PaddingValues(4.dp), modifier = Modifier.weight(1f)) { Text("$value", fontSize = 12.sp) } }
-            }
-            Text(if (mode == TimerMode.COUNTUP.name) "达到目标只提示，计时继续；手动结束后保存实际时长。" else "到零自动完成；暂停和未完成计时不计入统计。", color = Muted, fontSize = 12.sp)
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+private fun WheelPicker(count: Int, value: Int, unit: String, description: String, onChange: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val rowHeight = 44.dp
+    val density = LocalDensity.current
+    val rowPx = with(density) { rowHeight.toPx() }
+    val state = rememberLazyListState(initialFirstVisibleItemIndex = value.coerceIn(0, count - 1))
+    val centered by remember {
+        derivedStateOf {
+            (state.firstVisibleItemIndex + if (state.firstVisibleItemScrollOffset > rowPx / 2) 1 else 0).coerceIn(0, count - 1)
         }
-    }, confirmButton = {
-        TextButton(enabled = !busy, onClick = {
-            val duration = minutes.toIntOrNull()
-            when {
-                title.isBlank() -> error = "请输入项目名称。"
-                duration == null || duration !in UiLimits.MIN_TIMER..UiLimits.MAX_TIMER -> error = "请输入 1–120 的整数分钟。"
-                else -> onSave(Project(project?.id ?: UUID.randomUUID().toString(), title.trim(), category, TimerMode.valueOf(mode), duration))
+    }
+    // 居中行一变就回报，不等滚动停止，避免滑动未停时保存到旧值；外部改值（如快捷时长）时把滚轮滚到对应行。
+    LaunchedEffect(state) {
+        snapshotFlow { centered }.collect(onChange)
+    }
+    LaunchedEffect(value) {
+        val target = value.coerceIn(0, count - 1)
+        if (!state.isScrollInProgress && target != centered) state.animateScrollToItem(target)
+    }
+    Box(modifier.height(rowHeight * 3), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().height(rowHeight).clip(RoundedCornerShape(12.dp)).background(Color(0xFFFFF3EC)))
+        LazyColumn(
+            state = state,
+            flingBehavior = rememberSnapFlingBehavior(state),
+            contentPadding = PaddingValues(vertical = rowHeight),
+            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "$description：$value $unit" }
+        ) {
+            items(count) { index ->
+                val selected = index == centered
+                Box(Modifier.fillMaxWidth().height(rowHeight), contentAlignment = Alignment.Center) {
+                    Text(
+                        index.toString().padStart(2, '0'),
+                        fontSize = if (selected) 26.sp else 20.sp,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (selected) Accent else Color(0xFFB0A8A2)
+                    )
+                }
             }
-        }) { Text(if (busy) "保存中" else "保存项目") }
-    }, dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("取消") } })
+        }
+    }
+}
+
+@Composable
+private fun DurationWheels(hours: Int, minutes: Int, onHours: (Int) -> Unit, onMinutes: (Int) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        WheelPicker(UiLimits.MAX_HOURS + 1, hours, "小时", "小时", onHours, Modifier.weight(1f))
+        Text("小时", color = Muted, fontSize = 12.sp)
+        Spacer(Modifier.width(8.dp))
+        WheelPicker(UiLimits.MINUTES_PER_HOUR.toInt(), minutes, "分钟", "分钟", onMinutes, Modifier.weight(1f))
+        Text("分钟", color = Muted, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun ModeSelector(mode: TimerMode, onSelect: (TimerMode) -> Unit) {
+    Row(Modifier.fillMaxWidth().selectableGroup()) {
+        TimerMode.entries.forEach { value ->
+            val selected = mode == value
+            Column(
+                Modifier.weight(1f)
+                    .selectable(selected = selected, role = Role.RadioButton, onClick = { if (!selected) onSelect(value) })
+                    .padding(vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(modeName(value), color = if (selected) Accent else Muted,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, fontSize = 15.sp)
+                Spacer(Modifier.height(6.dp))
+                Box(Modifier.height(3.dp).width(40.dp).clip(RoundedCornerShape(2.dp))
+                    .background(if (selected) Accent else Color.Transparent))
+            }
+        }
+    }
+}
+
+/** 新建/编辑项目的草稿，按项目（新建为 null）分别保留；仅驻留内存，进程重启即丢弃。 */
+internal data class ProjectDraft(
+    val title: String,
+    val category: String,
+    val mode: TimerMode,
+    val countdownHours: Int,
+    val countdownMinutes: Int,
+    val countupHours: Int,
+    val countupMinutes: Int,
+    val targetEnabled: Boolean
+)
+
+internal object ProjectDrafts {
+    private val drafts = mutableMapOf<String, ProjectDraft>()
+    private fun key(id: String?) = id ?: "__new__"
+    fun get(id: String?): ProjectDraft? = drafts[key(id)]
+    fun put(id: String?, draft: ProjectDraft) { drafts[key(id)] = draft }
+    fun remove(id: String?) { drafts.remove(key(id)) }
+    fun clear() = drafts.clear()
+}
+
+private fun initialDraft(project: Project?): ProjectDraft {
+    val target = project?.targetMinutes
+    val hours = target?.let { it / UiLimits.MINUTES_PER_HOUR.toInt() } ?: 0
+    val minutes = target?.let { it % UiLimits.MINUTES_PER_HOUR.toInt() } ?: UiLimits.MIN_PRESET
+    val countdown = project?.timerMode == TimerMode.COUNTDOWN && target != null
+    val countup = project?.timerMode == TimerMode.COUNTUP && target != null
+    return ProjectDraft(
+        title = project?.title.orEmpty(),
+        category = project?.category ?: UiLimits.CATEGORIES.first(),
+        mode = project?.timerMode ?: TimerMode.COUNTDOWN,
+        countdownHours = if (countdown) hours else 0,
+        countdownMinutes = if (countdown) minutes else UiLimits.MIN_PRESET,
+        countupHours = if (countup) hours else 0,
+        countupMinutes = if (countup) minutes else UiLimits.MIN_PRESET,
+        // 新建正计时默认不设目标；编辑时沿用项目已有设置。
+        targetEnabled = countup
+    )
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+internal fun ProjectEditorDialog(project: Project?, busy: Boolean, onDismiss: () -> Unit, onSave: (Project) -> Unit) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var draft by remember(project?.id) { mutableStateOf(ProjectDrafts.get(project?.id) ?: initialDraft(project)) }
+    var error by remember { mutableStateOf<String?>(null) }
+    // 关闭、Esc、遮罩、下拖都不丢草稿；保存成功后由调用方清除。
+    fun edit(block: (ProjectDraft) -> ProjectDraft) {
+        draft = block(draft)
+        ProjectDrafts.put(project?.id, draft)
+        error = null
+    }
+    val countup = draft.mode == TimerMode.COUNTUP
+    val hours = if (countup) draft.countupHours else draft.countdownHours
+    val minutes = if (countup) draft.countupMinutes else draft.countdownMinutes
+    val unlimited = countup && !draft.targetEnabled
+
+    ModalBottomSheet(onDismissRequest = { if (!busy) onDismiss() }, sheetState = sheetState, containerColor = Color.White) {
+        Column(
+            Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text(if (project == null) "新建学习项目" else "项目设置", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+            OutlinedTextField(
+                value = draft.title, onValueChange = { if (it.length <= UiLimits.MAX_TITLE) edit { d -> d.copy(title = it) } },
+                label = { Text("项目名称") }, singleLine = true, modifier = Modifier.fillMaxWidth()
+            )
+            Text("分类", color = Muted, fontSize = 13.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                UiLimits.CATEGORIES.forEach { value ->
+                    FilterChip(selected = draft.category == value, onClick = { edit { d -> d.copy(category = value) } }, label = { Text(value, fontSize = 12.sp) })
+                }
+            }
+            // 模式切换保留各模式的时长设置。
+            ModeSelector(draft.mode) { value -> edit { d -> d.copy(mode = value) } }
+            if (unlimited) {
+                Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("不限时", fontSize = 30.sp, fontWeight = FontWeight.Light)
+                    Text("按自己的节奏，手动结束", color = Muted, fontSize = 12.sp)
+                    TextButton(onClick = { edit { d -> d.copy(targetEnabled = true) } }) { Text("设置目标时长") }
+                }
+            } else {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (countup) "目标时长" else "专注时长", color = Muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Text(targetText(hours * UiLimits.MINUTES_PER_HOUR.toInt() + minutes), color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    if (countup) TextButton(onClick = { edit { d -> d.copy(targetEnabled = false) } }) { Text("取消目标") }
+                }
+                DurationWheels(
+                    hours, minutes,
+                    onHours = { value -> edit { d -> if (countup) d.copy(countupHours = value) else d.copy(countdownHours = value) } },
+                    onMinutes = { value -> edit { d -> if (countup) d.copy(countupMinutes = value) else d.copy(countdownMinutes = value) } }
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    UiLimits.PRESETS.forEach { value ->
+                        OutlinedButton(
+                            onClick = {
+                                edit { d ->
+                                    val h = value / UiLimits.MINUTES_PER_HOUR.toInt()
+                                    val m = value % UiLimits.MINUTES_PER_HOUR.toInt()
+                                    if (countup) d.copy(countupHours = h, countupMinutes = m) else d.copy(countdownHours = h, countdownMinutes = m)
+                                }
+                            },
+                            contentPadding = PaddingValues(4.dp), modifier = Modifier.weight(1f)
+                        ) { Text("$value", fontSize = 12.sp) }
+                    }
+                }
+                Text("合计至少 1 分钟，最多 ${UiLimits.MAX_HOURS} 小时 ${UiLimits.MINUTES_PER_HOUR - 1} 分钟。", color = Muted, fontSize = 11.sp)
+            }
+            Text(if (countup) "达到目标只提示，计时继续；手动结束后保存实际时长。" else "到零自动完成；暂停和未完成计时不计入统计。", color = Muted, fontSize = 12.sp)
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(enabled = !busy, onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("取消") }
+                Button(
+                    enabled = !busy, modifier = Modifier.weight(1f),
+                    onClick = {
+                        if (draft.title.isBlank()) { error = "请输入项目名称。"; return@Button }
+                        parseTarget(hours.toString(), minutes.toString(), draft.mode, draft.targetEnabled)
+                            .onFailure { error = it.message }
+                            .onSuccess { onSave(Project(project?.id ?: UUID.randomUUID().toString(), draft.title.trim(), draft.category, draft.mode, it)) }
+                    }
+                ) { Text(if (busy) "保存中" else "保存项目") }
+            }
+        }
+    }
 }
 
 @Composable

@@ -63,7 +63,8 @@ object TimerEngine {
     fun finish(timer: ActiveTimer, elapsed: Long, wall: Long = timer.anchorWall, bootCount: Int = timer.bootCount): FocusSession? {
         if (timer.phase != TimerPhase.FOCUS) return null
         val stopped = checkpoint(timer, elapsed)
-        if (timer.timerMode == TimerMode.COUNTDOWN && stopped.accumulatedMs < timer.targetMs) {
+        val limit = timer.targetMs
+        if (timer.timerMode == TimerMode.COUNTDOWN && limit != null && stopped.accumulatedMs < limit) {
             throw IllegalArgumentException("倒计时未完成")
         }
         require(stopped.accumulatedMs >= MIN_SESSION_MS) { "至少专注 1 秒后才能记录" }
@@ -74,7 +75,7 @@ object TimerEngine {
             remaining -= length
             if (length > 0) TimeSegment(segment.startedAt, segment.startedAt + length) else null
         }
-        val endedAt = if (timer.timerMode == TimerMode.COUNTDOWN && stopped.accumulatedMs >= timer.targetMs) {
+        val endedAt = if (timer.timerMode == TimerMode.COUNTDOWN && limit != null && stopped.accumulatedMs >= limit) {
             stopped.segments.last().endedAt
         } else if (timer.status == TimerStatus.PAUSED) {
             if (bootCount >= 0 && timer.bootCount == bootCount && elapsed >= timer.anchorElapsed)

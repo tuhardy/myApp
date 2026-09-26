@@ -238,7 +238,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             Box(Modifier.fillMaxSize().padding(padding)) {
                 if (state.loading) CircularProgressIndicator(Modifier.align(Alignment.Center))
                 else when (ui.screen) {
-                    Screen.PROJECTS -> ProjectsScreen(state, ::openProject, { openProjectEditor(null) }, { ui.screen = Screen.STATISTICS }, ::openProjectEditor,
+                    Screen.PROJECTS -> ProjectsScreen(state, today, ::openProject, { openProjectEditor(null) }, { ui.screen = Screen.STATISTICS }, ::openProjectEditor,
                         { ui.open("delete-project", it.id) }, { ui.open("progress-edit", it.id) }, { ui.open("history", it.id) }, {
                             ui.projectId = state.timer?.projectId?.takeIf { id -> state.projects.any { it.id == id } } ?: ui.projectId
                             ui.screen = Screen.TIMER
@@ -283,7 +283,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
         when (ui.dialog) {
             "project" -> ProjectEditorDialog(dialogProject, ui.busy, { ui.close() }) { project ->
                 if (state.timer?.projectId == project.id) { ui.pendingProject = project; ui.open("save-project-confirm", project.id) }
-                else ui.perform { repository.saveProject(project); ui.close(); ui.screen = Screen.PROJECTS }
+                else ui.perform { repository.saveProject(project); ProjectDrafts.remove(ui.dialogId.takeIf { it.isNotBlank() }); ui.close(); ui.screen = Screen.PROJECTS }
             }
             "todo" -> TodoEditorDialog(state.todos.find { it.id == ui.dialogId }, ui.busy, { ui.close() }) { todo -> ui.perform { repository.saveTodo(todo); ui.close() } }
             "progress-auto", "progress-edit" -> if (session != null) ProgressEditorDialog(context, session,
@@ -325,7 +325,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                 val backup = ui.pendingBackup
                 if (backup == null) InformationDialog("重新选择备份", listOf("备份预览已失效，请重新选择文件。未修改任何本地数据。"), { ui.close() })
                 else ConfirmDialog("确认覆盖本机数据？", "备份包含 ${backup.projects.size} 个项目、${backup.todos.size} 个待办、${backup.sessions.size} 次专注和 ${backup.progress.size} 条进度。恢复会替换当前数据，不合并。建议先导出当前备份。", ui.busy, { ui.pendingBackup = null; ui.close() }) {
-                    ui.perform { repository.restoreBackup(backup); ProgressDrafts.clear(appContext); ui.pendingBackup = null; ui.projectId = null; ui.taskId = null; ui.close(); ui.message("备份已恢复。"); refresh++ }
+                    ui.perform { repository.restoreBackup(backup); ProgressDrafts.clear(appContext); ProjectDrafts.clear(); ui.pendingBackup = null; ui.projectId = null; ui.taskId = null; ui.close(); ui.message("备份已恢复。"); refresh++ }
                 }
             }
             "delete-project", "delete-todo", "discard", "switch-project", "save-project-confirm", "link-task-confirm", "break-short", "break-long" -> {
@@ -345,7 +345,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                             "delete-todo" -> { repository.deleteTodo(targetId); if (ui.taskId == targetId) ui.taskId = null }
                             "discard" -> repository.discardTimer()
                             "switch-project" -> { repository.discardTimer(); ui.projectId = targetId; ui.taskId = null; ui.screen = Screen.TIMER }
-                            "save-project-confirm" -> { val project = requireNotNull(ui.pendingProject); repository.discardTimer(); repository.saveProject(project); ui.pendingProject = null }
+                            "save-project-confirm" -> { val project = requireNotNull(ui.pendingProject); repository.discardTimer(); repository.saveProject(project); ProjectDrafts.remove(project.id); ui.pendingProject = null }
                             "link-task-confirm" -> { repository.discardTimer(); ui.taskId = targetId.takeIf { it.isNotBlank() }; ui.projectId = currentProject?.id ?: state.projects.firstOrNull()?.id; ui.screen = Screen.TIMER }
                             "break-short", "break-long" -> { repository.discardTimer(); sendTimer(if (kind == "break-long") TimerServiceCommands.LONG_BREAK else TimerServiceCommands.SHORT_BREAK) }
                         }
