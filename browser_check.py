@@ -370,7 +370,8 @@ def check_focus_configuration(browser, errors):
     assert record["focusItemTitle"] == title
     assert record["timerMode"] == "countdown" and record["targetMinutes"] == 2
     assert record["durationSeconds"] == 120 and record["durationMinutes"] == 2
-    assert record["taskTitle"] == "梳理个人 APP 的想法" and record["category"] == "生活"
+    # M：这件事有小步，记录的标题快照是「父任务 · 这一步」，后续改名不追改历史。
+    assert record["taskTitle"] == "梳理个人 APP 的想法 · 选一个先做" and record["category"] == "生活"
     rows = download_statistics(page, "csv")
     assert rows[1][8] == "'" + title
     assert rows[1][7] == "倒计时" and rows[1][9:11] == ["2", "120"]
@@ -805,7 +806,7 @@ def run_checks():
         assert page.evaluate("window.injected === undefined")
         assert added.locator("img").count() == 0
         added.locator(".task-checkbox").click()
-        expect(page.locator("#task-summary")).to_have_text("今天已完成 2 / 5 件事")
+        expect(page.locator("#task-summary")).to_have_text("已完成 2 / 5 件")
         page.locator('[data-filter="done"]').click()
         expect(page.locator(".task-card")).to_have_count(2)
         added.locator(".task-info").click()

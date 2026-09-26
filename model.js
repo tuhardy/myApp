@@ -13,6 +13,11 @@
     minGoalMinutes: 30,
     maxGoalMinutes: 1440,
     maxEstimatedSessions: 12,
+    maxTaskSteps: 8,
+    maxTaskStepTitle: 40,
+    restDays: 3,
+    staleDays: 7,
+
     sampleFocusMinutes: 75,
     sampleSessions: 3,
   });
@@ -43,13 +48,47 @@
     },
   });
 
-  function initialTasks() {
+  /**
+   * 示例待办。createdAt 为「放进清单的那天」，用于计算停留天数；
+   * steps 是可选的一串小步，走过的步数即父任务进度。
+   */
+  function initialTasks(now = new Date()) {
+    const dayBefore = offsetDays => localDateKey(addDays(now, -offsetDays));
     return [
-      { id: "sample-reading", title: "阅读《原子习惯》", category: "个人成长", estimate: 1, important: false, done: false },
-      { id: "sample-planning", title: "梳理个人 APP 的想法", category: "工作", estimate: 2, important: true, done: false },
-      { id: "sample-walk", title: "傍晚出去走一走", category: "生活", estimate: 1, important: false, done: false },
-      { id: "sample-desk", title: "整理书桌，清空杂念", category: "生活", estimate: 1, important: false, done: true },
+      { id: "sample-reading", title: "阅读《原子习惯》", category: "个人成长", important: false, done: false,
+        createdAt: dayBefore(2), steps: [] },
+      { id: "sample-planning", title: "梳理个人 APP 的想法", category: "工作", important: true, done: false,
+        createdAt: dayBefore(9), steps: [
+          { id: "step-plan-1", title: "写下想解决的问题", done: true },
+          { id: "step-plan-2", title: "画三张草图", done: true },
+          { id: "step-plan-3", title: "选一个先做", done: false },
+        ] },
+      { id: "sample-walk", title: "傍晚出去走一走", category: "生活", important: false, done: false,
+        createdAt: dayBefore(0), steps: [] },
+      { id: "sample-desk", title: "整理书桌，清空杂念", category: "生活", important: false, done: true,
+        createdAt: dayBefore(4), steps: [] },
     ];
+  }
+
+  function addDays(date, days) {
+    const moved = new Date(date);
+    moved.setDate(moved.getDate() + days);
+    return moved;
+  }
+
+  /** 两个本地日期键相差的日历天数，不按 24 小时整除，避免夏令时偏差。 */
+  function daysBetween(fromKey, toKey) {
+    const from = parseDateKey(fromKey);
+    const to = parseDateKey(toKey);
+    if (!from || !to) return 0;
+    return Math.round((to - from) / MILLISECONDS_PER_DAY);
+  }
+
+  function parseDateKey(key) {
+    const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(key ?? ""));
+    if (!parts) return null;
+    const date = new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+    return Number.isNaN(date.getTime()) ? null : date;
   }
 
   function initialFocusItems() {
@@ -94,8 +133,54 @@
     const title = String(input.title ?? "").trim();
     if (!title || title.length > LIMITS.maxTaskTitle) throw new Error(`任务名称需为 1–${LIMITS.maxTaskTitle} 个字符。`);
     if (!CATEGORIES.includes(input.category)) throw new Error("请选择有效的任务分类。");
-    if (!integerInRange(input.estimate, 1, LIMITS.maxEstimatedSessions)) throw new Error("预计番茄数需为 1–12 的整数。");
-    return { title, category: input.category, estimate: Number(input.estimate), important: Boolean(input.important) };
+    return { title, category: input.category, important: Boolean(input.important), steps: validateSteps(input.steps) };
+  }
+
+  /** 小步可以一个都没有；有则每步要有名字，且不超过上限。 */
+  function validateSteps(input) {
+    const list = Array.isArray(input) ? input : [];
+    if (list.length > LIMITS.maxTaskSteps) throw new Error(`每件事最多 ${LIMITS.maxTaskSteps} 个小步。`);
+    return list.map(step => {
+      const title = String(step?.title ?? "").trim();
+      if (!title || title.length > LIMITS.maxTaskStepTitle) {
+        throw new Error(`小步名称需为 1–${LIMITS.maxTaskStepTitle} 个字符。`);
+      }
+      return { id: String(step?.id ?? ""), title, done: Boolean(step?.done) };
+    });
+  }
+
+  /**
+   * L：一件事在清单里待了多久。fresh 今天放进来，resting 还新鲜，
+   * stale 躺得久了。已完成的事不参与发酵。
+   */
+  function taskAge(task, today = localDateKey(new Date())) {
+    const days = Math.max(0, daysBetween(task?.createdAt, today));
+    if (task?.done) return { days, stage: "done", label: "已完成" };
+    if (days <= 0) return { days, stage: "fresh", label: "今天放进来的" };
+    if (days < LIMITS.restDays) return { days, stage: "fresh", label: `躺了 ${days} 天` };
+    if (days < LIMITS.staleDays) return { days, stage: "resting", label: `躺了 ${days} 天` };
+    return { days, stage: "stale", label: `躺了 ${days} 天` };
+  }
+
+  /** M：走过的小步即进度。没有小步的事只有做完与没做完两种状态。 */
+  function taskProgress(task) {
+    const steps = Array.isArray(task?.steps) ? task.steps : [];
+    const total = steps.length;
+    const walked = steps.filter(step => step.done).length;
+    if (!total) return { total: 0, walked: 0, percent: task?.done ? 100 : 0 };
+    return { total, walked, percent: Math.round(walked / total * 100) };
+  }
+
+  /** 下一步未走的小步，用于「从这一步开始专注」。 */
+  function nextStep(task) {
+    return (Array.isArray(task?.steps) ? task.steps : []).find(step => !step.done) || null;
+  }
+
+  /** 专注记录里保留的是「父任务 · 这一步」，子步骤不单独入账。 */
+  function stepFocusTitle(task, step) {
+    const parent = String(task?.title ?? "").trim();
+    const child = String(step?.title ?? "").trim();
+    return child ? `${parent} · ${child}` : parent;
   }
 
   function taskSummary(tasks) {
@@ -510,7 +595,7 @@
   }
 
   const api = Object.freeze({
-    LIMITS, MODES, CATEGORIES, USAGE, initialTasks, initialFocusItems, integerInRange, validateTask, validateFocusItem, taskSummary, formatTime, Timer,
+    LIMITS, MODES, CATEGORIES, USAGE, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, taskAge, taskProgress, nextStep, stepFocusTitle, daysBetween, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
     validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary,
   });

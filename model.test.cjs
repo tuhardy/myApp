@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { Timer, LIMITS, MODES, USAGE, initialTasks, taskSummary, validateTask, formatTime } = require("./model.js");
+const { Timer, LIMITS, MODES, USAGE, initialTasks, taskSummary, validateTask, validateSteps, taskAge, taskProgress, nextStep, stepFocusTitle, daysBetween, formatTime } = require("./model.js");
 const { localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv } = require("./model.js");
 const { execFileSync } = require("node:child_process");
 const { initialFocusItems, validateFocusItem, focusHourDistribution, validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary } = require("./model.js");
@@ -239,11 +239,60 @@ test("计时格式向上取整，不显示负值，支持超过一小时", () =>
 });
 
 test("待办输入清理和边界校验", () => {
-  const valid = { title: "  阅读  ", category: "个人成长", estimate: "2", important: false };
-  assert.deepEqual(validateTask(valid), { ...valid, title: "阅读", estimate: 2 });
+  const valid = { title: "  阅读  ", category: "个人成长", important: false };
+  assert.deepEqual(validateTask(valid), { title: "阅读", category: "个人成长", important: false, steps: [] });
   for (const title of ["", "   ", "a".repeat(LIMITS.maxTaskTitle + 1)]) assert.throws(() => validateTask({ ...valid, title }));
-  for (const estimate of [0, 13, 1.5, "bad"]) assert.throws(() => validateTask({ ...valid, estimate }));
   assert.throws(() => validateTask({ ...valid, category: "未知分类" }));
+});
+
+test("小步校验：可以没有，有则要有名字且不超上限", () => {
+  assert.deepEqual(validateSteps(undefined), []);
+  assert.deepEqual(validateSteps([{ id: "a", title: "  写提纲  ", done: true }]), [{ id: "a", title: "写提纲", done: true }]);
+  assert.throws(() => validateSteps([{ id: "a", title: "   " }]));
+  assert.throws(() => validateSteps([{ id: "a", title: "x".repeat(LIMITS.maxTaskStepTitle + 1) }]));
+  assert.throws(() => validateSteps(Array.from({ length: LIMITS.maxTaskSteps + 1 }, (_, i) => ({ id: `s${i}`, title: "步" }))));
+});
+
+test("L：躺得越久阶段越靠后，完成的事不发酵", () => {
+  const today = "2026-03-20";
+  assert.equal(taskAge({ createdAt: today, done: false }, today).stage, "fresh");
+  assert.equal(taskAge({ createdAt: "2026-03-19", done: false }, today).stage, "fresh");
+  assert.equal(taskAge({ createdAt: "2026-03-17", done: false }, today).stage, "resting");
+  assert.equal(taskAge({ createdAt: "2026-03-10", done: false }, today).stage, "stale");
+  assert.equal(taskAge({ createdAt: "2026-03-10", done: true }, today).stage, "done");
+  // 未来日期不应产生负数天。
+  assert.equal(taskAge({ createdAt: "2026-04-01", done: false }, today).days, 0);
+});
+
+test("L：天数按日历差计算，跨月与跨夏令时不出偏差", () => {
+  assert.equal(daysBetween("2026-02-26", "2026-03-02"), 4);
+  assert.equal(daysBetween("2026-03-07", "2026-03-09"), 2);
+  assert.equal(daysBetween("bad", "2026-03-09"), 0);
+});
+
+test("M：走过的小步即进度，没有小步只有两种状态", () => {
+  const task = { done: false, steps: [{ id: "a", title: "一", done: true }, { id: "b", title: "二", done: false }] };
+  assert.deepEqual(taskProgress(task), { total: 2, walked: 1, percent: 50 });
+  assert.equal(nextStep(task).id, "b");
+  assert.deepEqual(taskProgress({ done: false, steps: [] }), { total: 0, walked: 0, percent: 0 });
+  assert.deepEqual(taskProgress({ done: true, steps: [] }), { total: 0, walked: 0, percent: 100 });
+  assert.equal(nextStep({ steps: [] }), null);
+});
+
+test("M：专注记录的标题快照记成「父任务 · 这一步」", () => {
+  const task = { title: "梳理想法", steps: [{ id: "a", title: "画草图", done: false }] };
+  assert.equal(stepFocusTitle(task, task.steps[0]), "梳理想法 · 画草图");
+  assert.equal(stepFocusTitle(task, null), "梳理想法");
+});
+
+test("示例待办自带放入日期与小步，且实例相互隔离", () => {
+  const today = localDateKey(new Date());
+  const tasks = initialTasks();
+  assert.ok(tasks.every(task => daysBetween(task.createdAt, today) >= 0));
+  const planning = tasks.find(task => task.id === "sample-planning");
+  assert.equal(planning.steps.length, 3);
+  planning.steps[2].done = true;
+  assert.equal(initialTasks().find(task => task.id === "sample-planning").steps[2].done, false);
 });
 
 test("待办列表隔离实例，空列表进度不产生 NaN", () => {

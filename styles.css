@@ -216,7 +216,38 @@ h3 { font-size: 13px; font-weight: 600; margin: 0; }
 .task-tabs button.selected::after { content: ""; position: absolute; height: 2px; background: var(--green); bottom: -1px; left: 0; right: 0; }
 .task-tabs button span { font-size: 11px; background: #ededed; padding: 1px 5px; border-radius: 4px; margin-left: 3px; }
 .task-list { display: flex; flex-direction: column; gap: 10px; }
-.task-card { display: flex; align-items: center; gap: 6px; padding: 12px 8px; border: 1px solid var(--line); background: var(--white); border-radius: 15px; }
+.task-card { display: flex; align-items: flex-start; gap: 6px; padding: 12px 8px; border: 1px solid var(--line); background: var(--white); border-radius: 15px; transition: opacity .25s, border-color .25s; }
+.task-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 9px; }
+/* L：躺得越久越淡，像一杯放凉的茶。已完成与已放下不参与发酵。 */
+.task-card.age-resting { opacity: .72; border-color: #efefef; }
+.task-card.age-stale { opacity: .48; border-color: #f3f3f3; background: #fcfbfa; }
+.task-card.age-stale .task-title { font-weight: 450; }
+.task-card.archived { opacity: .5; border-style: dashed; }
+.task-age { font-size: 11px; color: var(--muted); }
+.age-actions { display: flex; gap: 8px; }
+.age-action { font-size: 11px; padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--green-dark); background: var(--white); }
+.age-action:hover { background: var(--mint); }
+.age-action.quiet { color: var(--muted); }
+/* M：一条横向的小路，走过的点是实心的。 */
+.step-path { display: flex; flex-direction: column; gap: 6px; }
+.step-track { display: flex; align-items: center; gap: 0; flex-wrap: wrap; }
+/* 圆点画在 ::before 上，按钮本体保持可点面积；连线用负外边距钻到按钮留白下面。 */
+.step-dot { position: relative; z-index: 1; flex: 0 0 26px; width: 26px; height: 32px; min-width: 0; min-height: 0; padding: 0; display: grid; place-items: center; }
+.step-dot::before { content: ""; width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid #cfc7c1; background: var(--white); transition: background .18s, border-color .18s; }
+.step-dot.walked::before { background: var(--accent); border-color: var(--accent); }
+.step-dot:hover::before { border-color: var(--accent); }
+.step-link { flex: 0 0 33px; width: 33px; height: 2px; margin: 0 -7px; background: #e3ddd8; }
+.step-link.walked { background: var(--accent); }
+.step-caption { margin: 0; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.step-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.step-editor-title { margin: 0; font-size: 12px; color: var(--muted); }
+.step-editor-list { display: flex; flex-direction: column; gap: 6px; }
+.step-editor-row { display: flex; gap: 6px; align-items: center; }
+.step-editor-row input { flex: 1; min-width: 0; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px; font-family: inherit; }
+.step-remove { flex: 0 0 32px; width: 32px; height: 32px; border-radius: 9px; color: var(--muted); font-size: 16px; }
+.step-remove:hover { background: var(--surface); }
+.add-step { align-self: flex-start; font-size: 12px; padding: 8px 14px; border: 1px dashed #c9c9c9; border-radius: 12px; color: var(--muted); }
+.add-step:disabled { opacity: .55; }
 .task-checkbox { flex: 0 0 var(--touch-target); width: var(--touch-target); height: var(--touch-target); display: grid; place-items: center; position: relative; border-radius: 10px; padding: 0; }
 .task-checkbox::before { content: ""; position: absolute; width: 21px; height: 21px; border: 1.5px solid var(--muted); border-radius: 7px; }
 .task-checkbox .icon { position: relative; width: 14px; height: 14px; }

@@ -16,10 +16,10 @@
   const timer = new Timer();
   const state = {
     tasks: initialTasks(), filter: "all", period: "today", goal: UI.initialGoalMinutes,
-    linkedTask: null, records: initialFocusRecords(), activeFocus: null, overviewDay: "",
+    linkedTask: null, linkedStep: null, records: initialFocusRecords(), activeFocus: null, overviewDay: "",
     statsPeriod: "day", statsAnchor: new Date(), includeSamples: true, recordLimit: UI.recordPageSize,
     focusItems: initialFocusItems(), selectedFocusItem: "focus-reading", nextFocusItemId: 1,
-    reminders: false, nextTaskId: 1, nextRecordId: 1,
+    reminders: false, nextTaskId: 1, nextRecordId: 1, nextStepId: 1,
     openProjects: new Set(), progressEntries: [], progressDrafts: new Map(), nextProgressId: 1,
     pendingProgressPrompts: [], progressDialogRecord: null, progressReturnHome: false,
   };
@@ -199,7 +199,9 @@
       const task = state.tasks.find(item => item.id === state.linkedTask);
       const item = currentFocusItem();
       if (!state.activeFocus) {
-        state.activeFocus = { taskId: task?.id || null, taskTitle: task?.title || item.title,
+        const step = linkedStepOf(task);
+        state.activeFocus = { taskId: task?.id || null,
+          taskTitle: task ? FocusModel.stepFocusTitle(task, step) : item.title,
           focusItemId: item.id, focusItemTitle: item.title, category: item.category, timerMode: item.timerMode,
           targetMinutes: item.durationMinutes, startedAt: new Date().toISOString(), startedMonotonic: performance.now(),
           segments: [], segmentStart: null, targetNotified: false };
@@ -332,6 +334,7 @@
     const open = () => {
       if (item.id !== state.selectedFocusItem) {
         state.linkedTask = null;
+        state.linkedStep = null;
         applyFocusItem(item);
         updateLinkedTask();
       }
@@ -596,6 +599,48 @@
     showModal("休息偏好", form);
   }
 
+  /** 小步编辑：加一步、改名、删一步。用 DOM 节点直接承载，不拼 HTML 字符串。 */
+  function buildStepEditor(draftSteps, onChange) {
+    const wrapper = element("div", "step-editor");
+    wrapper.append(element("p", "step-editor-title", "拆成几小步（可不填）"));
+    const list = element("div", "step-editor-list");
+    const add = element("button", "add-step", "＋ 加一步");
+    add.type = "button";
+
+    const draw = () => {
+      const rows = draftSteps.map((step, index) => {
+        const row = element("div", "step-editor-row");
+        const input = element("input");
+        input.type = "text";
+        input.value = step.title;
+        input.maxLength = LIMITS.maxTaskStepTitle;
+        input.setAttribute("aria-label", `第 ${index + 1} 步`);
+        input.addEventListener("input", () => { step.title = input.value; onChange(); });
+        const remove = element("button", "step-remove", "×");
+        remove.type = "button";
+        remove.setAttribute("aria-label", `删掉第 ${index + 1} 步`);
+        remove.addEventListener("click", () => { draftSteps.splice(index, 1); draw(); onChange(); });
+        row.append(input, remove);
+        return row;
+      });
+      list.replaceChildren(...rows);
+      add.disabled = draftSteps.length >= LIMITS.maxTaskSteps;
+      add.textContent = add.disabled ? `最多 ${LIMITS.maxTaskSteps} 步` : "＋ 加一步";
+    };
+
+    add.addEventListener("click", () => {
+      if (draftSteps.length >= LIMITS.maxTaskSteps) return;
+      draftSteps.push({ id: `step-new-${state.nextStepId++}`, title: "", done: false });
+      draw();
+      list.querySelector(".step-editor-row:last-child input")?.focus();
+      onChange();
+    });
+
+    draw();
+    wrapper.append(list, add);
+    return wrapper;
+  }
+
   function taskEditor(id) {
     const task = state.tasks.find(item => item.id === id);
     if (!task && state.tasks.length >= LIMITS.maxTasks) return toast(`演示最多支持 ${LIMITS.maxTasks} 个任务。`);
@@ -609,17 +654,30 @@
     titleInput.setAttribute("aria-describedby", validation.id);
     form.addEventListener("input", () => { validation.hidden = true; });
     field(form, "分类", "category", task?.category || CATEGORIES[0], { choices: CATEGORIES });
-    const row = element("div", "form-row");
-    field(row, "预计番茄数", "estimate", task?.estimate || 1, { type: "number", min: 1, max: LIMITS.maxEstimatedSessions });
-    field(row, "优先级", "priority", task?.important ? "重要" : "普通", { choices: ["普通", "重要"] });
-    form.append(row);
+    field(form, "优先级", "priority", task?.important ? "重要" : "普通", { choices: ["普通", "重要"] });
+    // M：小步是可选的。草稿只在弹窗生命周期内，取消即丢弃。
+    const draftSteps = (task?.steps || []).map(step => ({ ...step }));
+    form.append(buildStepEditor(draftSteps, () => { validation.hidden = true; }));
     const actions = element("div", "modal-actions");
+    if (task?.archived) {
+      const restore = element("button", "secondary-button", "找回");
+      restore.type = "button";
+      restore.addEventListener("click", () => {
+        task.archived = false;
+        task.createdAt = FocusModel.localDateKey(new Date());
+        state.filter = "all";
+        closeModal();
+        renderTasks();
+        toast(`「${task.title}」回到清单。`);
+      });
+      actions.append(restore);
+    }
     if (task) {
       const remove = element("button", "secondary-button danger-button", "删除");
       remove.type = "button";
       remove.addEventListener("click", () => confirmAction("删除这个待办？", `将从本次演示中移除「${task.title}」。`, () => {
         state.tasks = state.tasks.filter(item => item.id !== task.id);
-        if (state.linkedTask === task.id) state.linkedTask = null;
+        if (state.linkedTask === task.id) { state.linkedTask = null; state.linkedStep = null; }
         renderTasks();
         updateLinkedTask();
         toast("待办已删除。");
@@ -634,9 +692,15 @@
       event.preventDefault();
       const data = Object.fromEntries(new FormData(form));
       try {
-        const validated = validateTask({ ...data, important: data.priority === "重要" });
-        if (task) Object.assign(task, validated);
-        else state.tasks.push({ ...validated, id: `new-${state.nextTaskId++}`, done: false });
+        const validated = validateTask({ ...data, important: data.priority === "重要", steps: draftSteps });
+        if (task) {
+          Object.assign(task, validated);
+          // 小步被删光时不该把已完成的事回退成未完成。
+          if (validated.steps.length) task.done = validated.steps.every(step => step.done);
+        } else {
+          state.tasks.push({ ...validated, id: `new-${state.nextTaskId++}`, done: false,
+            createdAt: FocusModel.localDateKey(new Date()), archived: false });
+        }
         state.filter = "all";
         closeModal();
         renderTasks();
@@ -650,20 +714,28 @@
     showModal(task ? "编辑这个小目标" : "记下一个小目标", form);
   }
 
-  function focusOnTask(task) {
+  function focusOnTask(task, step = null) {
     const action = () => {
       state.linkedTask = task.id;
+      // 子步骤不单独入账：记录仍挂在父待办上，只有标题快照记成「父任务 · 这一步」。
+      state.linkedStep = step ? step.id : null;
       applyFocusItem(currentFocusItem());
       updateLinkedTask();
       navigate("timer");
-      toast(`待办已关联，使用「${currentFocusItem().title}」的${itemDescription(currentFocusItem())}。`);
+      const what = step ? `这一步「${step.title}」` : "待办";
+      toast(`${what}已关联，使用「${currentFocusItem().title}」的${itemDescription(currentFocusItem())}。`);
     };
     guardedTimerChange(action, "更换专注任务会重置当前计时，是否继续？");
   }
 
+  function linkedStepOf(task) {
+    if (!task || !state.linkedStep) return null;
+    return (task.steps || []).find(step => step.id === state.linkedStep) || null;
+  }
+
   function renderTasks() {
-    const summary = taskSummary(state.tasks);
-    $("task-summary").textContent = `今天已完成 ${summary.done} / ${summary.total} 件事`;
+    const summary = taskSummary(activeTasks());
+    $("task-summary").textContent = `已完成 ${summary.done} / ${summary.total} 件`;
     $("completion-percent").replaceChildren(document.createTextNode(summary.percent), element("span", "", "%"));
     $("completion-bar").style.width = `${summary.percent}%`;
     $("all-count").textContent = summary.total;
@@ -672,33 +744,124 @@
       button.classList.toggle("selected", selected);
       button.setAttribute("aria-pressed", String(selected));
     });
-    const visible = state.tasks.filter(task => state.filter === "all" || (state.filter === "done" ? task.done : !task.done));
-    const cards = visible.map(task => {
-      const card = element("div", `task-card${task.done ? " done" : ""}`);
-      card.setAttribute("role", "listitem");
-      const check = element("button", "task-checkbox");
-      check.setAttribute("aria-label", `${task.done ? "重新打开" : "完成"}任务：${task.title}`);
-      check.setAttribute("aria-pressed", String(task.done));
-      if (task.done) check.append(icon("check"));
-      check.addEventListener("click", () => { task.done = !task.done; renderTasks(); updateLinkedTask(); });
-      const info = element("button", "task-info");
-      info.setAttribute("aria-label", `编辑任务：${task.title}`);
-      const meta = element("div", "task-meta");
-      meta.append(element("span", `task-tag${task.important ? " important" : ""}`, task.important ? "重要" : task.category));
-      meta.append(element("span", "", `${task.estimate} 个番茄 · ${task.done ? "已完成" : "今天"}`));
-      info.append(element("div", "task-title", task.title), meta);
-      info.addEventListener("click", () => taskEditor(task.id));
-      card.append(check, info);
-      if (!task.done) {
-        const start = element("button", "task-start");
-        start.setAttribute("aria-label", `专注于：${task.title}`);
-        start.append(icon("focus"));
-        start.addEventListener("click", () => focusOnTask(task));
-        card.append(start);
-      }
-      return card;
+    const today = FocusModel.localDateKey(new Date());
+    const visible = state.tasks.filter(task => {
+      if (state.filter === "archived") return task.archived;
+      if (task.archived) return false;
+      if (state.filter === "done") return task.done;
+      if (state.filter === "pending") return !task.done;
+      return true;
     });
-    $("task-list").replaceChildren(...(cards.length ? cards : [element("div", "empty-state", state.filter === "done" ? "还没有已完成的任务，慢慢来。" : "这里空空的，给今天留一点自由。") ]));
+    const cards = visible.map(task => buildTaskCard(task, today));
+    $("task-list").replaceChildren(...(cards.length ? cards : [element("div", "empty-state", emptyTaskMessage())]));
+  }
+
+  function activeTasks() {
+    return state.tasks.filter(task => !task.archived);
+  }
+
+  function emptyTaskMessage() {
+    if (state.filter === "done") return "还没有已完成的任务，慢慢来。";
+    if (state.filter === "archived") return "还没有放下的事。放下不是删除，是承认它这阵子不重要。";
+    return "这里空空的，给今天留一点自由。";
+  }
+
+  /** L 的发酵状态 + M 的小步路径，都在这张卡片上。 */
+  function buildTaskCard(task, today) {
+    const age = FocusModel.taskAge(task, today);
+    const progress = FocusModel.taskProgress(task);
+    const card = element("div", `task-card${task.done ? " done" : ""}${task.archived ? " archived" : ""} age-${age.stage}`);
+    card.setAttribute("role", "listitem");
+
+    const check = element("button", "task-checkbox");
+    check.setAttribute("aria-label", `${task.done ? "重新打开" : "完成"}任务：${task.title}`);
+    check.setAttribute("aria-pressed", String(task.done));
+    if (task.done) check.append(icon("check"));
+    check.addEventListener("click", () => { toggleTaskDone(task); });
+
+    const info = element("button", "task-info");
+    info.setAttribute("aria-label", `编辑任务：${task.title}`);
+    const meta = element("div", "task-meta");
+    if (task.important) meta.append(element("span", "task-tag important", "重要"));
+    meta.append(element("span", "task-tag", task.category));
+    if (!task.done && !task.archived) meta.append(element("span", "task-age", age.label));
+    if (task.archived) meta.append(element("span", "task-age", "已放下"));
+    info.append(element("div", "task-title", task.title), meta);
+    info.addEventListener("click", () => taskEditor(task.id));
+
+    const body = element("div", "task-body");
+    body.append(info);
+    if (progress.total) body.append(buildStepPath(task, progress));
+    if (!task.done && !task.archived && age.stage !== "fresh") body.append(buildAgeActions(task));
+
+    card.append(check, body);
+    if (!task.done && !task.archived) {
+      const start = element("button", "task-start");
+      const step = FocusModel.nextStep(task);
+      start.setAttribute("aria-label", step ? `专注于这一步：${step.title}` : `专注于：${task.title}`);
+      start.append(icon("focus"));
+      start.addEventListener("click", () => focusOnTask(task, step));
+      card.append(start);
+    }
+    return card;
+  }
+
+  /** M：一条横向的小路，走过的点是实心的。点一个点就把那一步标为走过或退回。 */
+  function buildStepPath(task, progress) {
+    const path = element("div", "step-path");
+    path.setAttribute("role", "group");
+    path.setAttribute("aria-label", `${task.title}：${progress.walked} / ${progress.total} 步`);
+    const track = element("div", "step-track");
+    task.steps.forEach((step, index) => {
+      if (index > 0) track.append(element("span", `step-link${step.done ? " walked" : ""}`));
+      const dot = element("button", `step-dot${step.done ? " walked" : ""}`);
+      dot.setAttribute("aria-label", `${step.done ? "已走过" : "还没走"}：${step.title}`);
+      dot.setAttribute("aria-pressed", String(step.done));
+      dot.addEventListener("click", () => toggleStep(task, step));
+      track.append(dot);
+    });
+    const next = FocusModel.nextStep(task);
+    path.append(track, element("p", "step-caption", next ? `下一步 · ${next.title}` : `${progress.total} 步都走完了`));
+    return path;
+  }
+
+  /** L：躺久了的事给两个出口——续一天，或放下。 */
+  function buildAgeActions(task) {
+    const row = element("div", "age-actions");
+    const renew = element("button", "age-action", "续一天");
+    renew.setAttribute("aria-label", `把「${task.title}」重新放到今天`);
+    renew.addEventListener("click", () => {
+      task.createdAt = FocusModel.localDateKey(new Date());
+      renderTasks();
+      toast(`「${task.title}」回到今天。`);
+    });
+    const release = element("button", "age-action quiet", "放下");
+    release.setAttribute("aria-label", `放下「${task.title}」`);
+    release.addEventListener("click", () => {
+      task.archived = true;
+      if (state.linkedTask === task.id) { state.linkedTask = null; state.linkedStep = null; }
+      renderTasks();
+      updateLinkedTask();
+      toast(`「${task.title}」已放下，可以在「放下的」里找回。`);
+    });
+    row.append(renew, release);
+    return row;
+  }
+
+  function toggleTaskDone(task) {
+    task.done = !task.done;
+    // 勾掉父任务时把没走完的小步一并算走过，避免进度和状态互相矛盾。
+    if (task.done && Array.isArray(task.steps)) task.steps.forEach(step => { step.done = true; });
+    renderTasks();
+    updateLinkedTask();
+  }
+
+  function toggleStep(task, step) {
+    step.done = !step.done;
+    // 小步全部走完，父任务随之完成；有任何一步回退，父任务也回到未完成。
+    task.done = task.steps.length > 0 && task.steps.every(item => item.done);
+    renderTasks();
+    updateLinkedTask();
   }
 
   function chooseTask() {
@@ -710,6 +873,7 @@
         closeModal();
         if (state.linkedTask !== task.id) guardedTimerChange(() => {
           state.linkedTask = task.id;
+          state.linkedStep = null;
           resetTimer();
           updateLinkedTask();
           renderTimer();
