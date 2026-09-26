@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { Timer, LIMITS, MODES, USAGE, initialTasks, taskSummary, validateTask, validateSteps, taskAge, taskProgress, nextStep, stepFocusTitle, daysBetween, formatTime } = require("./model.js");
+const { Timer, LIMITS, MODES, USAGE, CATEGORIES, initialTasks, taskSummary, groupTasks, validateTask, validateSteps, taskAge, taskProgress, nextStep, stepFocusTitle, daysBetween, formatTime } = require("./model.js");
 const { localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv } = require("./model.js");
 const { execFileSync } = require("node:child_process");
 const { initialFocusItems, validateFocusItem, focusHourDistribution, validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary } = require("./model.js");
@@ -283,6 +283,38 @@ test("M：专注记录的标题快照记成「父任务 · 这一步」", () => 
   const task = { title: "梳理想法", steps: [{ id: "a", title: "画草图", done: false }] };
   assert.equal(stepFocusTitle(task, task.steps[0]), "梳理想法 · 画草图");
   assert.equal(stepFocusTitle(task, null), "梳理想法");
+});
+
+test("重要的事跨分类置顶，其余按分类分组，完成的事沉底且空组不出现", () => {
+  const tasks = [
+    { id: "a", title: "工作普通", category: "工作", done: false },
+    { id: "b", title: "生活重要", category: "生活", important: true, done: false },
+    { id: "c", title: "工作已完成", category: "工作", done: true },
+    { id: "d", title: "工作后到", category: "工作", done: false },
+    { id: "e", title: "工作重要", category: "工作", important: true, done: false },
+  ];
+  const groups = groupTasks(tasks);
+  assert.deepEqual(groups.map(group => group.key), ["important", "category:工作"]);
+  assert.deepEqual(groups.map(group => group.label), ["重要", "工作"]);
+  // 重要组跨分类，按原顺序；分类组内已完成沉底，未完成保持先后。
+  assert.deepEqual(groups[0].tasks.map(task => task.id), ["b", "e"]);
+  assert.deepEqual(groups[1].tasks.map(task => task.id), ["a", "d", "c"]);
+  assert.deepEqual(groupTasks([]), []);
+  assert.deepEqual(groupTasks(null), []);
+});
+
+test("分组遵循分类定义顺序，未知分类归入末组兜底且不修改输入", () => {
+  const tasks = CATEGORIES.slice().reverse().map((category, index) => ({ id: `t${index}`, category, done: false }));
+  assert.deepEqual(groupTasks(tasks).map(group => group.label), CATEGORIES.slice());
+  const broken = [{ id: "x", category: "已删除分类", done: false }];
+  const fallback = groupTasks(broken);
+  assert.equal(fallback.length, 1);
+  assert.equal(fallback[0].label, CATEGORIES[CATEGORIES.length - 1]);
+  assert.deepEqual(fallback[0].tasks.map(task => task.id), ["x"]);
+  const original = initialTasks();
+  const snapshot = JSON.parse(JSON.stringify(original));
+  groupTasks(original);
+  assert.deepEqual(original, snapshot);
 });
 
 test("示例待办自带放入日期与小步，且实例相互隔离", () => {

@@ -258,6 +258,69 @@ def check_independent_countup(browser, errors):
     print("PASS: independent items, 80-character mobile dialogs, countup targets, early/paused finish, immutable history and four-period CSV/JSON.", flush=True)
 
 
+def group_labels(page):
+    return page.locator(".task-group-label").all_inner_texts()
+
+
+def group_titles(page, label):
+    group = page.locator(".task-group").filter(has=page.locator(".task-group-label", has_text=label))
+    return group.locator(".task-title").all_inner_texts()
+
+
+def check_task_grouping(browser, errors):
+    """重要的事置顶，工作与生活在查看时分开，空组不出现。"""
+    page = browser.new_page(viewport=DESKTOP_VIEWPORT, reduced_motion="reduce", timezone_id="Asia/Shanghai")
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(BASE_URL)
+    page.locator('.bottom-nav [data-page="tasks"]').click()
+    # 示例数据：重要的「梳理个人 APP 的想法」原属工作，置顶后工作组为空而不显示。
+    assert group_labels(page) == ["重要", "个人成长", "生活"], group_labels(page)
+    assert group_titles(page, "重要") == ["梳理个人 APP 的想法"]
+    assert group_titles(page, "个人成长") == ["阅读《原子习惯》"]
+    # 已完成的「整理书桌」沉到本组末尾。
+    assert group_titles(page, "生活") == ["傍晚出去走一走", "整理书桌，清空杂念"]
+    expect(page.locator(".task-group").first.locator(".task-group-count")).to_have_text("1")
+
+    # 新增一件工作的事，工作组出现在生活组之前；组标题已说明分类，卡片不再重复标签。
+    page.locator("#add-task").click()
+    page.locator('input[name="title"]').fill("写周报")
+    page.locator('select[name="category"]').select_option("工作")
+    page.get_by_role("button", name="添加待办", exact=True).click()
+    assert group_labels(page) == ["重要", "个人成长", "工作", "生活"], group_labels(page)
+    assert group_titles(page, "工作") == ["写周报"]
+    added = page.locator(".task-card").filter(has_text="写周报")
+    assert added.locator(".task-tag").count() == 0
+
+    # 标为重要后移入置顶组，并显示原分类标签；取消重要则回到分类组。
+    added.locator(".task-info").click()
+    page.locator('select[name="priority"]').select_option("重要")
+    page.get_by_role("button", name="保存修改", exact=True).click()
+    assert group_titles(page, "重要") == ["梳理个人 APP 的想法", "写周报"]
+    assert group_labels(page) == ["重要", "个人成长", "生活"], group_labels(page)
+    expect(page.locator(".task-card").filter(has_text="写周报").locator(".task-tag")).to_have_text("工作")
+    page.locator(".task-card").filter(has_text="写周报").locator(".task-info").click()
+    page.locator('select[name="priority"]').select_option("普通")
+    page.get_by_role("button", name="保存修改", exact=True).click()
+    assert group_titles(page, "工作") == ["写周报"]
+
+    # 筛选与分组叠加：只看已完成时只剩生活组，放下的事不留在分类组里。
+    page.locator('[data-filter="done"]').click()
+    assert group_labels(page) == ["生活"], group_labels(page)
+    assert group_titles(page, "生活") == ["整理书桌，清空杂念"]
+    page.locator('[data-filter="archived"]').click()
+    expect(page.locator(".empty-state")).to_be_visible()
+    assert group_labels(page) == []
+    page.locator('[data-filter="all"]').click()
+    assert group_labels(page) == ["重要", "个人成长", "工作", "生活"], group_labels(page)
+
+    # 窄屏下分组不撑破手机宽度。
+    page.set_viewport_size({"width": 380, "height": 760})
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=str(SCREENSHOT_DIRECTORY / "mobile-task-groups.png"))
+    page.close()
+    print("PASS: important tasks pinned on top, work and life shown as separate groups.", flush=True)
+
+
 def check_focus_configuration(browser, errors):
     page = fresh_timer_page(browser, errors)
     choose_focus_item(page, PROJECT_TITLES[1])
@@ -1023,6 +1086,7 @@ def run_checks():
         assert payload["summary"]["minutes"] == 76
         skip_progress(boundary_page, return_to_timer=False)
         boundary_page.close()
+        check_task_grouping(browser, errors)
         check_focus_configuration(browser, errors)
         check_independent_countup(browser, errors)
         check_project_navigation(browser, errors)
@@ -1032,7 +1096,7 @@ def run_checks():
         check_alltime_statistics(browser, errors)
         assert not errors, errors
         browser.close()
-    print("PASS: project navigation, timer, tasks, progress drafts/revisions/queues, all-time summaries, safe rendering, CSV/JSON downloads, source/date filters, pagination, 16 main-page and 16 statistics layouts, midnight/pause accounting, live export, direct file open; no browser exceptions.")
+    print("PASS: project navigation, timer, tasks, important-first grouping by category, progress drafts/revisions/queues, all-time summaries, safe rendering, CSV/JSON downloads, source/date filters, pagination, 16 main-page and 16 statistics layouts, midnight/pause accounting, live export, direct file open; no browser exceptions.")
     print(f"Screenshots: {SCREENSHOT_DIRECTORY}")
 
 

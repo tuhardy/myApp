@@ -215,7 +215,15 @@ h3 { font-size: 13px; font-weight: 600; margin: 0; }
 .task-tabs button.selected { font-weight: 600; color: var(--green-dark); }
 .task-tabs button.selected::after { content: ""; position: absolute; height: 2px; background: var(--green); bottom: -1px; left: 0; right: 0; }
 .task-tabs button span { font-size: 11px; background: #ededed; padding: 1px 5px; border-radius: 4px; margin-left: 3px; }
-.task-list { display: flex; flex-direction: column; gap: 10px; }
+.task-list { display: flex; flex-direction: column; gap: 18px; }
+/* 重要的事跨分类自成一组排在最前，其余按分类分开。 */
+.task-group { display: flex; flex-direction: column; gap: 8px; }
+.task-group-list { display: flex; flex-direction: column; gap: 10px; }
+.task-group-heading { display: flex; align-items: center; gap: 7px; padding-left: 2px; }
+.task-group-label { font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: .04em; }
+.task-group-count { font-size: 11px; color: var(--muted); opacity: .7; font-variant-numeric: tabular-nums; }
+.task-group.important .task-group-label { color: var(--accent-dark); }
+.task-group.important .task-group-label::before { content: "▲"; font-size: 8px; margin-right: 5px; vertical-align: 1px; }
 .task-card { display: flex; align-items: flex-start; gap: 6px; padding: 12px 8px; border: 1px solid var(--line); background: var(--white); border-radius: 15px; transition: opacity .25s, border-color .25s; }
 .task-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 9px; }
 /* L：躺得越久越淡，像一杯放凉的茶。已完成与已放下不参与发酵。 */

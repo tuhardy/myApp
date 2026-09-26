@@ -752,8 +752,22 @@
       if (state.filter === "pending") return !task.done;
       return true;
     });
-    const cards = visible.map(task => buildTaskCard(task, today));
-    $("task-list").replaceChildren(...(cards.length ? cards : [element("div", "empty-state", emptyTaskMessage())]));
+    const groups = FocusModel.groupTasks(visible).map(group => buildTaskGroup(group, today));
+    $("task-list").replaceChildren(...(groups.length ? groups : [element("div", "empty-state", emptyTaskMessage())]));
+  }
+
+  /** 重要的事自成一组排在最前，其余按分类分开，每组一个小标题。 */
+  function buildTaskGroup(group, today) {
+    const section = element("div", `task-group${group.key === "important" ? " important" : ""}`);
+    section.setAttribute("role", "group");
+    const heading = element("div", "task-group-heading");
+    heading.append(element("span", "task-group-label", group.label), element("span", "task-group-count", String(group.tasks.length)));
+    const list = element("div", "task-group-list");
+    list.setAttribute("role", "list");
+    list.append(...group.tasks.map(task => buildTaskCard(task, today, group.key)));
+    section.append(heading, list);
+    section.setAttribute("aria-label", `${group.label}：${group.tasks.length} 件`);
+    return section;
   }
 
   function activeTasks() {
@@ -767,7 +781,7 @@
   }
 
   /** L 的发酵状态 + M 的小步路径，都在这张卡片上。 */
-  function buildTaskCard(task, today) {
+  function buildTaskCard(task, today, groupKey = "") {
     const age = FocusModel.taskAge(task, today);
     const progress = FocusModel.taskProgress(task);
     const card = element("div", `task-card${task.done ? " done" : ""}${task.archived ? " archived" : ""} age-${age.stage}`);
@@ -782,8 +796,9 @@
     const info = element("button", "task-info");
     info.setAttribute("aria-label", `编辑任务：${task.title}`);
     const meta = element("div", "task-meta");
-    if (task.important) meta.append(element("span", "task-tag important", "重要"));
-    meta.append(element("span", "task-tag", task.category));
+    // 组标题已经说明了重要或分类，卡片上不再重复同一个标签。
+    if (task.important && groupKey !== "important") meta.append(element("span", "task-tag important", "重要"));
+    if (groupKey === "important" || groupKey !== `category:${task.category}`) meta.append(element("span", "task-tag", task.category));
     if (!task.done && !task.archived) meta.append(element("span", "task-age", age.label));
     if (task.archived) meta.append(element("span", "task-age", "已放下"));
     info.append(element("div", "task-title", task.title), meta);

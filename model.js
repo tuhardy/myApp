@@ -183,6 +183,26 @@
     return child ? `${parent} · ${child}` : parent;
   }
 
+  /**
+   * 待办分组：标为重要的事跨分类自成一组排在最前，其余按 CATEGORIES 顺序分组。
+   * 已完成的事沉到各组末尾，同组内保持原有先后顺序。空组不返回。
+   */
+  function groupTasks(tasks) {
+    const list = Array.isArray(tasks) ? tasks : [];
+    const buckets = [{ key: "important", label: "重要", tasks: [] }]
+      .concat(CATEGORIES.map(name => ({ key: `category:${name}`, label: name, tasks: [] })));
+    const byKey = new Map(buckets.map(bucket => [bucket.key, bucket]));
+    list.forEach(task => {
+      const bucket = task?.important ? byKey.get("important") : byKey.get(`category:${task?.category}`);
+      // 分类被改坏的事不能凭空消失，归到最后一组兜底。
+      (bucket || buckets[buckets.length - 1]).tasks.push(task);
+    });
+    buckets.forEach(bucket => {
+      bucket.tasks.sort((left, right) => Number(Boolean(left.done)) - Number(Boolean(right.done)));
+    });
+    return buckets.filter(bucket => bucket.tasks.length > 0);
+  }
+
   function taskSummary(tasks) {
     const total = tasks.length;
     const done = tasks.filter(task => task.done).length;
@@ -595,7 +615,7 @@
   }
 
   const api = Object.freeze({
-    LIMITS, MODES, CATEGORIES, USAGE, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, taskAge, taskProgress, nextStep, stepFocusTitle, daysBetween, formatTime, Timer,
+    LIMITS, MODES, CATEGORIES, USAGE, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, stepFocusTitle, daysBetween, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
     validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary,
   });
