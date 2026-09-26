@@ -91,8 +91,15 @@ internal object JsonCodec {
     private fun nullable(value: Any?): Any = value ?: JSONObject.NULL
     fun project(value: Project): JSONObject = JSONObject().put("id", value.id).put("title", value.title).put("category", value.category).put("timerMode", value.timerMode.name).put("targetMinutes", nullable(value.targetMinutes))
     fun readProject(value: JSONObject) = Project(value.string("id"), value.string("title"), value.string("category"), TimerMode.valueOf(value.string("timerMode")), value.nullableInteger("targetMinutes"))
+    fun step(value: TodoStep): JSONObject = JSONObject().put("id", value.id).put("title", value.title).put("done", value.done)
+    fun readStep(value: JSONObject) = TodoStep(value.string("id"), value.string("title"), value.boolean("done"))
     fun todo(value: Todo): JSONObject = JSONObject().put("id", value.id).put("title", value.title).put("category", value.category).put("important", value.important).put("done", value.done).put("estimate", value.estimate)
-    fun readTodo(value: JSONObject) = Todo(value.string("id"), value.string("title"), value.string("category"), value.boolean("important"), value.boolean("done"), value.integer("estimate"))
+        .put("createdAt", value.createdAt).put("steps", JSONArray(value.steps.map(::step))).put("archived", value.archived)
+    /** 旧备份没有发酵与小步字段，按「今天放进来、没有小步、未放下」读入，不臆造历史。 */
+    fun readTodo(value: JSONObject) = Todo(value.string("id"), value.string("title"), value.string("category"), value.boolean("important"), value.boolean("done"), value.integer("estimate"),
+        if (value.has("createdAt")) value.string("createdAt") else "",
+        if (value.has("steps")) value.objects("steps", Validation.MAX_STEPS).map(::readStep) else emptyList(),
+        if (value.has("archived")) value.boolean("archived") else false)
     fun segment(value: TimeSegment): JSONObject = JSONObject().put("startedAt", value.startedAt).put("endedAt", value.endedAt)
     fun readSegment(value: JSONObject) = TimeSegment(value.long("startedAt"), value.long("endedAt"))
     fun session(value: FocusSession): JSONObject = JSONObject().put("id", value.id).put("projectId", value.projectId).put("projectTitle", value.projectTitle).put("category", value.category)

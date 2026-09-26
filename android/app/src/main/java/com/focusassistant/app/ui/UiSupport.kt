@@ -15,6 +15,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -56,6 +57,9 @@ internal object UiLimits {
     val PRESETS = listOf(15, 25, 45, 60)
     const val MIN_PRESET = 25
 }
+
+/** 待办页签：放下的事只在「放下的」里出现，可以找回。 */
+internal enum class TodoFilter { ALL, PENDING, DONE, ARCHIVED }
 
 internal val Accent = Color(0xFFC44E22)
 internal val SoftSurface = Color(0xFFF5F5F5)
@@ -385,19 +389,41 @@ internal fun TodoEditorDialog(todo: Todo?, busy: Boolean, onDismiss: () -> Unit,
     var title by rememberSaveable(todo?.id) { mutableStateOf(todo?.title.orEmpty()) }
     var category by rememberSaveable(todo?.id) { mutableStateOf(todo?.category ?: UiLimits.CATEGORIES.first()) }
     var important by rememberSaveable(todo?.id) { mutableStateOf(todo?.important ?: false) }
+    // 小步草稿只活在弹窗里，取消即丢弃。保留原有的走过状态。
+    val steps = remember(todo?.id) { mutableStateListOf<TodoStep>().apply { addAll(todo?.steps.orEmpty()) } }
     var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, title = { Text(if (todo == null) "添加待办" else "编辑待办") }, text = {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedTextField(value = title, onValueChange = { if (it.length <= UiLimits.MAX_TITLE) title = it }, label = { Text("想完成什么？") }, modifier = Modifier.fillMaxWidth())
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 UiLimits.CATEGORIES.forEach { value -> FilterChip(selected = category == value, onClick = { category = value }, label = { Text(value, fontSize = 11.sp) }) }
             }
             Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(checked = important, onCheckedChange = { important = it }); Text("重要事项") }
+            Text("拆成小步（可选，最多 ${Validation.MAX_STEPS} 步）", color = Muted, fontSize = 12.sp)
+            steps.forEachIndexed { index, step ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    OutlinedTextField(
+                        value = step.title,
+                        onValueChange = { if (it.length <= Validation.MAX_STEP_TITLE) { steps[index] = step.copy(title = it); error = null } },
+                        label = { Text("第 ${index + 1} 步") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = { steps.removeAt(index); error = null }) { Icon(Icons.Outlined.DeleteOutline, "删除第 ${index + 1} 步", tint = Muted) }
+                }
+            }
+            if (steps.size < Validation.MAX_STEPS) {
+                TextButton(onClick = { steps.add(TodoStep(UUID.randomUUID().toString(), "")); error = null }) { Text("加一步") }
+            }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
     }, confirmButton = { TextButton(enabled = !busy, onClick = {
+        val trimmed = steps.map { it.copy(title = it.title.trim()) }
         if (title.isBlank()) error = "请输入待办名称。"
-        else onSave(Todo(todo?.id ?: UUID.randomUUID().toString(), title.trim(), category, important, todo?.done ?: false, todo?.estimate ?: 1))
+        else if (trimmed.any { it.title.isBlank() }) error = "每个小步都要有名字，或删掉它。"
+        else onSave(Todo(todo?.id ?: UUID.randomUUID().toString(), title.trim(), category, important,
+            // 有小步时父任务的完成状态由小步决定，避免保存后两者不一致。
+            if (trimmed.isNotEmpty()) trimmed.all { it.done } else todo?.done ?: false,
+            todo?.estimate ?: 1, todo?.createdAt.orEmpty(), trimmed, todo?.archived ?: false))
     }) { Text(if (busy) "保存中" else "保存") } }, dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("取消") } })
 }
 

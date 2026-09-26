@@ -7,7 +7,16 @@ enum class Period { DAY, WEEK, MONTH, YEAR }
 enum class TimerEventKind { COMPLETED, TARGET_REACHED, RECOVERED }
 
 data class Project(val id: String, val title: String, val category: String, val timerMode: TimerMode, val targetMinutes: Int?)
-data class Todo(val id: String, val title: String, val category: String, val important: Boolean = false, val done: Boolean = false, val estimate: Int = 1)
+data class TodoStep(val id: String, val title: String, val done: Boolean = false)
+/**
+ * createdAt 是「放进清单的那天」的本地日期，用于计算停留天数；steps 是可选的一串小步。
+ * archived 只表示放下，不删除记录。
+ */
+data class Todo(
+    val id: String, val title: String, val category: String, val important: Boolean = false,
+    val done: Boolean = false, val estimate: Int = 1,
+    val createdAt: String = "", val steps: List<TodoStep> = emptyList(), val archived: Boolean = false
+)
 data class TimeSegment(val startedAt: Long, val endedAt: Long)
 data class FocusSession(
     val id: String, val projectId: String, val projectTitle: String, val category: String,
@@ -53,6 +62,9 @@ data class BackupData(val projects: List<Project>, val todos: List<Todo>, val se
 object Validation {
     const val MAX_TITLE = 80
     const val MAX_NOTE = 2000
+    /** 一件事最多 8 个小步，每步 1–40 字。 */
+    const val MAX_STEPS = 8
+    const val MAX_STEP_TITLE = 40
     /** 小时 0–23、分钟 0–59，合计至少 1 分钟。 */
     const val MIN_MINUTES = 1
     const val MAX_MINUTES = 23 * 60 + 59
@@ -74,7 +86,13 @@ object Validation {
         require(value.id.isNotBlank() && value.id.length <= 128) { "待办标识无效" }
         require(value.title.isNotBlank() && value.title.length <= MAX_TITLE && value.category.length <= MAX_TITLE) { "待办名称或分类无效" }
         require(value.estimate in 1..1000) { "预计专注次数须为 1–1000" }
+        require(value.createdAt.isBlank() || DATE_KEY.matches(value.createdAt)) { "放入日期须为 YYYY-MM-DD" }
+        require(value.steps.size <= MAX_STEPS) { "每件事最多 $MAX_STEPS 个小步" }
+        val ids = value.steps.map { it.id }
+        require(ids.all { it.isNotBlank() && it.length <= 128 } && ids.toSet().size == ids.size) { "小步标识缺失或重复" }
+        value.steps.forEach { require(it.title.isNotBlank() && it.title.length <= MAX_STEP_TITLE) { "小步名称须为 1–$MAX_STEP_TITLE 个字符" } }
     }
+    private val DATE_KEY = Regex("""^\d{4}-\d{2}-\d{2}$""")
     fun settings(value: AppSettings) {
         require(value.dailyGoalMinutes in 1..1440) { "每日目标须为 1–1440 分钟" }
         require(value.shortBreakMinutes in 1..120 && value.longBreakMinutes in 1..120) { "休息时长须为 1–120 分钟" }

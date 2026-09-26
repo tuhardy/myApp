@@ -22,17 +22,18 @@ object TimerServiceCommands {
     const val RESTORE = "com.focusassistant.app.timer.RESTORE"
     internal const val PROJECT_ID = "projectId"
     internal const val TASK_ID = "taskId"
+    internal const val TASK_STEP_ID = "taskStepId"
     private val mutableErrors = MutableSharedFlow<String>(extraBufferCapacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val errors: SharedFlow<String> = mutableErrors.asSharedFlow()
     private val actions = setOf(START, PAUSE, RESUME, FINISH, FINISH_EARLY, DISCARD, SHORT_BREAK, LONG_BREAK, RESTORE)
 
-    fun send(context: Context, action: String, projectId: String? = null, taskId: String? = null): Boolean {
+    fun send(context: Context, action: String, projectId: String? = null, taskId: String? = null, taskStepId: String? = null): Boolean {
         if (action !in actions) {
             report(context, "无法识别计时操作")
             return false
         }
         return try {
-            val intent = intent(context, action).putExtra(PROJECT_ID, projectId).putExtra(TASK_ID, taskId)
+            val intent = intent(context, action).putExtra(PROJECT_ID, projectId).putExtra(TASK_ID, taskId).putExtra(TASK_STEP_ID, taskStepId)
             ContextCompat.startForegroundService(context, intent)
             true
         } catch (error: RuntimeException) {

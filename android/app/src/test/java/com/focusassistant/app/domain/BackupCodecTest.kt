@@ -25,6 +25,36 @@ class BackupCodecTest {
         assertEquals(expected.sessions, restored.sessions); assertEquals(expected.progress, restored.progress)
         assertEquals(expected.settings, restored.settings)
     }
+    @Test fun todoAgingAndStepsSurviveRoundTrip() {
+        val rich = Todo("t2", "梳理想法", "工作", important = true, createdAt = "2026-03-11",
+            steps = listOf(TodoStep("a", "写下问题", true), TodoStep("b", "画草图")), archived = true)
+        val restored = BackupCodec.decode(BackupCodec.encode(state().copy(todos = listOf(rich))))
+        assertEquals(rich, restored.todos.single())
+    }
+    @Test fun olderBackupsWithoutAgingFieldsLoadWithoutInventingHistory() {
+        val root = root()
+        val todo = root.getJSONArray("todos").getJSONObject(0)
+        todo.remove("createdAt"); todo.remove("steps"); todo.remove("archived")
+        val restored = BackupCodec.decode(root.toString()).todos.single()
+        // 旧备份没有这些字段，不臆造放入日期、小步或放下状态。
+        assertEquals("", restored.createdAt)
+        assertTrue(restored.steps.isEmpty())
+        assertFalse(restored.archived)
+    }
+    @Test fun brokenTodoAgingFieldsAreRejected() {
+        rejected(root().also { it.getJSONArray("todos").getJSONObject(0).put("createdAt", "2026-3-1") })
+        rejected(root().also { it.getJSONArray("todos").getJSONObject(0).put("archived", "yes") })
+        rejected(root().also { root ->
+            val steps = org.json.JSONArray().put(JSONObject().put("id", "a").put("title", "").put("done", false))
+            root.getJSONArray("todos").getJSONObject(0).put("steps", steps)
+        })
+        rejected(root().also { root ->
+            val duplicate = org.json.JSONArray()
+                .put(JSONObject().put("id", "a").put("title", "一").put("done", false))
+                .put(JSONObject().put("id", "a").put("title", "二").put("done", false))
+            root.getJSONArray("todos").getJSONObject(0).put("steps", duplicate)
+        })
+    }
     @Test fun emptyBackupIsValidAndContainsNoSampleData() {
         val backup = BackupCodec.decode(BackupCodec.encode(AppState()))
         assertTrue(backup.projects.isEmpty() && backup.sessions.isEmpty() && backup.progress.isEmpty() && backup.todos.isEmpty())

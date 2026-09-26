@@ -90,10 +90,30 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         }
     }
     suspend fun saveTodo(todo: Todo) {
-        Validation.todo(todo)
-        mutate { it.copy(todos = upsert(it.todos, todo) { item -> item.id }) }
+        // 新建的事从今天开始发酵；已有的事保留原本的放入日期。
+        val stored = if (todo.createdAt.isBlank()) todo.copy(createdAt = today().toString()) else todo
+        Validation.todo(stored)
+        mutate { it.copy(todos = upsert(it.todos, stored) { item -> item.id }) }
     }
     suspend fun deleteTodo(id: String) { mutate { it.copy(todos = it.todos.filterNot { todo -> todo.id == id }) } }
+    /** 勾掉父任务把剩余小步一并算走过，任一步回退父任务也回到未完成。 */
+    suspend fun toggleTodoDone(id: String) = updateTodo(id, TodoAging::toggleDone)
+    suspend fun toggleTodoStep(id: String, stepId: String) = updateTodo(id) { TodoAging.toggleStep(it, stepId) }
+    /** 「续一天」把放入日期重置为今天，让它回到眼前。 */
+    suspend fun renewTodo(id: String) = updateTodo(id) { it.copy(createdAt = today().toString()) }
+    /** 「放下」只置 archived 不删除，之后可以找回。 */
+    suspend fun archiveTodo(id: String, archived: Boolean) = updateTodo(id) {
+        if (archived) it.copy(archived = true) else it.copy(archived = false, createdAt = today().toString())
+    }
+    private suspend fun updateTodo(id: String, change: (Todo) -> Todo) {
+        mutate { current ->
+            val todo = current.todos.find { it.id == id } ?: return@mutate current
+            val next = change(todo)
+            Validation.todo(next)
+            current.copy(todos = current.todos.map { if (it.id == id) next else it })
+        }
+    }
+    private fun today() = java.time.LocalDate.now()
     suspend fun saveSettings(settings: AppSettings) {
         Validation.settings(settings)
         mutate { it.copy(settings = settings) }
@@ -111,12 +131,15 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
     suspend fun markProgressPrompted(sessionId: String) {
         mutate { current -> current.copy(sessions = current.sessions.map { if (it.id == sessionId) it.copy(progressPrompted = true) else it }) }
     }
-    suspend fun startTimer(projectId: String, taskId: String? = null) {
+    suspend fun startTimer(projectId: String, taskId: String? = null, taskStepId: String? = null) {
         mutate { current ->
             require(current.timer == null) { "已有计时，请先结束或确认放弃" }
             val project = current.projects.find { it.id == projectId } ?: error("项目不存在")
             val task = taskId?.let { requested -> current.todos.find { it.id == requested } ?: error("待办不存在") }
-            current.copy(timer = TimerEngine.start(project, id(), System.currentTimeMillis(), SystemClock.elapsedRealtime(), bootCount, task))
+            // 小步不是独立实体：记录仍挂在父待办的 id 上，只有标题快照记成「父任务 · 这一步」。
+            val step = taskStepId?.let { requested -> task?.steps?.find { it.id == requested } }
+            val snapshot = task?.let { it.copy(title = TodoAging.stepFocusTitle(it, step)) }
+            current.copy(timer = TimerEngine.start(project, id(), System.currentTimeMillis(), SystemClock.elapsedRealtime(), bootCount, snapshot))
         }
     }
     suspend fun startBreak(longBreak: Boolean) {

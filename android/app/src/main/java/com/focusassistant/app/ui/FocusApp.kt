@@ -54,9 +54,12 @@ class NativeUiModel : ViewModel() {
     internal var screen by mutableStateOf(Screen.PROJECTS)
     var projectId by mutableStateOf<String?>(null)
     var taskId by mutableStateOf<String?>(null)
+    /** 从哪一步开始专注。只影响记录里的标题快照，不产生独立待办。 */
+    var taskStepId by mutableStateOf<String?>(null)
     var dialog by mutableStateOf("")
     var dialogId by mutableStateOf("")
     var busy by mutableStateOf(false)
+    internal var todoFilter by mutableStateOf(TodoFilter.ALL)
     var period by mutableStateOf(Period.DAY)
     var anchor by mutableStateOf(LocalDate.now())
     var recordLimit by mutableIntStateOf(UiLimits.RECORD_PAGE)
@@ -124,7 +127,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             ui.notificationRequested = true
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        TimerServiceCommands.send(context, action, currentProject?.id, ui.taskId)
+        TimerServiceCommands.send(context, action, currentProject?.id, ui.taskId, ui.taskStepId)
     }
     fun openProject(project: Project) {
         val active = state.timer
@@ -248,11 +251,18 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                         currentProject?.let { project -> ui.perform { repository.saveProject(project.copy(timerMode = mode)) } }
                     }, { currentProject?.let { ui.open("project-duration", it.id) } },
                         { if (currentProject != null) sendTimer(TimerServiceCommands.START) }, { sendTimer(TimerServiceCommands.PAUSE) }, { sendTimer(TimerServiceCommands.RESUME) }, { sendTimer(TimerServiceCommands.FINISH) }, { ui.open("finish-early") }, { ui.open("discard") }, { startBreak(false) }, { startBreak(true) })
-                    Screen.TODOS -> TodosScreen(state, { ui.open("todo") }, { ui.open("todo", it.id) }, { todo -> ui.perform { repository.saveTodo(todo.copy(done = !todo.done)) } }, { ui.open("delete-todo", it.id) }, { todo ->
+                    Screen.TODOS -> TodosScreen(state, ui.todoFilter, today, { ui.todoFilter = it }, { ui.open("todo") }, { ui.open("todo", it.id) },
+                        { todo -> ui.perform { repository.toggleTodoDone(todo.id) } },
+                        { todo, step -> ui.perform { repository.toggleTodoStep(todo.id, step.id) } },
+                        { todo -> ui.perform { repository.renewTodo(todo.id); ui.message("「${todo.title}」回到今天。") } },
+                        { todo -> ui.perform { repository.archiveTodo(todo.id, true); ui.message("「${todo.title}」已放下，可在「放下的」里找回。") } },
+                        { todo -> ui.perform { repository.archiveTodo(todo.id, false); ui.todoFilter = TodoFilter.ALL; ui.message("「${todo.title}」回到清单。") } },
+                        { ui.open("delete-todo", it.id) }, { todo, step ->
                         val project = currentProject ?: state.projects.firstOrNull()
                         if (project == null) { ui.message("请先创建一个学习项目，再关联待办开始专注。"); ui.screen = Screen.PROJECTS }
                         else if (state.timer != null) ui.open("link-task-confirm", todo.id)
-                        else { ui.taskId = todo.id; ui.projectId = project.id; ui.screen = Screen.TIMER }
+                        // 子步骤不单独入账：记录仍挂在父待办上，只有标题快照记成「父任务 · 这一步」。
+                        else { ui.taskId = todo.id; ui.taskStepId = step?.id; ui.projectId = project.id; ui.screen = Screen.TIMER }
                     })
                     Screen.STATISTICS -> StatisticsScreen(state, ui.period, ui.anchor, ui.recordLimit, { ui.period = it; ui.recordLimit = UiLimits.RECORD_PAGE }, {
                         ui.anchor = shiftPeriod(ui.period, ui.anchor, -1); ui.recordLimit = UiLimits.RECORD_PAGE
@@ -318,8 +328,8 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                 confirmButton = { TextButton(enabled = !ui.busy, onClick = { exportStatistics(false) }) { Text("JSON") } }, dismissButton = { TextButton(enabled = !ui.busy, onClick = { exportStatistics(true) }) { Text("CSV") } })
             "link-task" -> AlertDialog(onDismissRequest = { ui.close() }, title = { Text("关联待办") }, text = {
                 Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
-                    TextButton(onClick = { if (state.timer != null) ui.open("link-task-confirm") else { ui.taskId = null; ui.close() } }) { Text("不关联待办") }
-                    state.todos.filterNot { it.done }.forEach { todo -> TextButton(onClick = { if (state.timer != null) ui.open("link-task-confirm", todo.id) else { ui.taskId = todo.id; ui.close() } }) { Text(todo.title) } }
+                    TextButton(onClick = { if (state.timer != null) ui.open("link-task-confirm") else { ui.taskId = null; ui.taskStepId = null; ui.close() } }) { Text("不关联待办") }
+                    state.todos.filterNot { it.done }.forEach { todo -> TextButton(onClick = { if (state.timer != null) ui.open("link-task-confirm", todo.id) else { ui.taskId = todo.id; ui.taskStepId = null; ui.close() } }) { Text(todo.title) } }
                 }
             }, confirmButton = { TextButton(onClick = { ui.close() }) { Text("取消") } })
             "usage-goal" -> NumberSettingsDialog("每日使用目标", listOf("目标分钟数" to state.settings.dailyGoalMinutes), ui.busy, { ui.close() }) { values ->
@@ -332,7 +342,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                 val backup = ui.pendingBackup
                 if (backup == null) InformationDialog("重新选择备份", listOf("备份预览已失效，请重新选择文件。未修改任何本地数据。"), { ui.close() })
                 else ConfirmDialog("确认覆盖本机数据？", "备份包含 ${backup.projects.size} 个项目、${backup.todos.size} 个待办、${backup.sessions.size} 次专注和 ${backup.progress.size} 条进度。恢复会替换当前数据，不合并。建议先导出当前备份。", ui.busy, { ui.pendingBackup = null; ui.close() }) {
-                    ui.perform { repository.restoreBackup(backup); ProgressDrafts.clear(appContext); ProjectDrafts.clear(); ui.pendingBackup = null; ui.projectId = null; ui.taskId = null; ui.close(); ui.message("备份已恢复。"); refresh++ }
+                    ui.perform { repository.restoreBackup(backup); ProgressDrafts.clear(appContext); ProjectDrafts.clear(); ui.pendingBackup = null; ui.projectId = null; ui.taskId = null; ui.taskStepId = null; ui.close(); ui.message("备份已恢复。"); refresh++ }
                 }
             }
             "delete-project", "delete-todo", "discard", "finish-early", "switch-project", "save-project-confirm", "link-task-confirm", "break-short", "break-long" -> {
@@ -355,12 +365,12 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                     ui.perform {
                         when (kind) {
                             "delete-project" -> { if (repository.state.value.timer?.projectId == targetId) repository.discardTimer(); repository.deleteProject(targetId); if (ui.projectId == targetId) ui.projectId = null; ui.screen = Screen.PROJECTS }
-                            "delete-todo" -> { repository.deleteTodo(targetId); if (ui.taskId == targetId) ui.taskId = null }
+                            "delete-todo" -> { repository.deleteTodo(targetId); if (ui.taskId == targetId) { ui.taskId = null; ui.taskStepId = null } }
                             "discard" -> repository.discardTimer()
                             "finish-early" -> sendTimer(TimerServiceCommands.FINISH_EARLY)
-                            "switch-project" -> { repository.discardTimer(); ui.projectId = targetId; ui.taskId = null; ui.screen = Screen.TIMER }
+                            "switch-project" -> { repository.discardTimer(); ui.projectId = targetId; ui.taskId = null; ui.taskStepId = null; ui.screen = Screen.TIMER }
                             "save-project-confirm" -> { val project = requireNotNull(ui.pendingProject); repository.discardTimer(); repository.saveProject(project); ProjectDrafts.remove(project.id); ui.pendingProject = null }
-                            "link-task-confirm" -> { repository.discardTimer(); ui.taskId = targetId.takeIf { it.isNotBlank() }; ui.projectId = currentProject?.id ?: state.projects.firstOrNull()?.id; ui.screen = Screen.TIMER }
+                            "link-task-confirm" -> { repository.discardTimer(); ui.taskId = targetId.takeIf { it.isNotBlank() }; ui.taskStepId = null; ui.projectId = currentProject?.id ?: state.projects.firstOrNull()?.id; ui.screen = Screen.TIMER }
                             "break-short", "break-long" -> { repository.discardTimer(); sendTimer(if (kind == "break-long") TimerServiceCommands.LONG_BREAK else TimerServiceCommands.SHORT_BREAK) }
                         }
                         ui.close()

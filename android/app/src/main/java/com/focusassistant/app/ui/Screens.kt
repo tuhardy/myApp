@@ -2,11 +2,13 @@ package com.focusassistant.app.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -90,6 +92,21 @@ private fun GroupHeading(group: TodoGroup) {
         )
         Text("${group.todos.size}", color = Muted, style = MaterialTheme.typography.bodySmall)
     }
+}
+
+/** 已放下的事不显示发酵状态，已完成的也不再发酵。 */
+private fun todoAgeLabel(todo: Todo, age: TodoAge): String? = when {
+    todo.archived -> "已放下"
+    todo.done -> null
+    else -> age.label
+}
+
+/** L：躺得越久越淡，像一杯放凉的茶。已完成与已放下不参与发酵。 */
+private fun todoAlpha(todo: Todo, age: TodoAge): Float = when {
+    todo.done || todo.archived -> 1f
+    age.stage == TodoStage.RESTING -> 0.6f
+    age.stage == TodoStage.STALE -> 0.35f
+    else -> 1f
 }
 
 /** 组标题已说明重要或分类时，卡片不重复同一个标签；重要组补回原分类。 */
@@ -396,40 +413,124 @@ internal fun TimerScreen(
 @Composable
 internal fun TodosScreen(
     state: AppState,
+    filter: TodoFilter,
+    today: LocalDate,
+    onFilter: (TodoFilter) -> Unit,
     onCreate: () -> Unit,
     onEdit: (Todo) -> Unit,
     onToggle: (Todo) -> Unit,
+    onToggleStep: (Todo, TodoStep) -> Unit,
+    onRenew: (Todo) -> Unit,
+    onArchive: (Todo) -> Unit,
+    onRestore: (Todo) -> Unit,
     onDelete: (Todo) -> Unit,
-    onFocus: (Todo) -> Unit
+    onFocus: (Todo, TodoStep?) -> Unit
 ) {
+    // 放下的事不参与「全部 / 进行中 / 已完成」的计数。
+    val live = state.todos.filterNot { it.archived }
+    val visible = when (filter) {
+        TodoFilter.ALL -> live
+        TodoFilter.PENDING -> live.filterNot { it.done }
+        TodoFilter.DONE -> live.filter { it.done }
+        TodoFilter.ARCHIVED -> state.todos.filter { it.archived }
+    }
     ScreenBody {
         PageTitle("待办") { IconButton(onClick = onCreate) { Icon(Icons.Outlined.Add, "添加待办") } }
-        Caption("${state.todos.count { !it.done }} 项待完成 · ${state.todos.count { it.done }} 项已完成")
-        if (state.todos.isEmpty()) EmptyMessage("把想做的事记下来", "待办是具体行动，学习项目是持续积累。可以把待办关联到一次专注。")
+        Caption("已完成 ${live.count { it.done }} / ${live.size} 件")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            TodoFilter.entries.forEach { value ->
+                FilterChip(selected = filter == value, onClick = { onFilter(value) },
+                    label = { Text(todoFilterName(value), fontSize = 11.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) },
+                    modifier = Modifier.weight(1f))
+            }
+        }
+        if (visible.isEmpty()) EmptyMessage(emptyTodoTitle(filter), emptyTodoDetail(filter))
         // 重要的事跨分类置顶，其余按分类分开查看；已完成的事沉到各组末尾。
-        remember(state.todos) { TodoGrouping.group(state.todos) }.forEach { group ->
+        remember(visible) { TodoGrouping.group(visible) }.forEach { group ->
             GroupHeading(group)
             group.todos.forEach { todo ->
-                Surface(color = SoftSurface, shape = RoundedCornerShape(14.dp)) {
-                    Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                        Row(verticalAlignment = Alignment.Top) {
-                            Checkbox(checked = todo.done, onCheckedChange = { onToggle(todo) })
-                            Column(Modifier.weight(1f).clickable { onEdit(todo) }.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(todo.title, textDecoration = if (todo.done) TextDecoration.LineThrough else TextDecoration.None, color = if (todo.done) Muted else MaterialTheme.colorScheme.onSurface)
-                                // 组标题已经说明了重要或分类，卡片上只补另一半信息。
-                                todoMeta(todo, group.key)?.let { Caption(it) }
-                            }
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                            if (!todo.done) TextButton(onClick = { onFocus(todo) }) { Text("去专注") }
-                            IconButton(onClick = { onEdit(todo) }) { Icon(Icons.Outlined.Edit, "编辑待办", tint = Muted) }
-                            IconButton(onClick = { onDelete(todo) }) { Icon(Icons.Outlined.DeleteOutline, "删除待办", tint = Muted) }
-                        }
-                    }
-                }
+                TodoCard(todo, group.key, today, onEdit, onToggle, onToggleStep, onRenew, onArchive, onRestore, onDelete, onFocus)
             }
         }
         OutlinedButton(onClick = onCreate, modifier = Modifier.fillMaxWidth()) { Text("添加待办") }
+        if (filter != TodoFilter.ARCHIVED) {
+            Surface(color = SoftSurface, shape = RoundedCornerShape(14.dp)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("躺久了会变淡", fontWeight = FontWeight.SemiBold)
+                    Text("一件事放得越久，卡片越浅。可以「续一天」让它回到眼前，也可以「放下」——那不是删除，只是承认。",
+                        color = Muted, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+}
+
+/** L 的发酵状态 + M 的小步小路，都在这张卡片上。 */
+@Composable
+private fun TodoCard(
+    todo: Todo,
+    groupKey: String,
+    today: LocalDate,
+    onEdit: (Todo) -> Unit,
+    onToggle: (Todo) -> Unit,
+    onToggleStep: (Todo, TodoStep) -> Unit,
+    onRenew: (Todo) -> Unit,
+    onArchive: (Todo) -> Unit,
+    onRestore: (Todo) -> Unit,
+    onDelete: (Todo) -> Unit,
+    onFocus: (Todo, TodoStep?) -> Unit
+) {
+    val age = TodoAging.age(todo, today)
+    val progress = TodoAging.progress(todo)
+    Surface(color = SoftSurface.copy(alpha = todoAlpha(todo, age)), shape = RoundedCornerShape(14.dp)) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.Top) {
+                Checkbox(checked = todo.done, onCheckedChange = { onToggle(todo) })
+                Column(Modifier.weight(1f).clickable { onEdit(todo) }.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(todo.title, textDecoration = if (todo.done) TextDecoration.LineThrough else TextDecoration.None, color = if (todo.done) Muted else MaterialTheme.colorScheme.onSurface)
+                    // 组标题已经说明了重要或分类，卡片上只补另一半信息，再跟上发酵状态。
+                    Caption(listOfNotNull(todoMeta(todo, groupKey), todoAgeLabel(todo, age)).joinToString(" · "))
+                }
+            }
+            if (progress.total > 0) StepPath(todo, progress) { step -> onToggleStep(todo, step) }
+            // 躺久了的事只给「续一天」和「放下」两个出口。
+            if (!todo.done && !todo.archived && age.stage != TodoStage.FRESH) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { onRenew(todo) }) { Text("续一天", fontSize = 12.sp) }
+                    TextButton(onClick = { onArchive(todo) }) { Text("放下", fontSize = 12.sp) }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                if (todo.archived) TextButton(onClick = { onRestore(todo) }) { Text("找回") }
+                else if (!todo.done) {
+                    val step = TodoAging.nextStep(todo)
+                    TextButton(onClick = { onFocus(todo, step) }) { Text(if (step == null) "去专注" else "从这一步开始") }
+                }
+                IconButton(onClick = { onEdit(todo) }) { Icon(Icons.Outlined.Edit, "编辑待办", tint = Muted) }
+                IconButton(onClick = { onDelete(todo) }) { Icon(Icons.Outlined.DeleteOutline, "删除待办", tint = Muted) }
+            }
+        }
+    }
+}
+
+/** M：一条横向的小路，走过的点是实心的。点一个点就把那一步标为走过或退回。 */
+@Composable
+private fun StepPath(todo: Todo, progress: TodoProgress, onToggleStep: (TodoStep) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            todo.steps.forEachIndexed { index, step ->
+                if (index > 0) {
+                    HorizontalDivider(Modifier.width(18.dp), thickness = 2.dp, color = if (step.done) Accent else Muted.copy(alpha = 0.3f))
+                }
+                // 圆点本体保留可点面积，外观用小圆画，不撑成大色块。
+                Box(Modifier.size(28.dp).clickable { onToggleStep(step) }, contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(12.dp).background(if (step.done) Accent else Color.Transparent, CircleShape)
+                        .border(2.dp, if (step.done) Accent else Muted.copy(alpha = 0.5f), CircleShape))
+                }
+            }
+        }
+        val next = TodoAging.nextStep(todo)
+        Caption(if (next == null) "${progress.total} 步都走完了" else "下一步 · ${next.title}")
     }
 }
 
@@ -526,6 +627,26 @@ internal fun StatisticsScreen(
         if (selected.size > recordLimit) OutlinedButton(onClick = onMoreRecords, modifier = Modifier.fillMaxWidth()) { Text("加载更多（已显示 ${recordLimit.coerceAtLeast(0)} / ${selected.size}）") }
         if (selected.isNotEmpty()) TextButton(onClick = onExport, modifier = Modifier.fillMaxWidth()) { Text("导出当前周期全部记录") }
     }
+}
+
+private fun todoFilterName(filter: TodoFilter): String = when (filter) {
+    TodoFilter.ALL -> "全部"
+    TodoFilter.PENDING -> "进行中"
+    TodoFilter.DONE -> "已完成"
+    TodoFilter.ARCHIVED -> "放下的"
+}
+
+private fun emptyTodoTitle(filter: TodoFilter): String = when (filter) {
+    TodoFilter.DONE -> "还没有已完成的事"
+    TodoFilter.ARCHIVED -> "还没有放下的事"
+    else -> "把想做的事记下来"
+}
+
+private fun emptyTodoDetail(filter: TodoFilter): String = when (filter) {
+    TodoFilter.DONE -> "慢慢来，走一步算一步。"
+    TodoFilter.ARCHIVED -> "放下不是删除，是承认它这阵子不重要。"
+    TodoFilter.PENDING -> "这里空空的，给今天留一点自由。"
+    TodoFilter.ALL -> "待办是具体行动，学习项目是持续积累。可以把待办关联到一次专注。"
 }
 
 private fun periodName(period: Period): String = when (period) {
