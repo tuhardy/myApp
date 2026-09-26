@@ -77,6 +77,29 @@ private fun EmptyMessage(title: String, detail: String) {
     }
 }
 
+/** 待办分组小标题：重要组用强调色，其余用中性灰，右侧跟本组件数。 */
+@Composable
+private fun GroupHeading(group: TodoGroup) {
+    val important = group.key == TodoGrouping.IMPORTANT_KEY
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            group.label,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (important) Accent else MaterialTheme.colorScheme.onSurface
+        )
+        Text("${group.todos.size}", color = Muted, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+/** 组标题已说明重要或分类时，卡片不重复同一个标签；重要组补回原分类。 */
+private fun todoMeta(todo: Todo, groupKey: String): String? = when {
+    groupKey == TodoGrouping.IMPORTANT_KEY -> todo.category.ifBlank { null }
+    groupKey == TodoGrouping.categoryKey(todo.category) -> if (todo.important) "重要" else null
+    // 兜底组里分类与组名不符，两项信息都要显示。
+    else -> listOfNotNull(todo.category.ifBlank { null }, "重要".takeIf { todo.important }).joinToString(" · ").ifBlank { null }
+}
+
 /** 按分类给项目一个稳定的图标与配色，纯展示，不参与任何统计。 */
 private fun projectGlyph(project: Project): Pair<androidx.compose.ui.graphics.vector.ImageVector, Pair<Color, Color>> {
     val palette = listOf(
@@ -383,25 +406,24 @@ internal fun TodosScreen(
         PageTitle("待办") { IconButton(onClick = onCreate) { Icon(Icons.Outlined.Add, "添加待办") } }
         Caption("${state.todos.count { !it.done }} 项待完成 · ${state.todos.count { it.done }} 项已完成")
         if (state.todos.isEmpty()) EmptyMessage("把想做的事记下来", "待办是具体行动，学习项目是持续积累。可以把待办关联到一次专注。")
-        listOf(false, true).forEach { done ->
-            val todos = state.todos.filter { it.done == done }.sortedByDescending { it.important }
-            if (todos.isNotEmpty()) {
-                SectionTitle(if (done) "已完成" else "待完成")
-                todos.forEach { todo ->
-                    Surface(color = SoftSurface, shape = RoundedCornerShape(14.dp)) {
-                        Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.Top) {
-                                Checkbox(checked = todo.done, onCheckedChange = { onToggle(todo) })
-                                Column(Modifier.weight(1f).clickable { onEdit(todo) }.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Text(todo.title, textDecoration = if (done) TextDecoration.LineThrough else TextDecoration.None, color = if (done) Muted else MaterialTheme.colorScheme.onSurface)
-                                    Caption("${todo.category}${if (todo.important) " · 重要" else ""}")
-                                }
+        // 重要的事跨分类置顶，其余按分类分开查看；已完成的事沉到各组末尾。
+        remember(state.todos) { TodoGrouping.group(state.todos) }.forEach { group ->
+            GroupHeading(group)
+            group.todos.forEach { todo ->
+                Surface(color = SoftSurface, shape = RoundedCornerShape(14.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.Top) {
+                            Checkbox(checked = todo.done, onCheckedChange = { onToggle(todo) })
+                            Column(Modifier.weight(1f).clickable { onEdit(todo) }.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(todo.title, textDecoration = if (todo.done) TextDecoration.LineThrough else TextDecoration.None, color = if (todo.done) Muted else MaterialTheme.colorScheme.onSurface)
+                                // 组标题已经说明了重要或分类，卡片上只补另一半信息。
+                                todoMeta(todo, group.key)?.let { Caption(it) }
                             }
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                                if (!done) TextButton(onClick = { onFocus(todo) }) { Text("去专注") }
-                                IconButton(onClick = { onEdit(todo) }) { Icon(Icons.Outlined.Edit, "编辑待办", tint = Muted) }
-                                IconButton(onClick = { onDelete(todo) }) { Icon(Icons.Outlined.DeleteOutline, "删除待办", tint = Muted) }
-                            }
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                            if (!todo.done) TextButton(onClick = { onFocus(todo) }) { Text("去专注") }
+                            IconButton(onClick = { onEdit(todo) }) { Icon(Icons.Outlined.Edit, "编辑待办", tint = Muted) }
+                            IconButton(onClick = { onDelete(todo) }) { Icon(Icons.Outlined.DeleteOutline, "删除待办", tint = Muted) }
                         }
                     }
                 }

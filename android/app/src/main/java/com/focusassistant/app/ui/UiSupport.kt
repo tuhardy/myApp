@@ -51,7 +51,8 @@ internal object UiLimits {
     const val MAX_NOTE = 2000
     const val MAX_PERCENT = 100
     const val RECORD_PAGE = 20
-    val CATEGORIES = listOf("个人成长", "工作", "生活")
+    /** 与待办分组共用一份分类顺序，避免编辑器与分组各自漂移。 */
+    val CATEGORIES = TodoGrouping.CATEGORIES
     val PRESETS = listOf(15, 25, 45, 60)
     const val MIN_PRESET = 25
 }
