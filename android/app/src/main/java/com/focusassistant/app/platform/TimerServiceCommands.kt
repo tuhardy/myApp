@@ -14,6 +14,8 @@ object TimerServiceCommands {
     const val PAUSE = "com.focusassistant.app.timer.PAUSE"
     const val RESUME = "com.focusassistant.app.timer.RESUME"
     const val FINISH = "com.focusassistant.app.timer.FINISH"
+    /** 倒计时未到零、由用户确认的提前结束。 */
+    const val FINISH_EARLY = "com.focusassistant.app.timer.FINISH_EARLY"
     const val DISCARD = "com.focusassistant.app.timer.DISCARD"
     const val SHORT_BREAK = "com.focusassistant.app.timer.SHORT_BREAK"
     const val LONG_BREAK = "com.focusassistant.app.timer.LONG_BREAK"
@@ -22,7 +24,7 @@ object TimerServiceCommands {
     internal const val TASK_ID = "taskId"
     private val mutableErrors = MutableSharedFlow<String>(extraBufferCapacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val errors: SharedFlow<String> = mutableErrors.asSharedFlow()
-    private val actions = setOf(START, PAUSE, RESUME, FINISH, DISCARD, SHORT_BREAK, LONG_BREAK, RESTORE)
+    private val actions = setOf(START, PAUSE, RESUME, FINISH, FINISH_EARLY, DISCARD, SHORT_BREAK, LONG_BREAK, RESTORE)
 
     fun send(context: Context, action: String, projectId: String? = null, taskId: String? = null): Boolean {
         if (action !in actions) {

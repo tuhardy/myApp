@@ -150,6 +150,25 @@ class TimerEngineTest {
         Validation.target(TimerMode.COUNTUP, null)
         Validation.target(TimerMode.COUNTDOWN, 23 * 60 + 59)
     }
+    @Test fun countdownFinishedEarlyRecordsActualSeconds() {
+        // 用户确认提前结束：按已专注时长保存，不补足到目标。
+        val timer = start(TimerMode.COUNTDOWN)
+        val session = TimerEngine.finish(timer, 32_400, early = true)!!
+        assertEquals(22L, session.durationSeconds)
+        assertEquals(1, session.targetMinutes)
+        assertEquals(22_000L, session.segments.sumOf { it.endedAt - it.startedAt })
+        // endedAt 是实际停止时刻，有效时长按整秒截断。
+        assertEquals(122_400L, session.endedAt)
+    }
+    @Test fun countdownFinishedEarlyExcludesPausedTime() {
+        val paused = TimerEngine.pause(start(TimerMode.COUNTDOWN), 20_000)
+        val resumed = TimerEngine.resume(paused, 999_000, 500_000, 7)
+        val session = TimerEngine.finish(resumed, 505_000, early = true)!!
+        assertEquals(15L, session.durationSeconds)
+    }
+    @Test(expected = IllegalArgumentException::class) fun earlyFinishStillNeedsOneSecond() {
+        TimerEngine.finish(start(TimerMode.COUNTDOWN), 10_999, early = true)
+    }
     @Test(expected = IllegalArgumentException::class) fun blankProgressRejected() { Validation.progress("  ", null) }
     @Test(expected = IllegalArgumentException::class) fun invalidPercentRejected() { Validation.progress("记录", 101) }
 }

@@ -240,10 +240,12 @@ internal fun TimerScreen(
     onSettings: () -> Unit,
     onLinkTask: () -> Unit,
     onMode: (TimerMode) -> Unit,
+    onDuration: () -> Unit,
     onStart: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onFinish: () -> Unit,
+    onFinishEarly: () -> Unit,
     onDiscard: () -> Unit,
     onShortBreak: () -> Unit,
     onLongBreak: () -> Unit
@@ -269,12 +271,17 @@ internal fun TimerScreen(
                 Text(if (resting) "休息一下，再继续" else timer?.projectTitle ?: project!!.title,
                     fontSize = 23.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
             }
-            // 计时中收起模式切换，避免分心；只有待开始时可调整。
+            // 计时中收起模式切换与时长入口，避免分心；只有待开始时可调整。
             if (!resting && project != null && timer == null) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                     TimerMode.entries.forEach { value ->
                         FilterChip(selected = mode == value, onClick = { if (mode != value) onMode(value) }, label = { Text(modeName(value)) }, modifier = Modifier.padding(horizontal = 4.dp))
                     }
+                }
+                // 直接打开时长设置，不必先进入完整的项目设置。
+                OutlinedButton(onClick = onDuration, modifier = Modifier.fillMaxWidth()) {
+                    Text(targetText(targetMinutes), modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
+                    Text(if (targetMinutes == null) "设置" else "调整", color = Accent, fontSize = 13.sp)
                 }
             }
             Box(Modifier.fillMaxWidth().padding(vertical = 14.dp), contentAlignment = Alignment.Center) {
@@ -334,13 +341,16 @@ internal fun TimerScreen(
                     Spacer(Modifier.width(8.dp))
                     Text(if (timer.status == TimerStatus.PAUSED) "继续计时" else "暂停")
                 }
-                if (resting || mode == TimerMode.COUNTUP) {
-                    OutlinedButton(onClick = onFinish, enabled = resting || elapsedMillis >= TimerEngine.MIN_SESSION_MS, modifier = Modifier.fillMaxWidth()) {
+                // 倒计时未到零也可以提前结束，但要确认；已到零由计时循环自动保存。
+                val early = !resting && mode == TimerMode.COUNTDOWN && timer.targetReached(nowElapsed) != true
+                if (resting || mode == TimerMode.COUNTUP || early) {
+                    OutlinedButton(onClick = if (early) onFinishEarly else onFinish,
+                        enabled = resting || elapsedMillis >= TimerEngine.MIN_SESSION_MS, modifier = Modifier.fillMaxWidth()) {
                         Text(if (resting) "结束休息" else "结束并保存专注")
                     }
                 }
                 TextButton(onClick = onDiscard, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(if (resting) "放弃本次休息" else "放弃本次专注", color = Muted) }
-                if (!resting && mode == TimerMode.COUNTDOWN) Caption("倒计时到零自动保存；提前放弃不会生成专注记录。")
+                if (!resting && mode == TimerMode.COUNTDOWN) Caption("倒计时到零自动保存；提前结束会按已专注时长保存，放弃则不生成记录。")
             }
             if (!resting) {
                 OutlinedButton(onClick = onLinkTask, modifier = Modifier.fillMaxWidth()) {

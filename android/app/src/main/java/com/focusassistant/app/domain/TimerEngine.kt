@@ -60,11 +60,12 @@ object TimerEngine {
         return TimerTick(if (elapsed - timer.anchorElapsed >= CHECKPOINT_INTERVAL_MS) checkpoint(timer, elapsed) else timer)
     }
 
-    fun finish(timer: ActiveTimer, elapsed: Long, wall: Long = timer.anchorWall, bootCount: Int = timer.bootCount): FocusSession? {
+    /** [early] 为用户明确确认的提前结束，倒计时未到零也按实际时长保存；自动结束仍要求到零。 */
+    fun finish(timer: ActiveTimer, elapsed: Long, wall: Long = timer.anchorWall, bootCount: Int = timer.bootCount, early: Boolean = false): FocusSession? {
         if (timer.phase != TimerPhase.FOCUS) return null
         val stopped = checkpoint(timer, elapsed)
         val limit = timer.targetMs
-        if (timer.timerMode == TimerMode.COUNTDOWN && limit != null && stopped.accumulatedMs < limit) {
+        if (timer.timerMode == TimerMode.COUNTDOWN && limit != null && stopped.accumulatedMs < limit && !early) {
             throw IllegalArgumentException("倒计时未完成")
         }
         require(stopped.accumulatedMs >= MIN_SESSION_MS) { "至少专注 1 秒后才能记录" }

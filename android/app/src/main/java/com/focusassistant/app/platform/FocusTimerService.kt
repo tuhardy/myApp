@@ -50,6 +50,7 @@ class FocusTimerService : Service() {
                         TimerServiceCommands.PAUSE -> { repository.pauseTimer(); null }
                         TimerServiceCommands.RESUME -> { repository.resumeTimer(); null }
                         TimerServiceCommands.FINISH -> repository.finishTimer()
+                        TimerServiceCommands.FINISH_EARLY -> repository.finishTimer(early = true)
                         TimerServiceCommands.DISCARD -> { repository.discardTimer(); null }
                         TimerServiceCommands.SHORT_BREAK -> { repository.startBreak(false); null }
                         TimerServiceCommands.LONG_BREAK -> { repository.startBreak(true); null }

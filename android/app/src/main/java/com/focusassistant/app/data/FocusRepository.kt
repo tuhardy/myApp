@@ -140,12 +140,13 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
             if (it.status == TimerStatus.PAUSED) TimerEngine.resume(it, System.currentTimeMillis(), SystemClock.elapsedRealtime(), bootCount) else it
         }) }
     }
-    suspend fun finishTimer(): TimerEvent? {
+    /** [early] 为用户确认的提前结束：倒计时未到零也按实际时长保存。 */
+    suspend fun finishTimer(early: Boolean = false): TimerEvent? {
         var event: TimerEvent? = null
         mutate { current ->
             val timer = current.timer
             if (timer == null) current else {
-                val completed = complete(current, timer, SystemClock.elapsedRealtime())
+                val completed = complete(current, timer, SystemClock.elapsedRealtime(), early)
                 event = completed.second
                 completed.first
             }
@@ -178,8 +179,8 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         }
     }
 
-    private fun complete(current: AppState, timer: ActiveTimer, elapsed: Long): Pair<AppState, TimerEvent> {
-        val session = TimerEngine.finish(timer, elapsed, System.currentTimeMillis(), bootCount)
+    private fun complete(current: AppState, timer: ActiveTimer, elapsed: Long, early: Boolean = false): Pair<AppState, TimerEvent> {
+        val session = TimerEngine.finish(timer, elapsed, System.currentTimeMillis(), bootCount, early)
         val sessions = if (session != null && current.sessions.none { it.id == session.id }) current.sessions + session else current.sessions
         return current.copy(sessions = sessions, timer = null) to TimerEvent(TimerEventKind.COMPLETED, timer.projectTitle, session?.id)
     }

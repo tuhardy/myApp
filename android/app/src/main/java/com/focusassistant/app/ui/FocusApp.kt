@@ -244,12 +244,10 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                             ui.screen = Screen.TIMER
                         })
                     Screen.TIMER -> TimerScreen(currentProject, state.timer, selectedTask, nowElapsed, { ui.screen = Screen.PROJECTS }, { ui.screen = Screen.STATISTICS }, { currentProject?.let(::openProjectEditor) }, { ui.open("link-task") }, { mode ->
-                        currentProject?.let { project ->
-                            val updated = project.copy(timerMode = mode)
-                            if (state.timer != null) { ui.pendingProject = updated; ui.open("save-project-confirm", project.id) }
-                            else ui.perform { repository.saveProject(updated) }
-                        }
-                    }, { if (currentProject != null) sendTimer(TimerServiceCommands.START) }, { sendTimer(TimerServiceCommands.PAUSE) }, { sendTimer(TimerServiceCommands.RESUME) }, { sendTimer(TimerServiceCommands.FINISH) }, { ui.open("discard") }, { startBreak(false) }, { startBreak(true) })
+                        // 只有未开始计时才会显示模式切换，所以直接写回项目。
+                        currentProject?.let { project -> ui.perform { repository.saveProject(project.copy(timerMode = mode)) } }
+                    }, { currentProject?.let { ui.open("project-duration", it.id) } },
+                        { if (currentProject != null) sendTimer(TimerServiceCommands.START) }, { sendTimer(TimerServiceCommands.PAUSE) }, { sendTimer(TimerServiceCommands.RESUME) }, { sendTimer(TimerServiceCommands.FINISH) }, { ui.open("finish-early") }, { ui.open("discard") }, { startBreak(false) }, { startBreak(true) })
                     Screen.TODOS -> TodosScreen(state, { ui.open("todo") }, { ui.open("todo", it.id) }, { todo -> ui.perform { repository.saveTodo(todo.copy(done = !todo.done)) } }, { ui.open("delete-todo", it.id) }, { todo ->
                         val project = currentProject ?: state.projects.firstOrNull()
                         if (project == null) { ui.message("请先创建一个学习项目，再关联待办开始专注。"); ui.screen = Screen.PROJECTS }
@@ -281,9 +279,18 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
         val dialogProject = ui.pendingProject ?: state.projects.find { it.id == ui.dialogId }
         val session = state.sessions.find { it.id == ui.dialogId }
         when (ui.dialog) {
-            "project" -> ProjectEditorDialog(dialogProject, ui.busy, { ui.close() }) { project ->
+            "project", "project-duration" -> ProjectEditorDialog(dialogProject, ui.busy, durationOnly = ui.dialog == "project-duration", onDismiss = { ui.close() }) { project ->
                 if (state.timer?.projectId == project.id) { ui.pendingProject = project; ui.open("save-project-confirm", project.id) }
-                else ui.perform { repository.saveProject(project); ProjectDrafts.remove(ui.dialogId.takeIf { it.isNotBlank() }); ui.close(); ui.screen = Screen.PROJECTS }
+                else {
+                    // 只调整时长时留在计时页，不要把用户弹回首页。
+                    val stay = ui.dialog == "project-duration"
+                    ui.perform {
+                        repository.saveProject(project)
+                        ProjectDrafts.remove(ui.dialogId.takeIf { it.isNotBlank() })
+                        ui.close()
+                        if (!stay) ui.screen = Screen.PROJECTS
+                    }
+                }
             }
             "todo" -> TodoEditorDialog(state.todos.find { it.id == ui.dialogId }, ui.busy, { ui.close() }) { todo -> ui.perform { repository.saveTodo(todo); ui.close() } }
             "progress-auto", "progress-edit" -> if (session != null) ProgressEditorDialog(context, session,
@@ -328,15 +335,21 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                     ui.perform { repository.restoreBackup(backup); ProgressDrafts.clear(appContext); ProjectDrafts.clear(); ui.pendingBackup = null; ui.projectId = null; ui.taskId = null; ui.close(); ui.message("备份已恢复。"); refresh++ }
                 }
             }
-            "delete-project", "delete-todo", "discard", "switch-project", "save-project-confirm", "link-task-confirm", "break-short", "break-long" -> {
+            "delete-project", "delete-todo", "discard", "finish-early", "switch-project", "save-project-confirm", "link-task-confirm", "break-short", "break-long" -> {
                 val kind = ui.dialog
                 val targetId = ui.dialogId
                 val message = when (kind) {
                     "delete-project" -> "删除项目会保留专注记录和进度历史。如果正在为此项目计时，当前未保存的计时会被放弃。"
                     "delete-todo" -> "删除待办不会修改已完成的专注记录。"
+                    "finish-early" -> "倒计时还没到零。提前结束会按已专注的实际时长保存为记录，暂停时间不计入。"
                     else -> "当前未完成的计时会被放弃，不计入统计。如需保留正计时，请先取消，再结束并记录。"
                 }
-                ConfirmDialog(if (kind.startsWith("delete")) "确认删除？" else "放弃当前计时？", message, ui.busy, {
+                val heading = when {
+                    kind.startsWith("delete") -> "确认删除？"
+                    kind == "finish-early" -> "提前结束并保存？"
+                    else -> "放弃当前计时？"
+                }
+                ConfirmDialog(heading, message, ui.busy, {
                     if (kind == "save-project-confirm") ui.open("project", targetId) else ui.close()
                 }) {
                     ui.perform {
@@ -344,6 +357,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                             "delete-project" -> { if (repository.state.value.timer?.projectId == targetId) repository.discardTimer(); repository.deleteProject(targetId); if (ui.projectId == targetId) ui.projectId = null; ui.screen = Screen.PROJECTS }
                             "delete-todo" -> { repository.deleteTodo(targetId); if (ui.taskId == targetId) ui.taskId = null }
                             "discard" -> repository.discardTimer()
+                            "finish-early" -> sendTimer(TimerServiceCommands.FINISH_EARLY)
                             "switch-project" -> { repository.discardTimer(); ui.projectId = targetId; ui.taskId = null; ui.screen = Screen.TIMER }
                             "save-project-confirm" -> { val project = requireNotNull(ui.pendingProject); repository.discardTimer(); repository.saveProject(project); ProjectDrafts.remove(project.id); ui.pendingProject = null }
                             "link-task-confirm" -> { repository.discardTimer(); ui.taskId = targetId.takeIf { it.isNotBlank() }; ui.projectId = currentProject?.id ?: state.projects.firstOrNull()?.id; ui.screen = Screen.TIMER }

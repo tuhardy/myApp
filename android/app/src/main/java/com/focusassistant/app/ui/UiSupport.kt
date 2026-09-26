@@ -282,7 +282,14 @@ private fun initialDraft(project: Project?): ProjectDraft {
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-internal fun ProjectEditorDialog(project: Project?, busy: Boolean, onDismiss: () -> Unit, onSave: (Project) -> Unit) {
+internal fun ProjectEditorDialog(
+    project: Project?,
+    busy: Boolean,
+    /** 只调整时长：从计时页「调整」进入时隐藏名称、分类与模式，避免多余步骤。 */
+    durationOnly: Boolean = false,
+    onDismiss: () -> Unit,
+    onSave: (Project) -> Unit
+) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var draft by remember(project?.id) { mutableStateOf(ProjectDrafts.get(project?.id) ?: initialDraft(project)) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -302,19 +309,25 @@ internal fun ProjectEditorDialog(project: Project?, busy: Boolean, onDismiss: ()
             Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Text(if (project == null) "新建学习项目" else "项目设置", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
-            OutlinedTextField(
-                value = draft.title, onValueChange = { if (it.length <= UiLimits.MAX_TITLE) edit { d -> d.copy(title = it) } },
-                label = { Text("项目名称") }, singleLine = true, modifier = Modifier.fillMaxWidth()
+            Text(
+                when { durationOnly -> "调整时长"; project == null -> "新建学习项目"; else -> "项目设置" },
+                fontSize = 19.sp, fontWeight = FontWeight.SemiBold
             )
-            Text("分类", color = Muted, fontSize = 13.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                UiLimits.CATEGORIES.forEach { value ->
-                    FilterChip(selected = draft.category == value, onClick = { edit { d -> d.copy(category = value) } }, label = { Text(value, fontSize = 12.sp) })
+            if (durationOnly) Text(draft.title, color = Muted, fontSize = 13.sp)
+            else {
+                OutlinedTextField(
+                    value = draft.title, onValueChange = { if (it.length <= UiLimits.MAX_TITLE) edit { d -> d.copy(title = it) } },
+                    label = { Text("项目名称") }, singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                Text("分类", color = Muted, fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    UiLimits.CATEGORIES.forEach { value ->
+                        FilterChip(selected = draft.category == value, onClick = { edit { d -> d.copy(category = value) } }, label = { Text(value, fontSize = 12.sp) })
+                    }
                 }
+                // 模式切换保留各模式的时长设置。
+                ModeSelector(draft.mode) { value -> edit { d -> d.copy(mode = value) } }
             }
-            // 模式切换保留各模式的时长设置。
-            ModeSelector(draft.mode) { value -> edit { d -> d.copy(mode = value) } }
             if (unlimited) {
                 Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("不限时", fontSize = 30.sp, fontWeight = FontWeight.Light)
@@ -360,7 +373,7 @@ internal fun ProjectEditorDialog(project: Project?, busy: Boolean, onDismiss: ()
                             .onFailure { error = it.message }
                             .onSuccess { onSave(Project(project?.id ?: UUID.randomUUID().toString(), draft.title.trim(), draft.category, draft.mode, it)) }
                     }
-                ) { Text(if (busy) "保存中" else "保存项目") }
+                ) { Text(if (busy) "保存中" else if (durationOnly) "保存时长" else "保存项目") }
             }
         }
     }
