@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <title>专注助手 · 交互原型</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="model.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-focus" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 2h6M12 2v3M19 5l2 2"/></symbol>
+    <symbol id="i-tasks" viewBox="0 0 24 24"><rect x="5" y="4" width="15" height="17" rx="3"/><path d="M9 2v4M15 2v4M9 12l2 2 5-5M9 18h7"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 4v16h17M9 15v-4M14 15V6M19 15V9"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7Z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 5v14M16 5v14"/></symbol>
+    <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M20 3C8 2 2 8 5 15s16 7 15-12ZM4 21 15 10"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 2 8 4v6c0 5-8 10-8 10S4 17 4 12V6ZM8 12l3 3 5-6"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m7 6-6 6 6 6M17 6l6 6-6 6M14 3l-4 18"/></symbol>
+    <symbol id="i-backup" viewBox="0 0 24 24"><path d="M5 16H4a3 3 0 0 1-1-6 7 7 0 0 1 13-4 5 5 0 0 1 3 10h-1M12 11v11m-4-4 4 4 4-4"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4 10a8 8 0 1 1 1 8M4 4v6h6"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="16" cy="17" r="3"/></symbol>
+  </svg>
+  <main class="workspace">
+    <aside class="presentation">
+      <a class="brand" href="#focus"><span class="brand-icon"><svg class="icon"><use href="#i-leaf"/></svg></span>专注助手<span class="brand-en">FOCUS / LIFE</span></a>
+      <div class="presentation-main">
+        <span class="eyebrow">YOUR TIME, INTENTIONALLY.</span>
+        <h1>把时间，<br>留给<span>重要的事。</span></h1>
+        <p class="lead">少一点分心，多一点从容。<br>让专注、计划和数字生活，在这里自然相遇。</p>
+        <div class="feature-map">
+          <button data-page="focus" class="feature-link active"><span>01</span><div><strong>专注当下</strong><small>一段时间，只做一件事</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
+          <button data-page="tasks" class="feature-link"><span>02</span><div><strong>有序行动</strong><small>让每个小目标，都有着落</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
+          <button data-page="usage" class="feature-link"><span>03</span><div><strong>看见时间</strong><small>了解习惯，找回自己的节奏</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
+          <button data-page="profile" class="feature-link"><span>04</span><div><strong>由你定义</strong><small>本地数据与未来的自动化扩展</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
+        </div>
+      </div>
+      <footer class="presentation-footer"><span class="status-dot"></span> Android 界面提案 · V0.4 <span>本地优先 / 轻量生活</span></footer>
+    </aside>
+    <section class="device-area" aria-label="手机交互原型">
+      <div class="preview-label"><span>LIVE PREVIEW</span><span>可交互界面原型</span></div>
+      <div class="phone">
+        <div class="status-bar" aria-hidden="true"><span>9:41</span><div class="camera"></div><span class="system-status">▂▄▆ <span class="battery"></span></span></div>
+        <div class="prototype-banner"><span class="status-dot"></span>原型演示 · 非真实设备数据</div>
+        <div class="phone-content" id="phone-content">
+          <section class="page" id="page-focus" aria-labelledby="focus-heading">
+            <header class="page-header"><div><p class="overline">每次开始，都接着上次的进度</p><h2 id="focus-heading">我的学习项目<span class="heading-dot">.</span></h2></div><button class="icon-button" id="open-statistics" aria-label="查看专注统计"><svg class="icon"><use href="#i-chart"/></svg></button></header>
+            <button class="resume-session" id="resume-session" hidden><svg class="icon"><use href="#i-focus"/></svg><span class="resume-session-copy"><strong id="resume-session-title"></strong><small id="resume-session-caption"></small></span><svg class="icon arrow"><use href="#i-arrow"/></svg></button>
+            <div class="project-home-toolbar"><h3>持续推进的小目标</h3><button class="text-button" id="add-focus-item"><svg class="icon"><use href="#i-plus"/></svg>新建项目</button></div>
+            <p class="data-note">点击项目进入计时，右侧箭头展开学习进度。<br>含示例记录 · 当前原型刷新后重置</p>
+            <div class="project-list" id="project-list" role="list" aria-label="学习项目列表"></div>
+            <div class="section-heading"><h3>今天的小积累</h3><button class="text-button" id="statistics-detail">统计与导出 <svg class="icon"><use href="#i-arrow"/></svg></button></div><p class="data-note">含示例与本次完成记录 · 刷新重置</p>
+            <div class="stat-grid"><div class="stat-card"><span>专注时长</span><div><strong id="focus-minutes">75</strong><small>分钟</small></div><span class="stat-foot">每一分钟都算数</span></div><div class="stat-card"><span>完成专注</span><div><strong id="focus-sessions">3</strong><small>次</small></div><div class="session-dots" id="session-dots" aria-hidden="true"><i></i><i></i><i></i><i class="empty"></i></div></div></div>
+          </section>
+          <section class="page" id="page-timer" aria-labelledby="timer-heading" hidden>
+            <header class="page-header timer-page-header"><button class="icon-button back-button" id="timer-back" aria-label="返回学习项目"><svg class="icon"><use href="#i-arrow"/></svg></button><h2 class="timer-page-title" id="timer-heading">专注计时</h2><div class="header-actions"><button class="icon-button" id="timer-statistics" aria-label="查看本次专注统计"><svg class="icon"><use href="#i-chart"/></svg></button><button class="icon-button" id="timer-settings" aria-label="编辑当前专注项"><svg class="icon"><use href="#i-settings"/></svg></button></div></header>
+            <button class="focus-item-selector" id="select-focus-item" aria-label="选择或管理专注项"><span class="focus-item-details"><strong id="focus-item-name">阅读</strong><small class="focus-item-mode" id="focus-item-description">倒计时 · 25 分钟</small></span><svg class="icon arrow"><use href="#i-arrow"/></svg></button>
+            <div class="segmented timing-mode-tabs" aria-label="专注计时方式"><button class="selected" data-timing-mode="countdown" aria-pressed="true">倒计时</button><button data-timing-mode="countup" aria-pressed="false">正计时</button></div>
+            <div class="timer-area"><svg class="timer-ring" viewBox="0 0 280 280" aria-hidden="true"><circle class="ring-track" cx="140" cy="140" r="122"/><circle class="ring-progress" id="ring-progress" cx="140" cy="140" r="122"/></svg><div class="timer-content"><div class="timer-tag"><span class="status-dot"></span><span id="timer-phase">准备好进入心流</span></div><div class="timer-time" id="timer-time" role="timer" aria-label="剩余时间">25:00</div><span class="timer-caption" id="timer-caption">放下杂念，做一件小事</span></div><span class="ring-leaf"><svg class="icon"><use href="#i-leaf"/></svg></span></div>
+            <button class="linked-task" id="link-task"><span class="mini-icon"><svg class="icon"><use href="#i-tasks"/></svg></span><div><small>关联待办（可选）</small><strong id="linked-task-name">阅读《原子习惯》</strong></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button>
+            <div class="timer-actions"><button class="primary-button" id="timer-toggle"><svg class="icon"><use id="timer-toggle-icon" href="#i-play"/></svg><span id="timer-toggle-label">开始专注</span></button><button class="secondary-button timer-finish" id="timer-finish" hidden>结束并记录</button><button class="reset-button" id="timer-reset" aria-label="重置当前计时"><svg class="icon"><use href="#i-reset"/></svg></button></div>
+            <p class="focus-config-summary" id="focus-config-summary">倒计时 · 25 分钟，到时完成</p>
+            <div class="rest-actions" aria-label="休息切换"><button class="text-button" data-mode="focus" aria-pressed="true">回到专注</button><button class="text-button" data-mode="short" aria-pressed="false">短休息</button><button class="text-button" data-mode="long" aria-pressed="false">长休息</button></div>
+            <div class="quiet-note"><svg class="icon"><use href="#i-leaf"/></svg><span>结束后记录一步进展，下次更容易开始。</span></div>
+          </section>
+          <section class="page" id="page-statistics" aria-labelledby="statistics-heading" hidden>
+            <header class="page-header statistics-header"><button class="icon-button back-button" id="statistics-back" aria-label="返回学习项目"><svg class="icon"><use href="#i-arrow"/></svg></button><div><p class="overline">每一份投入，都有迹可循</p><h2 id="statistics-heading" tabindex="-1">专注统计<span class="heading-dot">.</span></h2></div><button class="icon-button" id="export-statistics" aria-label="导出专注统计"><svg class="icon"><use href="#i-backup"/></svg></button></header>
+            <label class="statistics-source">数据来源<select id="statistics-source"><option value="all">示例 + 本次计时</option><option value="session">仅本次计时</option></select></label>
+            <section class="alltime-overview" aria-label="全部专注总览"><div class="alltime-total"><div class="alltime-heading"><h3>累计总时长</h3><button class="alltime-help" id="alltime-help" type="button" aria-label="累计统计说明" aria-haspopup="dialog" aria-controls="modal" title="查看累计统计的范围与计算方式">?</button></div><strong id="alltime-duration">0 分钟</strong></div><div class="alltime-averages"><div><span>自然日均 / 分钟</span><strong id="alltime-calendar-average">0</strong></div><div><span>活跃日均 / 分钟</span><strong id="alltime-active-average">0</strong></div></div></section>
+            <div class="section-heading statistics-period-heading"><h3>周期统计</h3><small>按下方日期筛选</small></div>
+            <div class="segmented" aria-label="统计周期"><button data-stat-period="day" class="selected" aria-pressed="true">日</button><button data-stat-period="week" aria-pressed="false">周</button><button data-stat-period="month" aria-pressed="false">月</button><button data-stat-period="year" aria-pressed="false">年</button></div>
+            <div class="statistics-date"><button class="icon-button back-button" id="statistics-previous" aria-label="上一统计周期"><svg class="icon"><use href="#i-arrow"/></svg></button><label><span class="sr-only">选择统计日期</span><input type="date" id="statistics-anchor" min="1900-01-01" max="2100-12-31"></label><button class="icon-button" id="statistics-next" aria-label="下一统计周期"><svg class="icon"><use href="#i-arrow"/></svg></button><button class="text-button" id="statistics-today">今天</button></div>
+            <p class="statistics-range" id="statistics-range"></p>
+            <div class="statistics-overview" aria-label="周期专注汇总"><div class="statistics-total"><span>累计专注</span><div><strong id="statistics-minutes">0</strong><span> 分钟</span></div><small id="statistics-source-note"></small></div><div class="statistics-metrics"><div><strong id="statistics-count">0</strong><span>完成专注</span></div><div><strong id="statistics-days">0</strong><span>专注天数</span></div><div><strong id="statistics-average">0</strong><span>活跃日均 / 分钟</span></div></div></div>
+            <div id="statistics-trend-section"><div class="section-heading"><h3 id="statistics-trend-title">专注时长趋势</h3><small>单位：分钟</small></div>
+            <div class="statistics-chart" id="statistics-trend" role="img"></div><div class="statistics-axis" id="statistics-axis"></div><p class="data-note" id="statistics-trend-note"></p></div>
+            <div class="section-heading"><h3>专注时段分布</h3><small>00–24 时 · 单位：分钟</small></div><div class="statistics-chart hour-distribution" id="statistics-hours" role="img"></div><div class="statistics-axis hour-distribution-axis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div><p class="data-note" id="statistics-hours-note"></p>
+            <div class="section-heading"><h3>时间投向哪里</h3><small>按任务分类</small></div>
+            <div class="distribution-card"><div class="category-donut" id="statistics-donut" role="img"><span>专注<br>分布</span></div><div class="category-legend" id="statistics-categories"></div></div>
+            <div class="section-heading"><h3>专注日历</h3><small id="statistics-calendar-title"></small></div><p class="data-note">显示所选月份；点击日期查看当天统计</p>
+            <div class="calendar-weekdays" aria-hidden="true"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div><div class="focus-calendar" id="statistics-calendar" aria-label="月度专注热力日历"></div><div class="heat-legend"><span>少</span><i data-level="0"></i><i data-level="1"></i><i data-level="2"></i><i data-level="3"></i><i data-level="4"></i><span>多</span></div>
+            <div class="section-heading"><h3>项目投入排行</h3><small>按累计时长</small></div><ol class="focus-ranking" id="statistics-ranking"></ol>
+            <div class="section-heading"><h3>专注明细</h3><small id="statistics-record-count"></small></div><ul class="focus-records" id="statistics-records"></ul><button class="secondary-button load-records" id="statistics-more" hidden>查看更多记录</button>
+            <p class="statistics-method">统计口径：倒计时到时完成、正计时手动结束后计入。有效时长精确到秒，不含暂停和休息；分钟展示四舍五入。按本地结束日期筛选记录，时段分布再将这些记录的实际专注区间按小时拆分；日均按有记录的天数计算。</p>
+          </section>
+          <section class="page" id="page-tasks" aria-labelledby="tasks-heading" hidden>
+            <header class="page-header"><div><p class="overline">给想做的事，一点秩序</p><h2 id="tasks-heading">今日待办<span class="heading-dot">.</span></h2></div><button class="icon-button green" id="add-task" aria-label="新增待办"><svg class="icon"><use href="#i-plus"/></svg></button></header>
+            <div class="daily-card"><div class="daily-copy"><span class="eyebrow">ONE STEP AT A TIME</span><h3>小步前进，也很了不起</h3><p id="task-summary">今天已完成 1 / 4 件事</p></div><div class="completion-badge" id="completion-percent">25<span>%</span></div><div class="completion-track"><div id="completion-bar"></div></div></div>
+            <div class="task-tabs" aria-label="待办筛选"><button class="selected" data-filter="all" aria-pressed="true">全部 <span id="all-count">4</span></button><button data-filter="pending" aria-pressed="false">进行中</button><button data-filter="done" aria-pressed="false">已完成</button></div>
+            <div class="section-heading"><h3 id="task-list-heading">留给今天的事</h3><small>点击任务可编辑</small></div>
+            <div id="task-list" class="task-list" role="list" aria-label="待办列表"></div>
+            <button class="add-task-inline" id="add-task-inline"><svg class="icon"><use href="#i-plus"/></svg>添加一个小目标</button>
+            <div class="tip-card"><svg class="icon"><use href="#i-focus"/></svg><div><strong>让计划，变成专注</strong><p>点击任务旁的计时按钮，开始一段专属番茄钟。</p></div></div>
+          </section>
+          <section class="page" id="page-usage" aria-labelledby="usage-heading" hidden>
+            <header class="page-header"><div><p class="overline">了解习惯，而不是责备自己</p><h2 id="usage-heading">时间足迹<span class="heading-dot">.</span></h2></div><span class="sample-tag">示例数据</span></header>
+            <div class="permission-note"><svg class="icon"><use href="#i-shield"/></svg><span>正式版需授权「使用情况访问权限」</span><button id="usage-permission" aria-label="查看使用统计权限说明">了解</button></div>
+            <div class="segmented usage-tabs"><button class="selected" data-period="today" aria-pressed="true">今日</button><button data-period="week" aria-pressed="false">本周</button></div>
+            <div class="usage-total"><span id="usage-total-label">今日屏幕使用</span><div id="usage-total"><strong>3</strong> 小时 <strong>24</strong> 分钟</div><span class="comparison" id="usage-comparison">比昨日少 36 分钟，继续保持</span></div>
+            <div class="chart" id="usage-chart" role="img" aria-label="示例柱状图"></div><div class="chart-labels" id="chart-labels"></div>
+            <div class="goal-card"><div class="goal-top"><span><svg class="icon"><use href="#i-focus"/></svg>每日使用目标</span><button id="edit-goal">4 小时 <svg class="icon"><use href="#i-arrow"/></svg></button></div><div class="goal-track"><div id="goal-progress"></div></div><p id="goal-summary">今天还剩 36 分钟，留一点时间给生活。</p></div>
+            <div class="section-heading"><h3>时间花在哪里</h3><small id="usage-list-caption">按使用时长</small></div>
+            <div class="app-list" id="usage-apps"></div>
+            <div class="reminder-row"><div><strong>每日超时提醒</strong><small id="reminder-caption">仅演示开关，不发送系统通知</small></div><button class="switch" id="reminder-switch" role="switch" aria-checked="false" aria-label="每日超时提醒演示"><span></span></button></div>
+          </section>
+          <section class="page" id="page-profile" aria-labelledby="profile-heading" hidden>
+            <header class="page-header"><div><p class="overline">一个更适合你的专注空间</p><h2 id="profile-heading">我的空间<span class="heading-dot">.</span></h2></div><svg class="icon profile-leaf"><use href="#i-leaf"/></svg></header>
+            <div class="profile-card"><div class="avatar">我</div><div><h3>生活的掌舵人</h3><p>不必登录，从自己开始。</p></div><span class="local-badge">本地优先</span></div>
+            <div class="privacy-card"><svg class="icon"><use href="#i-shield"/></svg><div><strong>你的时间，只属于你</strong><p>正式版计划在本机保存个人数据。<br>本原型仅使用内存，刷新即恢复示例。</p></div></div>
+            <div class="section-heading"><h3>数据与偏好</h3></div>
+            <div class="settings-group"><button class="settings-row" id="backup-button"><span class="setting-icon"><svg class="icon"><use href="#i-backup"/></svg></span><div><strong>备份与恢复</strong><small>JSON 文件 · 流程预览</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button><button class="settings-row" id="permissions-button"><span class="setting-icon"><svg class="icon"><use href="#i-shield"/></svg></span><div><strong>权限管理</strong><small>按需授权，始终由你掌控</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button><button class="settings-row" id="preferences-button"><span class="setting-icon"><svg class="icon"><use href="#i-settings"/></svg></span><div><strong>休息偏好</strong><small id="preferences-caption">短休息 5 分钟 / 长休息 15 分钟</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button></div>
+            <div class="section-heading"><h3>探索更多可能</h3><span class="sample-tag">规划中</span></div>
+            <button class="automation-card" id="automation-button"><div class="automation-top"><span class="code-icon"><svg class="icon"><use href="#i-code"/></svg></span><span class="coming-soon">COMING NEXT</span></div><h3>让日常，自动一点</h3><p>为你自己的手机自动化脚本，<br>留一个位置。</p><div class="automation-bottom"><span>自动化扩展</span><span>尚未接入 <svg class="icon"><use href="#i-arrow"/></svg></span></div></button>
+            <p class="version-note">专注助手 · 界面原型 V0.4<br>更少打扰，更多属于你的时间</p>
+          </section>
+        </div>
+        <nav class="bottom-nav" aria-label="主导航"><button data-page="focus" class="active" aria-current="page"><span><svg class="icon"><use href="#i-focus"/></svg></span>专注</button><button data-page="tasks"><span><svg class="icon"><use href="#i-tasks"/></svg></span>待办</button><button data-page="usage"><span><svg class="icon"><use href="#i-chart"/></svg></span>用时</button><button data-page="profile"><span><svg class="icon"><use href="#i-user"/></svg></span>我的</button></nav>
+        <div class="home-indicator" aria-hidden="true"></div>
+      </div>
+      <p class="preview-footnote">可切换页面、添加待办和体验计时<br>刷新恢复示例 · 不执行脚本 · 不读取设备数据</p>
+    </section>
+  </main>
+  <dialog id="modal" aria-labelledby="modal-title"><div class="modal-header"><span class="eyebrow">FOCUS / LIFE</span><button class="close-button" id="close-modal" aria-label="关闭弹窗">×</button></div><h2 id="modal-title"></h2><div id="modal-content"></div></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
