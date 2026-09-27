@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check:*)",
+      "Bash(node --test:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(sed -n:*)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(xxd:*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File ./verify.ps1:*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File .\\verify.ps1:*)"
+    ]
+  }
+}

@@ -24,9 +24,34 @@
 - 专注记录保留开始时的专注项名称、模式、目标、关联待办及分类快照，后续编辑或删除事项不追改历史记录；活动片段与有效整秒用于分布和导出，示例与本次计时使用不同来源标记。
 - 专注统计可实际下载 CSV 或 JSON。CSV 使用 UTF-8 BOM、CRLF 和字段转义，防止用户文本触发电子表格公式；附带每次专注最新的进度文字、完成度和更新时间。JSON 另含对应进度历史、时段分布与来源筛选后的累计总览，不是完整 APP 备份。明细与进度历史遵循当前日期及来源筛选，包含未在分页中展示的记录。
 
+## 协作方式
+
+- **需要联网下载、或耗时超过一两分钟的构建与测试，给出纯 PowerShell 命令让用户执行并贴回输出，不要自己反复起构建干等。** 助手沙箱没有外网（`curl` 直接 exit 35），用户本机有；长构建期间助手既看不到进度也做不了别的事。助手负责改代码和读报错，用户负责跑。
+- 给用户的命令必须能直接粘贴：用 `;` 分隔而不是 `&&`（PowerShell 5.1 不支持 `&&`），不带 `!` 前缀（那是 Claude Code 的输入前缀，不是 shell 语法）。
+- 测试失败时，Gradle 控制台只给异常类名和行号，没有原因。真正的报错在 `android/app/build/reports/tests/testDebugUnitTest/classes/*.html`，先读这个文件再动手改。
+- 改 Android 代码时同一轮就改掉 `versionCode` / `versionName`，不要等构建成功后再补，否则白跑一遍完整构建。
+- 不要凭「目录里还没出现文件」判断下载是否停滞，Gradle 只在下载完成后才落盘。
+
+## 代码位置
+
+- 规则与纯函数集中在 `android/app/src/main/java/com/focusassistant/app/domain/`：`Todos.kt`（发酵分档与分组）、`TimerEngine.kt`（计时）、`Statistics.kt`（统计口径）、`Models.kt`（数据类与 `Validation`）。改规则优先改这里，单测也挂在这一层。
+- 界面在 `ui/`：`Screens.kt` 是各屏正文，`UiSupport.kt` 是弹窗、主题色与共用组件，`FocusApp.kt` 负责导航接线和 `when (ui.dialog)` 的弹窗分发。改一个功能通常要同时动这三个文件。
+- 持久化在 `data/`：`FocusRepository.kt` 是唯一写入口，Room 定义在 `FocusDatabase.kt`，备份编解码在 `BackupCodec.kt`。
+- 系统能力在 `platform/`：前台服务、通知、闹钟、用时读取。
+- 浏览器原型只有根目录的 `model.js`（可测纯模型）、`app.js`（DOM）、`styles.css`。
+- 搜索时排除 `.tools/tutorial-check/`，那是无关的教学样例，里面另有一套 `TodoStore.kt` 等同名文件，只会干扰定位。
+
 ## Windows 验证命令
 
-在项目根目录运行：
+验证入口已固化成脚本，不必每次重拼环境变量。两个脚本都必须保留 UTF-8 BOM，否则 PowerShell 5.1 会按 GBK 读中文注释并报语法错误。
+
+浏览器原型，在项目根目录运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\verify.ps1
+```
+
+等价于下面三条，仍可单独执行：
 
 ```powershell
 node --check app.js
@@ -41,6 +66,12 @@ uv run --no-project --python 3.12 python -m http.server 5173 --bind 127.0.0.1
 ```
 
 浏览器回归需要已安装 Microsoft Edge，以及正在运行的上述预览服务。在另一终端运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\verify.ps1 -Browser
+```
+
+`-Browser` 在语法检查与单测之后追加下面这条：
 
 ```powershell
 uv run --no-project --python 3.12 --with playwright==1.55.0 --with pyee==13.0.0 --with greenlet==3.2.4 python browser_check.py
@@ -59,16 +90,43 @@ uv run --no-project --python 3.12 --with playwright==1.55.0 --with pyee==13.0.0 
 - 未确认数据与未来时段显示未知占位，不冒充真实零用时；桶内有事件只表明存在系统记录，不保证整段历史完整。跨午夜和夏令时使用本地日历边界。
 - 当前工作目录已初始化 Git，主分支为 `main`。`docs/`、`.tools/`、构建产物和本地配置不提交；文档仅留在本机，需要另行备份。
 - 没有连接设备时，构建与单元测试通过不等于真机 UI、权限和后台行为验证通过。
-- 本机已有校验通过的 Gradle 8.11.1。Wrapper 可能重复联网下载，可在 `android/` 目录直接调用已安装版本：
+- 本机已有校验通过的 Gradle 8.11.1。Wrapper 可能重复联网下载，`android/verify.ps1` 固定调用已安装版本，并集中 `JAVA_HOME` / `GRADLE_USER_HOME` / `ANDROID_HOME` 三个变量，缺工具链时提示先跑 `bootstrap.ps1`。在 `android/` 目录运行：
 
 ```powershell
-$env:JAVA_HOME = 'D:\jdk\jdk21'
-$env:GRADLE_USER_HOME = 'C:\Users\Administrator\Desktop\app\.tools\gradle-user-home'
-$env:ANDROID_HOME = 'C:\Users\Administrator\Desktop\app\.tools\android-sdk'
-& '..\.tools\gradle-8.11.1\bin\gradle.bat' testDebugUnitTest assembleDebug lintDebug --no-daemon --console=plain
+powershell -ExecutionPolicy Bypass -File .\verify.ps1
+powershell -ExecutionPolicy Bypass -File .\verify.ps1 assembleDebug
 ```
 
+不传任务即 `testDebugUnitTest assembleDebug lintDebug`；传入的参数原样交给 Gradle。脚本结束时打印 APK 路径、大小和时间，但 APK 只在 assemble 任务后才更新。
+
+默认复用 Gradle daemon，省掉每次冷启动 JVM（冷启动约 2 分钟，daemon 复用后增量构建几秒）；怀疑 daemon 状态导致构建结果异常时加 `-NoDaemon` 排除。
+
+用 daemon 时不要把输出管道接给 `tail` 之类的命令：daemon 会继承 stdout 句柄，管道读不到 EOF，命令看起来一直不返回，实际构建早已结束。改成重定向到文件再读：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\verify.ps1 > build.log 2>&1
+```
+
+默认 `--console=plain` 会隐藏 Gradle 的下载进度条，大文件下载时容易误判成卡死。人工盯进度时加 `-Rich`。另外 Gradle 只在下载完成后才把文件落盘到缓存，所以「缓存目录里还没出现 jar」不能用来判断下载是否停滞。
+
 - APK 输出为 `android/app/build/outputs/apk/debug/app-debug.apk`。保留本机调试签名和 applicationId，递增版本号便于覆盖升级；不要通过卸载来更新，否则会丢失本机数据。
+
+## Android 截图测试
+
+改 Compose UI 后用它核对渲染结果，不必连真机。截图默认跳过，只在显式传 `-PwithScreenshots` 时执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\verify.ps1 -Rich testDebugUnitTest -PwithScreenshots
+```
+
+- 产物为 `android/app/build/reports/screenshots/*.png`，助手可以直接读 PNG 核对布局。构建耗时约 30 秒，按上面「协作方式」交给用户跑。
+- 只断言画面非空白，不做像素比对：基准图会因字体与渲染版本漂移而假警报。截图是给人看的，断言只保证图有效。
+- Robolectric 自带下载器绕过 `settings.gradle.kts` 的仓库配置，会长时间挂住。改由 Gradle 用 `robolectricRuntime` configuration 解析 `android-all-instrumented`，`prepareRobolectricJars` 拷到固定目录，再用 `robolectric.offline=true` 离线复用。这个 jar 有 150 MB，`settings.gradle.kts` 里只给 `org.robolectric` 这一个 group 走阿里云镜像，其余依赖仍走 google() / mavenCentral()。
+- jar 坐标必须和 Robolectric 内置清单完全一致，否则报 `Path is not a file`，报错里的文件名就是它要的版本。SDK 版本三处联动，改一处要同步全部：`build.gradle.kts` 的 `robolectricRuntime` 坐标、`src/test/resources/robolectric.properties` 的 `sdk`、测试类的 `@Config(sdk = [...])`。每个 SDK 一个 150 MB jar，因此统一固定 SDK 35。
+- `androidx.compose.ui:ui-test-manifest` 必须放 `debugImplementation`。它靠清单合并注入 `ComponentActivity`，放 `testImplementation` 清单不参与合并，会报 `Unable to resolve activity for Intent`。
+- 不要用 `onRoot().captureToImage()`：它走窗口级 PixelCopy 抓屏，在 Robolectric 里等不到重绘回调，固定抛 `ComposeTimeoutException`。用 `createAndroidComposeRule<ComponentActivity>()`，再 `view.draw(Canvas(bitmap))` 让根视图自己软件绘制。
+- 截图与单测通过仍不等于真机验证通过：软件绘制不覆盖真实渲染、触摸、权限和后台行为。
+- `fillMaxWidth()` / `fillMaxHeight()` 用在 `Row`/`Column` 子项里要警觉，它填的是剩余空间而不是和兄弟等分；多子项场景应改用 `weight(1f)` 或 `IntrinsicSize`。页签行就因此出过一次故障：选中项吃光宽度、其余页签被压成零宽文字竖排，而编译、单测和 lint 全是绿的。
 
 ## 独立专注设计稿
 
