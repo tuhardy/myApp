@@ -120,6 +120,17 @@ internal object JsonCodec {
         .put("startedAt", value.startedAt).put("accumulatedMs", value.accumulatedMs)
         .put("anchorElapsed", value.anchorElapsed).put("anchorWall", value.anchorWall).put("bootCount", value.bootCount).put("segments", JSONArray(value.segments.map(::segment)))
         .put("targetNotified", value.targetNotified).put("recoveryPending", value.recoveryPending)
+    fun diary(value: DiaryEntry): JSONObject = JSONObject().put("id", value.id).put("title", value.title).put("text", value.text)
+        .put("photos", JSONArray(value.photos.map { JSONObject().put("id", it.id).put("file", it.file) }))
+        .put("audios", JSONArray(value.audios.map { JSONObject().put("id", it.id).put("file", it.file).put("durationMs", it.durationMs) }))
+        .put("occurredAt", value.occurredAt).put("createdAt", value.createdAt).put("updatedAt", value.updatedAt)
+        .put("deletedAt", nullable(value.deletedAt))
+    fun readDiary(value: JSONObject) = DiaryEntry(value.string("id"), value.string("title"), value.string("text"),
+        value.objects("photos", Int.MAX_VALUE).map { DiaryPhoto(it.string("id"), it.string("file")) },
+        value.objects("audios", Int.MAX_VALUE).map { DiaryAudio(it.string("id"), it.string("file"), it.long("durationMs")) },
+        value.long("occurredAt"), value.long("createdAt"), value.long("updatedAt"),
+        if (!value.has("deletedAt") || value.isNull("deletedAt")) null else value.long("deletedAt")
+    ).also { DiaryRules.validate(it) }
     fun readTimer(value: JSONObject) = ActiveTimer(value.string("sessionId"), value.string("projectId"), value.string("projectTitle"), value.string("category"), TimerMode.valueOf(value.string("timerMode")), value.nullableInteger("targetMinutes"),
         TimerPhase.valueOf(value.string("phase")), TimerStatus.valueOf(value.string("status")), value.long("startedAt"),
         value.long("accumulatedMs"), value.long("anchorElapsed"), value.long("anchorWall"), value.integer("bootCount"), value.objects("segments", 10000).map(::readSegment), value.boolean("targetNotified"), value.boolean("recoveryPending"))

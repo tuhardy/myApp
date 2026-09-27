@@ -712,11 +712,171 @@
     }
   }
 
+  /* 日记：随手记，一天可多条。原型的照片与录音只是占位描述，不含真实文件。 */
+  const DIARY_WEEKDAYS = Object.freeze(["周日", "周一", "周二", "周三", "周四", "周五", "周六"]);
+  const MONTH_KEY_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])$/;
+
+  function initialDiaryEntries(now = new Date()) {
+    const minutesAgo = minutes => new Date(now.getTime() - minutes * MILLISECONDS_PER_MINUTE).toISOString();
+    const at = (daysAgo, hour, minute) => {
+      const date = addDays(now, -daysAgo);
+      date.setHours(hour, minute, 0, 0);
+      return date.toISOString();
+    };
+    const photos = (id, labels) => labels.map((label, index) => ({ id: `${id}-photo-${index + 1}`, label }));
+    const entry = (id, occurredAt, fields) => ({ id, title: "", text: "", photos: [], audios: [], occurredAt,
+      createdAt: occurredAt, updatedAt: occurredAt, deletedAt: null, ...fields });
+    return [
+      entry("diary-sample-sunset", minutesAgo(35), { text: "下班路上看到很好看的晚霞，停下来拍了几张。最近总是低头赶路，偶尔抬头看看天也挺好。",
+        photos: photos("diary-sample-sunset", ["路口的晚霞", "天桥上", "回家的路"]) }),
+      entry("diary-sample-voice", minutesAgo(300), { title: "午休时的碎碎念", audios: [{ id: "diary-sample-voice-audio", seconds: 42 }] }),
+      entry("diary-sample-review", at(1, 22, 10), { title: "第一次独立做完需求评审",
+        text: "准备了两天，真正讲的时候比想象中顺利。被问到边界情况时卡了一下，但没有慌，先记下来会后补充。\n\n下次可以提前把异常流程画出来，自己先过一遍。整体来说，比上个月的自己进步了一点。" }),
+      entry("diary-sample-run", at(1, 7, 30), { text: "早起跑了 3 公里，比上周轻松。" }),
+      entry("diary-sample-weekend", at(3, 20, 5), { title: "周末去了植物园",
+        text: "人不多，银杏开始变黄了。带了一本书，在长椅上读了半小时。", photos: photos("diary-sample-weekend", ["入口", "银杏", "长椅", "湖边", "书页"]) }),
+      entry("diary-sample-talk", at(6, 21, 45), { text: "和老朋友打了很久的电话，聊到各自这一年的变化。录下了一段想对自己说的话。",
+        audios: [{ id: "diary-sample-talk-audio", seconds: 95 }] }),
+      entry("diary-sample-cook", at(12, 19, 20), { text: "第一次自己做红烧肉，糖炒得有点过，但味道还不错。", photos: photos("diary-sample-cook", ["出锅"]) }),
+      entry("diary-sample-rain", at(33, 16, 0), { title: "下雨天", text: "在咖啡店躲雨，把拖了很久的读书笔记整理完了。" }),
+      entry("diary-sample-move", at(41, 10, 15), { text: "换了新的书桌位置，靠窗之后心情明亮很多。", photos: photos("diary-sample-move", ["新书桌", "窗外"]) }),
+      entry("diary-sample-trash", at(9, 23, 30), { text: "有点累，随便记两句。", deletedAt: at(2, 9, 0) }),
+    ];
+  }
+
+  function diaryEntryDate(entry) {
+    const date = new Date(entry?.occurredAt ?? "");
+    return Number.isFinite(date.getTime()) ? date : null;
+  }
+
+  function diaryDayLabel(date, now) {
+    const key = localDateKey(date);
+    const suffix = key === localDateKey(now) ? " · 今天" : key === localDateKey(addDays(now, -1)) ? " · 昨天" : "";
+    const year = date.getFullYear() === now.getFullYear() ? "" : `${date.getFullYear()}年`;
+    return `${year}${date.getMonth() + 1}月${date.getDate()}日 ${DIARY_WEEKDAYS[date.getDay()]}${suffix}`;
+  }
+
+  const DIARY_LIMITS = Object.freeze({ maxTitle: 50, maxText: 20000, minAudioSeconds: 1, leapYear: 2000 });
+  const DIARY_DATE_PATTERNS = Object.freeze([
+    { pattern: /^(\d{4})(\d{2})(\d{2})$/, parts: ["year", "month", "day"] },
+    { pattern: /^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?$/, parts: ["year", "month", "day"] },
+    { pattern: /^(\d{4})[-/.年](\d{1,2})月?$/, parts: ["year", "month"] },
+    { pattern: /^(\d{1,2})[-/.月](\d{1,2})日?$/, parts: ["month", "day"] },
+    { pattern: /^(\d{1,2})月$/, parts: ["month"] },
+  ]);
+  const DIARY_RELATIVE_DAYS = Object.freeze({ 今天: 0, 昨天: 1, 前天: 2 });
+
+  /** 把搜索词解析成日期条件；年份或日期可省略。不是合法日期时返回 null，只按文字搜索。 */
+  function parseDiaryDateQuery(query, now = new Date()) {
+    const text = String(query ?? "").replace(/\s+/g, "");
+    if (Object.hasOwn(DIARY_RELATIVE_DAYS, text)) {
+      const date = addDays(now, -DIARY_RELATIVE_DAYS[text]);
+      return { year: date.getFullYear(), month: date.getMonth() + 1, day: date.getDate(), label: text };
+    }
+    for (const { pattern, parts } of DIARY_DATE_PATTERNS) {
+      const match = pattern.exec(text);
+      if (!match) continue;
+      const value = Object.fromEntries(parts.map((name, index) => [name, Number(match[index + 1])]));
+      const { year = null, month, day = null } = value;
+      if (month < 1 || month > 12) return null;
+      if (day !== null) {
+        const probe = new Date(year ?? DIARY_LIMITS.leapYear, month - 1, day);
+        if (day < 1 || probe.getMonth() !== month - 1) return null;
+      }
+      return { year, month, day, label: `${year === null ? "" : `${year}年`}${month}月${day === null ? "" : `${day}日`}` };
+    }
+    return null;
+  }
+
+  function diaryDateMatches(date, filter) {
+    return !!date && (filter.year === null || date.getFullYear() === filter.year) && date.getMonth() + 1 === filter.month
+      && (filter.day === null || date.getDate() === filter.day);
+  }
+
+  /** 保存前校验：标题可选，至少有文字、照片或录音之一；记录时间可补写过去，不能晚于现在。 */
+  function validateDiaryEntry(input, now = new Date()) {
+    const title = String(input?.title ?? "").trim();
+    const text = String(input?.text ?? "").trim();
+    if (title.length > DIARY_LIMITS.maxTitle) throw new Error(`标题最多 ${DIARY_LIMITS.maxTitle} 字。`);
+    if (text.length > DIARY_LIMITS.maxText) throw new Error(`正文最多 ${DIARY_LIMITS.maxText} 字。`);
+    const photos = (Array.isArray(input?.photos) ? input.photos : []).map(photo => ({ id: String(photo?.id ?? ""), label: String(photo?.label ?? "") }));
+    const audios = (Array.isArray(input?.audios) ? input.audios : []).map(audio => {
+      if (!Number.isInteger(audio?.seconds) || audio.seconds < DIARY_LIMITS.minAudioSeconds) throw new Error("录音时长无效。");
+      return { id: String(audio.id ?? ""), seconds: audio.seconds };
+    });
+    if (photos.some(photo => !photo.id) || audios.some(audio => !audio.id)) throw new Error("附件缺少标识。");
+    if (!title && !text && !photos.length && !audios.length) throw new Error("写点什么，或添加照片、录音后再保存。");
+    const occurred = input?.occurredAt instanceof Date ? input.occurredAt : new Date(input?.occurredAt ?? "");
+    if (!Number.isFinite(occurred.getTime())) throw new Error("请选择有效的记录时间。");
+    if (occurred > now) throw new Error("记录时间不能晚于现在。");
+    return { title, text, photos, audios, occurredAt: occurred.toISOString() };
+  }
+
+  /** 首页选择：未删除的日记按月查看；搜索覆盖全部时间，匹配标题、正文或日期，同日多条按时间倒序。 */
+  function selectDiaryEntries(entries, { month, query = "", now = new Date() } = {}) {
+    const currentMonth = localDateKey(now).slice(0, 7);
+    const selectedMonth = month === undefined ? currentMonth : month;
+    if (typeof selectedMonth !== "string" || !MONTH_KEY_PATTERN.test(selectedMonth) || selectedMonth > currentMonth) {
+      throw new Error("请选择有效且不晚于当月的月份。");
+    }
+    const keyword = String(query ?? "").trim().toLowerCase();
+    const alive = (Array.isArray(entries) ? entries : []).filter(entry => entry && !entry.deletedAt)
+      .map(entry => ({ entry, date: diaryEntryDate(entry) }))
+      .sort((a, b) => (b.date?.getTime() ?? -Infinity) - (a.date?.getTime() ?? -Infinity));
+    const monthCounts = new Map();
+    alive.forEach(({ date }) => {
+      if (!date) return;
+      const key = localDateKey(date).slice(0, 7);
+      monthCounts.set(key, (monthCounts.get(key) || 0) + 1);
+    });
+    const dateFilter = keyword ? parseDiaryDateQuery(keyword, now) : null;
+    const matches = keyword
+      ? alive.filter(({ entry, date }) => (dateFilter && diaryDateMatches(date, dateFilter))
+        || `${entry.title ?? ""}\n${entry.text ?? ""}`.toLowerCase().includes(keyword))
+      : alive.filter(({ date }) => date && localDateKey(date).slice(0, 7) === selectedMonth);
+    const groups = new Map();
+    matches.forEach(({ entry, date }) => {
+      const key = date ? localDateKey(date) : "unknown";
+      if (!groups.has(key)) groups.set(key, { key, label: date ? diaryDayLabel(date, now) : "时间未记录", entries: [] });
+      groups.get(key).entries.push(entry);
+    });
+    const months = Array.from(monthCounts, ([key, count]) => ({ key, count })).sort((a, b) => b.key.localeCompare(a.key));
+    return { groups: Array.from(groups.values()), total: matches.length, months, latestMonth: months[0]?.key ?? null,
+      dateLabel: dateFilter?.label ?? null };
+  }
+
+  /** 回收站按移入时间倒序；不自动清空。 */
+  function trashedDiaryEntries(entries) {
+    return (Array.isArray(entries) ? entries : []).filter(entry => entry?.deletedAt)
+      .sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)));
+  }
+
+  /**
+   * 草稿列表：按最后编辑倒序。新日记草稿可以有多份，修改已有日记每条最多一份；
+   * 原日记已删除或在回收站时标为 orphan，保存时另存为新日记，不覆盖回收站里的记录。
+   */
+  function listDiaryDrafts(drafts, entries) {
+    const alive = new Map((Array.isArray(entries) ? entries : []).filter(entry => entry && !entry.deletedAt).map(entry => [entry.id, entry]));
+    return (Array.isArray(drafts) ? drafts : []).map(draft => {
+      const entry = draft.entryId ? alive.get(draft.entryId) ?? null : null;
+      return { draft, entry, kind: !draft.entryId ? "new" : entry ? "edit" : "orphan" };
+    }).sort((a, b) => String(b.draft.updatedAt).localeCompare(String(a.draft.updatedAt)));
+  }
+
+  function moveDiaryToTrash(entry, now = new Date()) {
+    return entry.deletedAt ? entry : { ...entry, deletedAt: now.toISOString() };
+  }
+
+  function restoreDiaryEntry(entry) {
+    return { ...entry, deletedAt: null };
+  }
+
   const api = Object.freeze({
     LIMITS, MODES, CATEGORIES, USAGE, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, daysBetween, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
     validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary,
     completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks,
+    DIARY_LIMITS, initialDiaryEntries, diaryEntryDate, parseDiaryDateQuery, validateDiaryEntry, selectDiaryEntries, trashedDiaryEntries, listDiaryDrafts, moveDiaryToTrash, restoreDiaryEntry,
   });
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.FocusModel = api;

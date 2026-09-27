@@ -8,6 +8,8 @@ import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "projects")
@@ -24,6 +26,8 @@ internal data class SettingsRow(@PrimaryKey val id: Int = 1, val payload: String
 internal data class TimerRow(@PrimaryKey val id: Int = 1, val payload: String)
 @Entity(tableName = "store_revision")
 internal data class RevisionRow(@PrimaryKey val id: Int = 1, val revision: Long = 0)
+@Entity(tableName = "diary")
+internal data class DiaryRow(@PrimaryKey val id: String, val payload: String, val position: Int)
 
 @Dao
 internal interface FocusDao {
@@ -48,9 +52,21 @@ internal interface FocusDao {
     @Query("DELETE FROM sessions WHERE id IN (:ids)") suspend fun removeSessions(ids: List<String>)
     @Query("DELETE FROM progress WHERE id IN (:ids)") suspend fun removeProgress(ids: List<String>)
     @Query("DELETE FROM active_timer") suspend fun clearTimer()
+    @Query("SELECT * FROM diary ORDER BY position") suspend fun diaries(): List<DiaryRow>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putDiaries(rows: List<DiaryRow>)
+    @Query("DELETE FROM diary WHERE id IN (:ids)") suspend fun removeDiaries(ids: List<String>)
 }
 
-@Database(entities = [ProjectRow::class, TodoRow::class, SessionRow::class, ProgressRow::class, SettingsRow::class, TimerRow::class, RevisionRow::class], version = 1, exportSchema = false)
+@Database(entities = [ProjectRow::class, TodoRow::class, SessionRow::class, ProgressRow::class, SettingsRow::class, TimerRow::class, RevisionRow::class, DiaryRow::class], version = 2, exportSchema = false)
 internal abstract class FocusDatabase : RoomDatabase() {
     abstract fun dao(): FocusDao
+
+    companion object {
+        /** v1 → v2 只新增日记表，覆盖升级保留原有专注、待办与设置数据。 */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `diary` (`id` TEXT NOT NULL, `payload` TEXT NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+            }
+        }
+    }
 }

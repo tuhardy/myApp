@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.Timer
@@ -50,7 +51,7 @@ import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
 
-internal enum class Screen { PROJECTS, TIMER, TODOS, STATISTICS, USAGE, SETTINGS }
+internal enum class Screen { PROJECTS, TIMER, TODOS, DIARY, STATISTICS, USAGE, SETTINGS }
 
 internal object TodoUiLimits {
     const val FINISH_HOLD_MS = 680L
@@ -155,6 +156,7 @@ class NativeUiModel : ViewModel() {
     var dialogId by mutableStateOf("")
     var busy by mutableStateOf(false)
     internal val todos = TodoUiState()
+    internal val diary = DiaryUiState()
     private val todoAnimations = mutableMapOf<String, Job>()
     private var todoAnimationToken = 0L
     var period by mutableStateOf(Period.DAY)
@@ -216,6 +218,14 @@ class NativeUiModel : ViewModel() {
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { message(error.message ?: "操作未完成，请重试。") }
             finally { busy = false }
+        }
+    }
+    /** 不占用忙碌状态的后台整理，例如清理放弃草稿留下的附件文件。 */
+    fun background(action: suspend () -> Unit) {
+        viewModelScope.launch {
+            try { action() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { message(error.message ?: "整理附件文件未完成。") }
         }
     }
 }
@@ -370,8 +380,10 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
         }
     }
     val pendingProgress = state.sessions.filter { !it.progressPrompted && Statistics.latestForSession(state.progress, it.id) == null }.maxByOrNull { it.endedAt }
-    LaunchedEffect(pendingProgress?.id, ui.dialog, state.loading, ui.busy) {
-        if (!state.loading && !ui.busy && ui.dialog.isEmpty() && pendingProgress != null) ui.open("progress-auto", pendingProgress.id)
+    // 正在写日记时不弹专注进度提示，等离开编辑页后再提示。
+    val writingDiary = ui.screen == Screen.DIARY && ui.diary.view == DiaryView.EDITOR
+    LaunchedEffect(pendingProgress?.id, ui.dialog, state.loading, ui.busy, writingDiary) {
+        if (!state.loading && !ui.busy && !writingDiary && ui.dialog.isEmpty() && pendingProgress != null) ui.open("progress-auto", pendingProgress.id)
     }
     LaunchedEffect(ui.dialog, ui.dialogId) {
         if (ui.dialog in setOf("progress-auto", "progress-edit")) {
@@ -393,15 +405,16 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
         catch (error: Exception) { usageError = error.message ?: "无法读取使用统计" }
         finally { usageLoading = false }
     }
-    BackHandler(enabled = ui.dialog.isEmpty() && ui.screen !in setOf(Screen.PROJECTS, Screen.TODOS, Screen.USAGE, Screen.SETTINGS)) { ui.screen = Screen.PROJECTS }
+    BackHandler(enabled = ui.dialog.isEmpty() && ui.screen !in setOf(Screen.PROJECTS, Screen.TODOS, Screen.DIARY, Screen.USAGE, Screen.SETTINGS)) { ui.screen = Screen.PROJECTS }
 
     FocusTheme {
         Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+            // 全屏编辑日记时隐藏底部导航。
+            if (!writingDiary) NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                 val selected = when (ui.screen) { Screen.TIMER, Screen.STATISTICS -> Screen.PROJECTS; else -> ui.screen }
-                listOf(Screen.PROJECTS, Screen.TODOS, Screen.USAGE, Screen.SETTINGS).forEach { page ->
-                    val label = when (page) { Screen.PROJECTS -> "专注"; Screen.TODOS -> "待办"; Screen.USAGE -> "用时"; else -> "我的" }
-                    val image = when (page) { Screen.PROJECTS -> Icons.Outlined.Timer; Screen.TODOS -> Icons.Outlined.CheckCircle; Screen.USAGE -> Icons.Outlined.BarChart; else -> Icons.Outlined.PersonOutline }
+                listOf(Screen.PROJECTS, Screen.TODOS, Screen.DIARY, Screen.USAGE, Screen.SETTINGS).forEach { page ->
+                    val label = when (page) { Screen.PROJECTS -> "专注"; Screen.TODOS -> "待办"; Screen.DIARY -> "日记"; Screen.USAGE -> "用时"; else -> "我的" }
+                    val image = when (page) { Screen.PROJECTS -> Icons.Outlined.Timer; Screen.TODOS -> Icons.Outlined.CheckCircle; Screen.DIARY -> Icons.Outlined.Book; Screen.USAGE -> Icons.Outlined.BarChart; else -> Icons.Outlined.PersonOutline }
                     NavigationBarItem(selected = selected == page, onClick = { ui.screen = page }, icon = { Icon(image, label) }, label = { Text(label) })
                 }
             }
@@ -430,6 +443,33 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                         onRestore = ::restoreTodo, onDelete = ::deleteTodo, onUndo = ::undoTodo, onDismissUndo = ::dismissTodoUndo,
                         onPickMonth = { ui.open("todo-month") }, onHelp = { ui.open("todo-help") }
                     )
+                    Screen.DIARY -> DiaryScreen(state, ui.diary, today, ui.busy, DiaryActions(
+                        save = { entry, existing ->
+                            ui.perform {
+                                val obsolete = repository.saveDiary(entry, existing)
+                                DiaryDrafts.remove(if (existing) entry.id else null)
+                                repository.deleteDiaryFiles(obsolete, DiaryDrafts.files())
+                                repository.state.value.diaries.find { it.id == entry.id }?.let { ui.diary.showSaved(it, created = !existing) }
+                                ui.message(if (existing) "已保存修改" else "已保存")
+                            }
+                        },
+                        trash = { entry ->
+                            ui.perform {
+                                repository.trashDiary(entry.id)
+                                ui.diary.openSwipeId = null
+                                if (ui.diary.view == DiaryView.DETAIL) ui.diary.view = DiaryView.HOME
+                                ui.message("已移入回收站，可在「更多 · 回收站」恢复")
+                            }
+                        },
+                        restore = { entry ->
+                            ui.perform { repository.restoreDiary(entry.id); ui.message("已恢复到 ${timestampText(entry.occurredAt).substringBefore(' ')}") }
+                        },
+                        purge = { entry -> ui.open("diary-purge", entry.id) },
+                        discardFiles = { files -> ui.background { repository.deleteDiaryFiles(files, DiaryDrafts.files()) } },
+                        pickMonth = { ui.open("diary-month") },
+                        help = { ui.open("diary-help") },
+                        message = ui::message
+                    ))
                     Screen.STATISTICS -> StatisticsScreen(state, ui.period, ui.anchor, ui.recordLimit, { ui.period = it; ui.recordLimit = UiLimits.RECORD_PAGE }, {
                         ui.anchor = shiftPeriod(ui.period, ui.anchor, -1); ui.recordLimit = UiLimits.RECORD_PAGE
                     }, { ui.anchor = shiftPeriod(ui.period, ui.anchor, 1); ui.recordLimit = UiLimits.RECORD_PAGE }, { ui.anchor = LocalDate.now(); ui.period = Period.DAY }, {
@@ -507,6 +547,30 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             "todo-month" -> TodoMonthDialog(ui.todos.month, TodoHistory.select(state.todos, now = System.currentTimeMillis()).months, today,
                 onDismiss = { ui.close() }, onSelect = { month -> ui.todos.selectMonth(month); ui.close() })
             "todo-help" -> TodoGuideSheet(onDismiss = { ui.close() })
+            "diary-month" -> TodoMonthDialog(ui.diary.month, DiaryRules.select(state.diaries, ui.diary.month, "", today).months, today,
+                onDismiss = { ui.close() }, onSelect = { month -> ui.diary.selectMonth(month); ui.close() }, unit = "条", describe = { "$it 条日记" })
+            "diary-help" -> InformationDialog("关于日记", listOf(
+                "日记可以只写文字，也可以只放照片或只录一段原声；同一天可以记多条。",
+                "照片会复制一份保存到本应用内，相册原图删除后日记里的照片仍在。录音只保存原声，暂不转文字。",
+                "录音只在你点击时开始；离开日记、切到后台或锁屏会停止并保留已录内容，不在后台继续录音。",
+                "日记保存在本机，暂不包含在「导出完整备份」中；恢复备份不会改动日记。卸载应用或清除数据会删除日记。",
+                "首版不设单独的日记锁。"
+            ), { ui.close() })
+            "diary-purge" -> {
+                val entry = state.diaries.find { it.id == ui.dialogId && it.deletedAt != null }
+                if (entry == null) InformationDialog("这条日记已不在回收站", listOf("可能已被恢复或删除。"), { ui.close() })
+                else {
+                    val attachments = diaryAttachments(entry.photos.size, entry.audios.size)
+                    ConfirmDialog("永久删除这条日记？", "「${diaryName(entry)}」${if (attachments.isNotEmpty()) "及其 $attachments" else ""}将被永久删除，无法恢复。", ui.busy, { ui.close() }) {
+                        ui.perform {
+                            val files = repository.purgeDiary(entry.id)
+                            repository.deleteDiaryFiles(files, DiaryDrafts.files())
+                            ui.close()
+                            ui.message("已永久删除")
+                        }
+                    }
+                }
+            }
             "progress-auto", "progress-edit" -> if (session != null) ProgressEditorDialog(context, session,
                 Statistics.latestForSession(state.progress, session.id) ?: Statistics.latestProgress(state.progress, session.projectId), ui.busy, { ui.close() }) { note, percent ->
                     ui.perform { repository.saveProgress(session.id, note, percent); ProgressDrafts.remove(appContext, session.id); ui.close() }
@@ -539,7 +603,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             "restore-confirm" -> {
                 val backup = ui.pendingBackup
                 if (backup == null) InformationDialog("重新选择备份", listOf("备份预览已失效，请重新选择文件。未修改任何本地数据。"), { ui.close() })
-                else ConfirmDialog("确认覆盖本机数据？", "备份包含 ${backup.projects.size} 个项目、${backup.todos.size} 个待办、${backup.sessions.size} 次专注和 ${backup.progress.size} 条进度。恢复会替换当前数据，不合并。建议先导出当前备份。", ui.busy, { ui.pendingBackup = null; ui.close() }) {
+                else ConfirmDialog("确认覆盖本机数据？", "备份包含 ${backup.projects.size} 个项目、${backup.todos.size} 个待办、${backup.sessions.size} 次专注和 ${backup.progress.size} 条进度。恢复会替换当前数据，不合并。建议先导出当前备份。日记不在备份范围内，恢复不会改动日记。", ui.busy, { ui.pendingBackup = null; ui.close() }) {
                     ui.perform { repository.restoreBackup(backup); ProgressDrafts.clear(appContext); ProjectDrafts.clear(); ui.clearTodoUi(); ui.pendingBackup = null; ui.projectId = null; ui.close(); ui.message("备份已恢复。"); refresh++ }
                 }
             }

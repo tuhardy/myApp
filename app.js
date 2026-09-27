@@ -12,7 +12,10 @@
   const TODO_UI = Object.freeze({ swipeWidth: 88, swipeSlop: 10, swipeRatio: 1.25, swipeThreshold: 36,
     finishHoldMs: 680, finishCollapseMs: 240, historyPage: 20, newDraft: "new" });
   const DURATION_PRESETS = [15, 25, 45, 60];
-  const PAGES = ["focus", "timer", "statistics", "tasks", "usage", "profile"];
+  const PAGES = ["focus", "timer", "statistics", "tasks", "diary", "usage", "profile"];
+  const DIARY_UI = Object.freeze({ visiblePhotos: 3, photoTones: 3, nameLength: 16, pickCounts: [1, 3] });
+  const DIARY_VIEWS = ["home", "trash", "drafts", "detail", "editor"];
+  const MIC = Object.freeze({ prompt: "prompt", granted: "granted", denied: "denied" });
   const MODE_NAMES = { focus: "专注", short: "短休息", long: "长休息" };
   const TIMING_NAMES = { countdown: "倒计时", countup: "正计时" };
   const timer = new Timer();
@@ -27,6 +30,9 @@
     reminders: false, nextTaskId: 1, nextRecordId: 1, nextStepId: 1,
     openProjects: new Set(), progressEntries: [], progressDrafts: new Map(), nextProgressId: 1,
     pendingProgressPrompts: [], progressDialogRecord: null, progressReturnHome: false,
+    diaryEntries: FocusModel.initialDiaryEntries(), diaryMonth: localDateKey(new Date()).slice(0, 7), diarySearch: "",
+    diaryView: "home", diaryHomeScroll: 0, diaryDetailId: null, diaryEditor: null, diaryDrafts: new Map(),
+    diaryRecording: null, micPermission: MIC.prompt, nextDiaryId: 1, nextDiaryAttachmentId: 1, nextDiaryDraftId: 1,
   };
   state.progressEntries = initialProgressEntries(state.records).map(entry => ({ ...entry, sample: true }));
   state.records.forEach(record => {
@@ -111,10 +117,13 @@
   function navigate(page, updateHash = true) {
     const safePage = PAGES.includes(page) ? page : "focus";
     rememberTaskHistoryPosition();
+    if (safePage !== "diary" && !$("page-diary").hidden) suspendDiaryEditor("离开日记时");
     PAGES.forEach(name => { $(`page-${name}`).hidden = name !== safePage; });
+    syncDiaryChrome();
     if (safePage === "statistics") renderStatistics();
     if (safePage === "focus") renderProjectList();
     if (safePage === "tasks") renderTasks();
+    if (safePage === "diary") renderDiary();
     closeSwipes();
     showTaskUndo();
     document.querySelectorAll("[data-page]").forEach(button => {
@@ -810,32 +819,38 @@
     setTaskHistoryMonth(localDateKey(new Date(year, month - 1 + offset, 1)).slice(0, 7));
   }
 
-  function taskMonthPicker() {
+  /** 年月面板：待办历史与日记共用，不允许选择未来月份。 */
+  function monthPicker({ selected, months, unit, describe, onPick }) {
     const current = new Date();
     const currentMonth = localDateKey(current).slice(0, 7);
     const form = element("div", "task-month-form");
     const years = Array.from({ length: current.getFullYear() - UI.minYear + 1 }, (_, index) => String(current.getFullYear() - index));
-    const year = field(form, "选择年份", "historyYear", state.historyMonth.slice(0, 4), { choices: years });
-    const counts = new Map(taskHistorySelection().months.map(month => [month.key, month.count]));
+    const year = field(form, "选择年份", "historyYear", selected.slice(0, 4), { choices: years });
+    const counts = new Map(months.map(month => [month.key, month.count]));
     const grid = element("div", "month-grid");
     const draw = () => {
       grid.replaceChildren(...Array.from({ length: 12 }, (_, index) => {
         const key = `${year.value}-${String(index + 1).padStart(2, "0")}`;
-        const button = taskButton("", "month-choice", () => { closeModal(); setTaskHistoryMonth(key); });
+        const button = taskButton("", "month-choice", () => { closeModal(); onPick(key); });
         button.dataset.month = key;
         button.disabled = key > currentMonth;
-        button.setAttribute("aria-pressed", String(key === state.historyMonth));
-        button.setAttribute("aria-label", `${year.value}年${index + 1}月${button.disabled ? "，尚未到来" : `，完成 ${counts.get(key) || 0} 件`}`);
-        button.append(element("span", "month-name", `${index + 1} 月`), element("small", "month-count", button.disabled ? "—" : counts.has(key) ? `${counts.get(key)} 件` : "暂无记录"));
+        button.setAttribute("aria-pressed", String(key === selected));
+        button.setAttribute("aria-label", `${year.value}年${index + 1}月${button.disabled ? "，尚未到来" : `，${describe(counts.get(key) || 0)}`}`);
+        button.append(element("span", "month-name", `${index + 1} 月`), element("small", "month-count", button.disabled ? "—" : counts.has(key) ? `${counts.get(key)} ${unit}` : "暂无记录"));
         return button;
       }));
     };
     year.addEventListener("change", draw);
     draw();
     const actions = element("div", "month-picker-actions");
-    actions.append(taskButton("回到本月", "secondary-button", () => { closeModal(); setTaskHistoryMonth(currentMonth); }));
+    actions.append(taskButton("回到本月", "secondary-button", () => { closeModal(); onPick(currentMonth); }));
     form.append(grid, actions);
     showModal("翻到哪一月？", form);
+  }
+
+  function taskMonthPicker() {
+    monthPicker({ selected: state.historyMonth, months: taskHistorySelection().months, unit: "件",
+      describe: count => `完成 ${count} 件`, onPick: setTaskHistoryMonth });
   }
 
   function renderTaskHistoryControls(result) {
@@ -1085,7 +1100,7 @@
         if (!wrapper.classList.contains("swipe-open")) return;
         event.preventDefault();
         setSwipe(wrapper, false);
-        card.querySelector(".task-info").focus();
+        card.querySelector(".task-info, .diary-open").focus();
       }
     });
   }
@@ -1138,6 +1153,666 @@
     release.setAttribute("aria-label", `放下「${task.title}」`);
     row.append(renew, release);
     return row;
+  }
+
+  /* 日记：首页（按月回看、搜索文字或日期、左滑删除进回收站）、详情页、全屏编辑页与回收站。 */
+  function diarySelection() {
+    return FocusModel.selectDiaryEntries(state.diaryEntries, { month: state.diaryMonth, query: state.diarySearch });
+  }
+
+  function diaryTime(entry) {
+    const date = FocusModel.diaryEntryDate(entry);
+    return date ? clockLabel(date) : "时间未记录";
+  }
+
+  function diaryName(entry) {
+    const text = (entry.title || entry.text || "").trim().replace(/\s+/g, " ");
+    if (text) return text.length > DIARY_UI.nameLength ? `${text.slice(0, DIARY_UI.nameLength)}…` : text;
+    return entry.audios.length ? "一段语音" : entry.photos.length ? "照片日记" : "日记";
+  }
+
+  function diaryAttachments(entry) {
+    return [entry.photos.length && `${entry.photos.length} 张照片`, entry.audios.length && `${entry.audios.length} 段语音`].filter(Boolean).join(" · ");
+  }
+
+  function syncDiaryChrome() {
+    DIARY_VIEWS.forEach(name => { $(`diary-${name}`).hidden = name !== state.diaryView; });
+    document.querySelector(".phone").classList.toggle("diary-editing", !$("page-diary").hidden && state.diaryView === "editor");
+  }
+
+  function showDiaryView(view) {
+    if (state.diaryView === "home" && view !== "home") state.diaryHomeScroll = $("phone-content").scrollTop;
+    state.diaryView = view;
+    closeSwipes();
+    syncDiaryChrome();
+  }
+
+  /** 编辑页只在打开时构建，重新渲染不会打断正在输入的内容。 */
+  function renderDiary() {
+    syncDiaryChrome();
+    if (state.diaryView === "trash") renderDiaryTrash();
+    else if (state.diaryView === "drafts") renderDiaryDrafts();
+    else if (state.diaryView === "detail") renderDiaryDetail();
+    else if (state.diaryView === "home") renderDiaryHome();
+  }
+
+  function renderDiaryHome() {
+    const result = diarySelection();
+    const searching = !!state.diarySearch.trim();
+    const currentMonth = localDateKey(new Date()).slice(0, 7);
+    const [year, month] = state.diaryMonth.split("-").map(Number);
+    $("diary-month-nav").hidden = searching;
+    $("diary-month-label").textContent = taskMonthLabel(state.diaryMonth);
+    $("diary-month-prev").disabled = state.diaryMonth <= `${UI.minYear}-01`;
+    $("diary-month-next").disabled = state.diaryMonth >= currentMonth;
+    $("diary-month-current").hidden = searching || state.diaryMonth === currentMonth;
+    $("diary-summary").textContent = !searching ? `${year}年${month}月 · ${result.total} 条日记`
+      : result.dateLabel ? `按日期「${result.dateLabel}」或文字 · 找到 ${result.total} 条` : `全部时间 · 找到 ${result.total} 条`;
+    $("diary-list").replaceChildren(...result.groups.map(buildDiaryGroup));
+    if (result.groups.length) return;
+    const empty = element("div", "empty-state diary-empty");
+    if (searching) empty.append(element("strong", "", "没有找到相关日记"), element("p", "", "可以搜索标题、正文或日期（如 9月27日、2026-09-27、昨天），不包含语音与照片内容。"));
+    else if (!result.months.length) {
+      empty.append(element("strong", "", "还没有日记"), element("p", "", "记下今天发生的一件小事，文字、照片或一段语音都可以。"),
+        taskButton("记一条", "history-latest", startDiaryEntry));
+    } else {
+      empty.append(element("strong", "", "这一月还没有日记"), element("p", "", "可以切换月份回看，或搜索全部时间的文字。"));
+      if (result.latestMonth && result.latestMonth !== state.diaryMonth) {
+        empty.append(taskButton("查看最近有日记的月份", "history-latest", () => setDiaryMonth(result.latestMonth)));
+      }
+    }
+    $("diary-list").append(empty);
+  }
+
+  function buildDiaryGroup(group) {
+    const section = element("section", "diary-group");
+    section.setAttribute("aria-label", `${group.label}：${group.entries.length} 条`);
+    const heading = element("div", "diary-day");
+    heading.append(element("h3", "", group.label), element("small", "", `${group.entries.length} 条`));
+    const list = element("div", "diary-group-list");
+    list.setAttribute("role", "list");
+    list.append(...group.entries.map(buildDiaryCard));
+    section.append(heading, list);
+    return section;
+  }
+
+  function buildDiaryCard(entry) {
+    const wrapper = element("div", "task-swipe diary-swipe");
+    wrapper.dataset.diaryId = entry.id;
+    wrapper.setAttribute("role", "listitem");
+    const remove = taskButton("删除", "task-delete", () => trashDiary(entry.id));
+    remove.setAttribute("aria-label", `删除日记：${diaryName(entry)}（移入回收站）`);
+    bindTouchDelete(remove);
+    remove.inert = true;
+    remove.setAttribute("aria-hidden", "true");
+    const card = element("article", "diary-card");
+    const open = taskButton("", "diary-open", () => openDiaryDetail(entry.id));
+    const attachments = diaryAttachments(entry);
+    open.setAttribute("aria-label", `查看日记：${diaryTime(entry)} ${diaryName(entry)}${attachments ? `，${attachments}` : ""}`);
+    open.append(element("span", "diary-time", diaryTime(entry)));
+    if (entry.title) open.append(element("strong", "diary-title", entry.title));
+    if (entry.text) open.append(element("span", "diary-text", entry.text));
+    if (entry.photos.length) {
+      const photos = element("span", "diary-photos");
+      photos.setAttribute("aria-hidden", "true");
+      entry.photos.slice(0, DIARY_UI.visiblePhotos).forEach((photo, index) => {
+        const tile = element("span", `diary-photo tone-${index % DIARY_UI.photoTones}`);
+        const extra = entry.photos.length - DIARY_UI.visiblePhotos;
+        if (index === DIARY_UI.visiblePhotos - 1 && extra > 0) tile.append(element("span", "diary-photo-more", `+${extra}`));
+        photos.append(tile);
+      });
+      open.append(photos);
+    }
+    card.append(open, ...entry.audios.map(audio => buildVoiceButton(audio)));
+    wrapper.append(remove, card);
+    attachTaskSwipe(wrapper, card, remove);
+    return wrapper;
+  }
+
+  function buildVoiceButton(audio) {
+    const voice = taskButton("", "diary-voice", () => toast("原型未接入录音文件，正式版在此回放原声"));
+    voice.setAttribute("aria-label", `回放原声，时长 ${formatTime(audio.seconds)}`);
+    const play = element("span", "diary-voice-play");
+    play.append(icon("play"));
+    voice.append(play, element("span", "diary-voice-label", "原声"), element("span", "diary-voice-wave"), element("span", "diary-voice-time", formatTime(audio.seconds)));
+    return voice;
+  }
+
+  function findDiaryEntry(id) {
+    return state.diaryEntries.find(entry => entry.id === id && !entry.deletedAt) ?? null;
+  }
+
+  function clockLabel(date) {
+    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  }
+
+  function stampLabel(value) {
+    const date = new Date(value ?? "");
+    return Number.isFinite(date.getTime()) ? `${localDateKey(date)} ${clockLabel(date)}` : "未记录";
+  }
+
+  function localDateTimeValue(date) {
+    return `${localDateKey(date)}T${clockLabel(date)}`;
+  }
+
+  /* 详情页：阅读全文、看照片、回放原声；编辑与删除入口。 */
+  function openDiaryDetail(id) {
+    state.diaryDetailId = id;
+    showDiaryView("detail");
+    renderDiaryDetail();
+    $("phone-content").scrollTop = 0;
+    $("diary-detail-heading").focus({ preventScroll: true });
+  }
+
+  /**
+   * 已在日记页时再点「日记」：草稿箱、回收站、详情等二级页直接回首页，编辑中的内容先存入草稿；已在首页则回到顶部。
+   * 从别的页签切回日记时不走这里，仍回到离开时的页面。
+   */
+  function reselectDiaryTab() {
+    if (state.diaryView === "home") {
+      $("phone-content").scrollTop = 0;
+      return;
+    }
+    if (state.diaryEditor) {
+      stopDiaryRecording("回到首页前已停止录音，已录内容保留在草稿中");
+      const kept = storeDiaryDraft();
+      state.diaryEditor = null;
+      if (kept) toast("已存入草稿，可在「更多 · 草稿」继续写");
+    }
+    backToDiaryHome();
+  }
+
+  function backToDiaryHome(focusId = null) {
+    showDiaryView("home");
+    renderDiaryHome();
+    $("phone-content").scrollTop = state.diaryHomeScroll;
+    const card = [...document.querySelectorAll(".diary-swipe")].find(node => node.dataset.diaryId === focusId);
+    (card?.querySelector(".diary-open") || $("add-diary")).focus({ preventScroll: true });
+  }
+
+  function renderDiaryDetail() {
+    const entry = findDiaryEntry(state.diaryDetailId);
+    if (!entry) { backToDiaryHome(); return; }
+    const date = FocusModel.diaryEntryDate(entry);
+    $("diary-detail-heading").textContent = date ? `${date.getMonth() + 1}月${date.getDate()}日 ${date.toLocaleDateString("zh-CN", { weekday: "short" })}` : "时间未记录";
+    const nodes = [element("p", "diary-detail-meta", date ? `${date.getFullYear()}年 · ${clockLabel(date)}` : "记录时间未知")];
+    if (entry.title) nodes.push(element("h3", "diary-detail-title", entry.title));
+    if (entry.text) nodes.push(element("p", "diary-detail-text", entry.text));
+    if (entry.photos.length) {
+      const grid = element("div", "diary-photo-grid");
+      entry.photos.forEach((photo, index) => {
+        const tile = taskButton("", `diary-photo tone-${index % DIARY_UI.photoTones}`, () => diaryPhotoViewer(entry.photos, index));
+        tile.setAttribute("aria-label", `查看照片 ${index + 1} / ${entry.photos.length}${photo.label ? `：${photo.label}` : ""}`);
+        grid.append(tile);
+      });
+      nodes.push(element("h4", "diary-section-title", `照片 · ${entry.photos.length} 张`), grid);
+    }
+    if (entry.audios.length) {
+      const list = element("div", "diary-audio-list");
+      list.append(...entry.audios.map(audio => buildVoiceButton(audio)));
+      nodes.push(element("h4", "diary-section-title", `原声 · ${entry.audios.length} 段`), list);
+    }
+    const edited = entry.updatedAt && entry.updatedAt !== entry.createdAt;
+    nodes.push(element("p", "diary-detail-foot", `写于 ${stampLabel(entry.createdAt)}${edited ? ` · 最后修改 ${stampLabel(entry.updatedAt)}` : ""}`));
+    $("diary-detail-body").replaceChildren(...nodes);
+  }
+
+  function diaryPhotoViewer(photos, index) {
+    const photo = photos[index];
+    const content = element("div", "diary-viewer");
+    const nav = element("div", "modal-actions");
+    const previous = taskButton("上一张", "secondary-button", () => diaryPhotoViewer(photos, index - 1));
+    const next = taskButton("下一张", "secondary-button", () => diaryPhotoViewer(photos, index + 1));
+    previous.disabled = index === 0;
+    next.disabled = index === photos.length - 1;
+    nav.append(previous, next);
+    content.append(element("div", `diary-photo diary-viewer-photo tone-${index % DIARY_UI.photoTones}`),
+      element("p", "diary-viewer-caption", `${photo.label || "照片"} · 第 ${index + 1} / ${photos.length} 张 · 原型占位图`), nav);
+    showModal("查看照片", content);
+  }
+
+  function trashDiaryFromDetail() {
+    const id = state.diaryDetailId;
+    state.diaryEntries = state.diaryEntries.map(entry => entry.id === id ? FocusModel.moveDiaryToTrash(entry) : entry);
+    backToDiaryHome();
+    toast("已移入回收站，可在「更多 · 回收站」恢复");
+  }
+
+  /*
+   * 全屏编辑页：编辑的是工作副本 editor.draft；返回、切到其他页面或退到后台时，有改动就存入草稿箱。
+   * 新日记每次都是独立草稿（new-N），修改已有日记每条最多一份（edit:ID）。保存成功后移出草稿箱。
+   */
+  function diaryDraftFrom(entry) {
+    const date = entry ? FocusModel.diaryEntryDate(entry) : null;
+    return { title: entry?.title ?? "", text: entry?.text ?? "", occurredAt: localDateTimeValue(date ?? new Date()),
+      photos: (entry?.photos ?? []).map(photo => ({ ...photo })), audios: (entry?.audios ?? []).map(audio => ({ ...audio })) };
+  }
+
+  function cloneDiaryDraft(draft) {
+    return { title: draft.title, text: draft.text, occurredAt: draft.occurredAt,
+      photos: draft.photos.map(photo => ({ ...photo })), audios: draft.audios.map(audio => ({ ...audio })) };
+  }
+
+  function currentDiaryDraft() {
+    return state.diaryEditor?.draft ?? null;
+  }
+
+  function diaryDraftChanged(editor, draft) {
+    const base = diaryDraftFrom(editor.id ? findDiaryEntry(editor.id) : null);
+    if (!editor.id) base.occurredAt = draft.occurredAt;
+    return JSON.stringify(base) !== JSON.stringify(cloneDiaryDraft(draft));
+  }
+
+  /** 有改动就写入草稿箱，没改动（或改回原样）就移出草稿箱。返回是否存为草稿。 */
+  function storeDiaryDraft() {
+    const editor = state.diaryEditor;
+    if (!editor) return false;
+    if (!diaryDraftChanged(editor, editor.draft)) {
+      state.diaryDrafts.delete(editor.key);
+      return false;
+    }
+    editor.savedAt = new Date().toISOString();
+    state.diaryDrafts.set(editor.key, { ...cloneDiaryDraft(editor.draft), key: editor.key, entryId: editor.id, updatedAt: editor.savedAt });
+    return true;
+  }
+
+  /** 离开日记页或退到后台：先停录音，再把没写完的内容存入草稿；编辑页保持打开，回来可以接着写。 */
+  function suspendDiaryEditor(reason) {
+    if (!state.diaryEditor) return;
+    stopDiaryRecording(`${reason}已停止录音，已录内容保留在草稿中`);
+    if (storeDiaryDraft()) toast(`${reason}已自动存入草稿`);
+  }
+
+  function startDiaryEntry() {
+    openDiaryEditor(null);
+  }
+
+  function beginDiaryEditor(editor) {
+    state.diaryEditor = editor;
+    showDiaryView("editor");
+    renderDiaryEditor();
+    $("phone-content").scrollTop = 0;
+    $("diary-editor-title").focus({ preventScroll: true });
+  }
+
+  function openDiaryEditor(id) {
+    const key = id ? `edit:${id}` : `new-${state.nextDiaryDraftId++}`;
+    const stored = id ? state.diaryDrafts.get(key) : null;
+    beginDiaryEditor({ key, id, returnTo: state.diaryView === "detail" && id ? "detail" : "home", restored: !!stored,
+      savedAt: stored?.updatedAt ?? null, orphan: false, draft: stored ? cloneDiaryDraft(stored) : diaryDraftFrom(id ? findDiaryEntry(id) : null) });
+  }
+
+  function openDiaryDraft(key) {
+    const item = FocusModel.listDiaryDrafts([...state.diaryDrafts.values()], state.diaryEntries).find(value => value.draft.key === key);
+    if (!item) return;
+    beginDiaryEditor({ key, id: item.entry?.id ?? null, returnTo: "drafts", restored: true, savedAt: item.draft.updatedAt,
+      orphan: item.kind === "orphan", draft: cloneDiaryDraft(item.draft) });
+  }
+
+  function renderDiaryEditor() {
+    const editor = state.diaryEditor;
+    const draft = currentDiaryDraft();
+    $("diary-editor-title").textContent = editor.id ? "编辑日记" : "记一条";
+    const nodes = [];
+    if (editor.restored) {
+      const banner = element("div", "diary-draft-banner");
+      banner.setAttribute("role", "status");
+      banner.append(element("span", "", editor.orphan ? "原日记已删除，保存时将另存为新日记" : `继续草稿 · 最后编辑 ${stampLabel(editor.savedAt)}`),
+        taskButton("放弃草稿", "text-button", discardDiaryDraft));
+      nodes.push(banner);
+    }
+    const bind = (node, key) => node.addEventListener("input", () => { draft[key] = node.value; hideDiaryError(); });
+    const when = element("label", "diary-when");
+    const whenInput = element("input");
+    whenInput.type = "datetime-local";
+    whenInput.id = "diary-occurred-at";
+    whenInput.value = draft.occurredAt;
+    whenInput.max = localDateTimeValue(new Date());
+    bind(whenInput, "occurredAt");
+    when.append(element("span", "", "记录时间"), whenInput, element("small", "", "可补写过去的经历"));
+    const title = element("input", "diary-title-input");
+    title.id = "diary-title-input";
+    title.placeholder = "标题（可选）";
+    title.setAttribute("aria-label", "标题（可选）");
+    title.maxLength = FocusModel.DIARY_LIMITS.maxTitle;
+    title.value = draft.title;
+    bind(title, "title");
+    const text = element("textarea", "diary-text-input");
+    text.id = "diary-text-input";
+    text.placeholder = "今天发生了什么？有什么感受？";
+    text.setAttribute("aria-label", "正文");
+    text.maxLength = FocusModel.DIARY_LIMITS.maxText;
+    text.value = draft.text;
+    bind(text, "text");
+    nodes.push(when, title, text);
+    $("diary-editor-body").replaceChildren(...nodes);
+    hideDiaryError();
+    renderDiaryAttachments();
+    renderDiaryRecording();
+  }
+
+  function renderDiaryAttachments() {
+    const box = $("diary-editor-attachments");
+    const draft = currentDiaryDraft();
+    if (!draft) return;
+    const saved = new Set((state.diaryEditor.id ? findDiaryEntry(state.diaryEditor.id)?.audios ?? [] : []).map(audio => audio.id));
+    const nodes = [];
+    if (draft.photos.length) {
+      const grid = element("div", "diary-photo-grid");
+      draft.photos.forEach((photo, index) => {
+        const tile = element("div", `diary-photo tone-${index % DIARY_UI.photoTones}`);
+        const remove = taskButton("×", "diary-photo-remove", () => { draft.photos.splice(index, 1); renderDiaryAttachments(); });
+        remove.setAttribute("aria-label", `移除第 ${index + 1} 张照片`);
+        tile.append(remove);
+        grid.append(tile);
+      });
+      nodes.push(element("h4", "diary-section-title", `照片 · ${draft.photos.length} 张`), grid);
+    }
+    if (draft.audios.length) {
+      const list = element("div", "diary-audio-list");
+      draft.audios.forEach((audio, index) => {
+        const row = element("div", "diary-audio-row");
+        const remove = taskButton("移除", "diary-audio-remove", () => { draft.audios.splice(index, 1); renderDiaryAttachments(); });
+        remove.setAttribute("aria-label", `移除第 ${index + 1} 段原声`);
+        row.append(buildVoiceButton(audio), remove);
+        list.append(row);
+      });
+      nodes.push(element("h4", "diary-section-title", `原声 · ${draft.audios.length} 段`), list);
+      if (draft.audios.some(audio => !saved.has(audio.id))) nodes.push(element("p", "diary-draft-hint", "新录音已停止，目前在草稿中；保存日记后才成为正式记录。"));
+    }
+    box.replaceChildren(...nodes);
+  }
+
+  function showDiaryError(message) {
+    $("diary-editor-error").textContent = message;
+    $("diary-editor-error").hidden = false;
+    $("diary-editor-error").scrollIntoView({ block: "nearest" });
+  }
+
+  function hideDiaryError() {
+    $("diary-editor-error").hidden = true;
+  }
+
+  function discardDiaryDraft() {
+    confirmAction("放弃这份草稿？", "未保存的修改会被丢弃，已保存的日记不受影响。", () => {
+      const editor = state.diaryEditor;
+      cancelDiaryRecording();
+      state.diaryDrafts.delete(editor.key);
+      editor.draft = diaryDraftFrom(editor.id ? findDiaryEntry(editor.id) : null);
+      editor.restored = false;
+      editor.orphan = false;
+      renderDiaryEditor();
+    }, "放弃草稿");
+  }
+
+  /** 有目标日记时回到它的详情页；从草稿箱进入的回草稿箱；否则回首页并恢复阅读位置。 */
+  function leaveDiaryEditor(targetId, returnTo = "home") {
+    state.diaryEditor = null;
+    if (!targetId && returnTo === "drafts") openDiaryDrafts();
+    else if (targetId && findDiaryEntry(targetId)) {
+      state.diaryDetailId = targetId;
+      showDiaryView("detail");
+      renderDiaryDetail();
+      $("phone-content").scrollTop = 0;
+      $("diary-detail-heading").focus({ preventScroll: true });
+    } else backToDiaryHome();
+  }
+
+  function closeDiaryEditor() {
+    stopDiaryRecording("返回前已停止录音，已录内容保留在草稿中");
+    const editor = state.diaryEditor;
+    const kept = storeDiaryDraft();
+    leaveDiaryEditor(editor.returnTo === "detail" ? editor.id : null, editor.returnTo);
+    if (kept) toast("已存入草稿，可在「更多 · 草稿」继续写");
+  }
+
+  function saveDiaryEditor() {
+    stopDiaryRecording("录音已停止");
+    const editor = state.diaryEditor;
+    const draft = currentDiaryDraft();
+    const original = editor.id ? findDiaryEntry(editor.id) : null;
+    const originalDate = original && FocusModel.diaryEntryDate(original);
+    const keepTime = originalDate && localDateTimeValue(originalDate) === draft.occurredAt;
+    let valid;
+    try {
+      if (editor.id && !original) throw new Error("这条日记已不在列表中，无法保存修改。");
+      valid = FocusModel.validateDiaryEntry({ ...draft, occurredAt: keepTime ? original.occurredAt : new Date(draft.occurredAt) });
+    } catch (error) {
+      showDiaryError(error.message);
+      return;
+    }
+    const now = new Date().toISOString();
+    const saved = original ? { ...original, ...valid, updatedAt: now }
+      : { id: `diary-${state.nextDiaryId++}`, ...valid, createdAt: now, updatedAt: now, deletedAt: null };
+    state.diaryEntries = original ? state.diaryEntries.map(entry => entry.id === saved.id ? saved : entry) : [saved, ...state.diaryEntries];
+    if (!original && !state.diarySearch.trim()) state.diaryMonth = localDateKey(new Date(saved.occurredAt)).slice(0, 7);
+    state.diaryDrafts.delete(editor.key);
+    leaveDiaryEditor(saved.id);
+    toast(original ? "已保存修改" : "已保存");
+  }
+
+  function pickDiaryPhotos() {
+    stopDiaryRecording("选图前已停止录音，已录内容保留在草稿中");
+    const content = element("div", "modal-copy");
+    content.append(element("p", "", "原型不读取相册，用占位图模拟系统选图的结果。正式版只读取你主动选中的照片。"));
+    const actions = element("div", "modal-actions");
+    actions.append(...DIARY_UI.pickCounts.map(count => taskButton(`选择 ${count} 张`, "secondary-button", () => {
+      closeModal();
+      const draft = currentDiaryDraft();
+      if (!draft) return;
+      for (let index = 0; index < count; index += 1) draft.photos.push({ id: `diary-photo-${state.nextDiaryAttachmentId++}`, label: `新照片 ${draft.photos.length + 1}` });
+      hideDiaryError();
+      renderDiaryAttachments();
+    })));
+    const cancel = taskButton("取消选择", "text-button", () => { closeModal(); toast("未选择照片，已输入的内容都还在"); });
+    content.append(actions, cancel);
+    showModal("模拟系统选图", content);
+  }
+
+  /* 模拟录音：点一次开始、再点一次结束；切出、离开、选图、返回都会先停止并保留。 */
+  function requestDiaryRecording() {
+    if (state.diaryRecording) { stopDiaryRecording(); return; }
+    const grant = () => { state.micPermission = MIC.granted; beginDiaryRecording(); };
+    if (state.micPermission === MIC.granted) grant();
+    else if (state.micPermission === MIC.denied) {
+      confirmAction("麦克风权限未开启", "正式版会引导你到系统设置中开启，不会反复弹出授权。文字和照片不受影响。", grant, "模拟已在设置中开启");
+    } else {
+      confirmAction("允许录音？", "模拟系统授权：只在你点击录音时使用麦克风，离开日记或锁屏就停止，不在后台录音。", grant, "允许", () => {
+        state.micPermission = MIC.denied;
+        toast("未获得麦克风权限，文字和照片仍可使用");
+      });
+    }
+  }
+
+  function recordingSeconds() {
+    return Math.floor((performance.now() - state.diaryRecording.startedAt) / LIMITS.millisecondsPerSecond);
+  }
+
+  function beginDiaryRecording() {
+    if (state.diaryRecording || !state.diaryEditor || $("page-diary").hidden) return;
+    const time = element("span", "diary-recording-time", formatTime(0));
+    state.diaryRecording = { startedAt: performance.now(), interval: setInterval(() => { time.textContent = formatTime(recordingSeconds()); }, UI.tickMs) };
+    const stop = taskButton("停止", "diary-recording-stop", () => stopDiaryRecording());
+    $("diary-recording-bar").replaceChildren(element("span", "diary-recording-dot"), element("strong", "", "正在录音"), time, stop);
+    renderDiaryRecording();
+  }
+
+  function cancelDiaryRecording() {
+    if (!state.diaryRecording) return;
+    clearInterval(state.diaryRecording.interval);
+    state.diaryRecording = null;
+    renderDiaryRecording();
+  }
+
+  function stopDiaryRecording(message = "录音已停止，已放入草稿") {
+    if (!state.diaryRecording) return false;
+    const seconds = recordingSeconds();
+    cancelDiaryRecording();
+    const draft = currentDiaryDraft();
+    if (!draft || seconds < FocusModel.DIARY_LIMITS.minAudioSeconds) toast("录音不足 1 秒，未保留");
+    else {
+      draft.audios.push({ id: `diary-audio-${state.nextDiaryAttachmentId++}`, seconds });
+      hideDiaryError();
+      toast(message);
+    }
+    renderDiaryAttachments();
+    return true;
+  }
+
+  function renderDiaryRecording() {
+    const recording = !!state.diaryRecording;
+    $("diary-record").setAttribute("aria-pressed", String(recording));
+    $("diary-record").classList.toggle("recording", recording);
+    $("diary-record-label").textContent = recording ? "停止录音" : "录音";
+    $("diary-recording-bar").hidden = !recording;
+  }
+
+  function keepDiaryScroll(action) {
+    const scroll = $("phone-content").scrollTop;
+    action();
+    closeSwipes();
+    renderDiary();
+    $("phone-content").scrollTop = scroll;
+  }
+
+  function trashDiary(id) {
+    keepDiaryScroll(() => {
+      state.diaryEntries = state.diaryEntries.map(entry => entry.id === id ? FocusModel.moveDiaryToTrash(entry) : entry);
+    });
+    toast("已移入回收站，可在「更多 · 回收站」恢复");
+  }
+
+  function setDiaryMonth(month) {
+    const current = localDateKey(new Date()).slice(0, 7);
+    if (month > current || month < `${UI.minYear}-01`) return;
+    state.diaryMonth = month;
+    state.diarySearch = "";
+    $("diary-search").value = "";
+    closeSwipes();
+    renderDiary();
+    $("phone-content").scrollTop = 0;
+  }
+
+  function shiftDiaryMonth(offset) {
+    const [year, month] = state.diaryMonth.split("-").map(Number);
+    setDiaryMonth(localDateKey(new Date(year, month - 1 + offset, 1)).slice(0, 7));
+  }
+
+  function diaryMonthPicker() {
+    monthPicker({ selected: state.diaryMonth, months: diarySelection().months, unit: "条",
+      describe: count => `${count} 条日记`, onPick: setDiaryMonth });
+  }
+
+  function diaryMoreRow(iconName, title, caption, action) {
+    const row = taskButton("", "settings-row", () => { closeModal(); action(); });
+    const iconWrap = element("span", "setting-icon");
+    iconWrap.append(icon(iconName));
+    const copy = element("div");
+    copy.append(element("strong", "", title), element("small", "", caption));
+    const arrow = icon("arrow");
+    arrow.classList.add("arrow");
+    row.append(iconWrap, copy, arrow);
+    return row;
+  }
+
+  function diaryMore() {
+    const content = element("div", "modal-copy");
+    const group = element("div", "settings-group");
+    group.append(
+      diaryMoreRow("edit", "草稿", `${state.diaryDrafts.size} 份 · 没写完离开时自动保存`, openDiaryDrafts),
+      diaryMoreRow("trash", "回收站", `${FocusModel.trashedDiaryEntries(state.diaryEntries).length} 条 · 不会自动清空`, openDiaryTrash));
+    content.append(group, element("p", "", "首版不设日记独立锁；语音转文字与日记导出尚未接入，录音只保存原声。"));
+    showModal("更多", content);
+  }
+
+  function openDiaryDrafts() {
+    showDiaryView("drafts");
+    renderDiary();
+    $("phone-content").scrollTop = 0;
+    $("diary-drafts-heading").focus({ preventScroll: true });
+  }
+
+  function renderDiaryDrafts() {
+    const items = FocusModel.listDiaryDrafts([...state.diaryDrafts.values()], state.diaryEntries);
+    $("diary-drafts-list").replaceChildren(...items.map(({ draft, entry, kind }) => {
+      const item = element("article", "diary-trash-item diary-draft-item");
+      item.setAttribute("role", "listitem");
+      const label = kind === "new" ? "新日记" : kind === "edit" ? `修改：${diaryName(entry)}` : "原日记已删除 · 将另存为新日记";
+      const attachments = diaryAttachments({ photos: draft.photos, audios: draft.audios });
+      const summary = draft.title.trim() || draft.text.trim() || attachments || "空白草稿";
+      const open = taskButton("", "diary-draft-open", () => openDiaryDraft(draft.key));
+      open.setAttribute("aria-label", `继续写草稿：${label}，${summary}`);
+      open.append(element("span", `diary-draft-kind ${kind}`, label),
+        element("span", "diary-time", `最后编辑 ${stampLabel(draft.updatedAt)} · 记录时间 ${draft.occurredAt.replace("T", " ")}`));
+      if (draft.title.trim()) open.append(element("strong", "diary-title", draft.title.trim()));
+      open.append(element("span", "diary-text", draft.text.trim() || (draft.title.trim() ? "" : summary)));
+      if (attachments) open.append(element("span", "diary-trash-attachments", attachments));
+      const actions = element("div", "diary-trash-actions");
+      const remove = taskButton("删除草稿", "age-action danger", () => confirmAction("删除这份草稿？",
+        `${label}的草稿会被删除${attachments ? `，其中新添加的照片与录音也会一并删除` : ""}；已保存的日记不受影响。`, () => {
+          state.diaryDrafts.delete(draft.key);
+          renderDiary();
+          toast("已删除草稿");
+        }, "删除草稿"));
+      remove.setAttribute("aria-label", `删除草稿：${summary}`);
+      actions.append(taskButton("继续写", "age-action", () => openDiaryDraft(draft.key)), remove);
+      item.append(open, actions);
+      return item;
+    }));
+    if (!items.length) {
+      const empty = element("div", "empty-state");
+      empty.append(element("strong", "", "没有草稿"), element("p", "", "没写完就离开时，日记会自动存到这里。"));
+      $("diary-drafts-list").append(empty);
+    }
+  }
+
+  function openDiaryTrash() {
+    showDiaryView("trash");
+    renderDiary();
+    $("phone-content").scrollTop = 0;
+    $("diary-trash-heading").focus({ preventScroll: true });
+  }
+
+  function closeDiaryTrash() {
+    backToDiaryHome();
+    $("diary-more").focus({ preventScroll: true });
+  }
+
+  function renderDiaryTrash() {
+    const entries = FocusModel.trashedDiaryEntries(state.diaryEntries);
+    $("diary-trash-list").replaceChildren(...entries.map(entry => {
+      const item = element("article", "diary-trash-item");
+      item.setAttribute("role", "listitem");
+      const date = FocusModel.diaryEntryDate(entry);
+      const deleted = new Date(entry.deletedAt);
+      item.append(element("span", "diary-time", `${date ? `${localDateKey(date)} ${diaryTime(entry)}` : "时间未记录"} · ${Number.isFinite(deleted.getTime()) ? `${localDateKey(deleted)} 删除` : "删除时间未记录"}`));
+      if (entry.title) item.append(element("strong", "diary-title", entry.title));
+      item.append(element("span", "diary-text", entry.text || diaryName(entry)));
+      const attachments = diaryAttachments(entry);
+      if (attachments) item.append(element("span", "diary-trash-attachments", attachments));
+      const actions = element("div", "diary-trash-actions");
+      const restore = taskButton("恢复", "age-action", () => {
+        state.diaryEntries = state.diaryEntries.map(current => current.id === entry.id ? FocusModel.restoreDiaryEntry(current) : current);
+        renderDiary();
+        toast(`已恢复到 ${date ? localDateKey(date) : "原日期"}`);
+      });
+      restore.setAttribute("aria-label", `恢复日记：${diaryName(entry)}`);
+      const destroy = taskButton("永久删除", "age-action danger", () => confirmAction("永久删除这条日记？",
+        `「${diaryName(entry)}」${attachments ? `及其 ${attachments}` : ""}将被永久删除，无法恢复。`, () => {
+          state.diaryEntries = state.diaryEntries.filter(current => current.id !== entry.id);
+          renderDiary();
+          toast("已永久删除");
+        }, "永久删除"));
+      destroy.setAttribute("aria-label", `永久删除日记：${diaryName(entry)}`);
+      actions.append(restore, destroy);
+      item.append(actions);
+      return item;
+    }));
+    if (!entries.length) {
+      const empty = element("div", "empty-state");
+      empty.append(element("strong", "", "回收站是空的"), element("p", "", "删除的日记会先放到这里，需要时可以恢复。"));
+      $("diary-trash-list").append(empty);
+    }
   }
 
   function showTaskUndo() {
@@ -1671,7 +2346,10 @@
     const box = $("modal").getBoundingClientRect();
     if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) closeModal();
   });
-  document.querySelectorAll("[data-page]").forEach(button => button.addEventListener("click", () => navigate(button.dataset.page)));
+  document.querySelectorAll("[data-page]").forEach(button => button.addEventListener("click", () => {
+    if (button.dataset.page === "diary" && !$("page-diary").hidden) reselectDiaryTab();
+    else navigate(button.dataset.page);
+  }));
   window.addEventListener("hashchange", () => navigate(location.hash.slice(1), false));
   document.querySelectorAll("[data-mode]").forEach(button => button.addEventListener("click", () => {
     if (button.dataset.mode === timer.mode) return;
@@ -1695,6 +2373,23 @@
     state.taskSearch = event.target.value.trim();
     state.historyViews.delete("search");
   }));
+  $("diary-month-prev").addEventListener("click", () => shiftDiaryMonth(-1));
+  $("diary-month-next").addEventListener("click", () => shiftDiaryMonth(1));
+  $("diary-month-picker").addEventListener("click", diaryMonthPicker);
+  $("diary-month-current").addEventListener("click", () => setDiaryMonth(localDateKey(new Date()).slice(0, 7)));
+  $("diary-search").addEventListener("input", event => { state.diarySearch = event.target.value; closeSwipes(); renderDiary(); });
+  $("diary-more").addEventListener("click", diaryMore);
+  $("add-diary").addEventListener("click", startDiaryEntry);
+  $("diary-trash-back").addEventListener("click", closeDiaryTrash);
+  $("diary-detail-back").addEventListener("click", () => backToDiaryHome(state.diaryDetailId));
+  $("diary-detail-edit").addEventListener("click", () => openDiaryEditor(state.diaryDetailId));
+  $("diary-detail-delete").addEventListener("click", trashDiaryFromDetail);
+  $("diary-editor-cancel").addEventListener("click", closeDiaryEditor);
+  $("diary-editor-save").addEventListener("click", saveDiaryEditor);
+  $("diary-add-photo").addEventListener("click", pickDiaryPhotos);
+  $("diary-record").addEventListener("click", requestDiaryRecording);
+  document.addEventListener("visibilitychange", () => { if (document.hidden && !$("page-diary").hidden) suspendDiaryEditor("退到后台时"); });
+  $("diary-drafts-back").addEventListener("click", () => { backToDiaryHome(); $("diary-more").focus({ preventScroll: true }); });
   $("task-month-prev").addEventListener("click", () => shiftTaskHistoryMonth(-1));
   $("task-month-next").addEventListener("click", () => shiftTaskHistoryMonth(1));
   $("task-month-picker").addEventListener("click", taskMonthPicker);

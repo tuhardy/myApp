@@ -55,7 +55,9 @@ data class ActiveTimer(
 data class AppState(
     val projects: List<Project> = emptyList(), val todos: List<Todo> = emptyList(),
     val sessions: List<FocusSession> = emptyList(), val progress: List<ProgressEntry> = emptyList(),
-    val settings: AppSettings = AppSettings(), val timer: ActiveTimer? = null, val loading: Boolean = true
+    val settings: AppSettings = AppSettings(), val timer: ActiveTimer? = null, val loading: Boolean = true,
+    /** 日记不进入现有完整备份，恢复备份时保持不变。 */
+    val diaries: List<DiaryEntry> = emptyList()
 )
 data class TimerEvent(val kind: TimerEventKind, val projectTitle: String, val sessionId: String? = null)
 data class BackupData(val projects: List<Project>, val todos: List<Todo>, val sessions: List<FocusSession>, val progress: List<ProgressEntry>, val settings: AppSettings)

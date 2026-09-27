@@ -770,7 +770,10 @@ internal fun TodoMonthDialog(
     months: List<TodoMonthCount>,
     today: LocalDate,
     onDismiss: () -> Unit,
-    onSelect: (YearMonth) -> Unit
+    onSelect: (YearMonth) -> Unit,
+    /** 待办历史与日记共用：计数单位与读屏描述可替换。 */
+    unit: String = "件",
+    describe: (Int) -> String = { "完成 $it 件" }
 ) {
     var year by remember(month, today.year) { mutableIntStateOf(month.year.coerceIn(TodoUiLimits.MIN_YEAR, today.year)) }
     var choosingYear by remember { mutableStateOf(false) }
@@ -802,7 +805,7 @@ internal fun TodoMonthDialog(
                             OutlinedButton(
                                 enabled = !future, onClick = { onSelect(target) },
                                 modifier = Modifier.weight(1f).heightIn(min = 64.dp).semantics {
-                                    contentDescription = "${year}年${value.value}月，${if (future) "尚未到来" else "完成 $count 件"}"
+                                    contentDescription = "${year}年${value.value}月，${if (future) "尚未到来" else describe(count)}"
                                 },
                                 shape = RoundedCornerShape(12.dp), contentPadding = PaddingValues(horizontal = 2.dp, vertical = 10.dp),
                                 border = BorderStroke(1.dp, if (selected) Accent else Line),
@@ -811,7 +814,7 @@ internal fun TodoMonthDialog(
                             ) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text("${value.value} 月", fontSize = 14.sp)
-                                    Text(if (future) "—" else if (count > 0) "$count 件" else "暂无记录", fontSize = 10.sp,
+                                    Text(if (future) "—" else if (count > 0) "$count $unit" else "暂无记录", fontSize = 10.sp,
                                         color = if (future) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f) else Muted)
                                 }
                             }

@@ -9,6 +9,114 @@ const { localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focu
 const { completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks } = require("./model.js");
 const { execFileSync } = require("node:child_process");
 const { initialFocusItems, validateFocusItem, focusHourDistribution, validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary } = require("./model.js");
+const { initialDiaryEntries, selectDiaryEntries, trashedDiaryEntries, moveDiaryToTrash, restoreDiaryEntry, parseDiaryDateQuery, validateDiaryEntry, listDiaryDrafts } = require("./model.js");
+
+test("日记草稿按最后编辑倒序，区分新日记、修改与原日记已删除", () => {
+  const entries = [{ id: "a", deletedAt: null }, { id: "b", deletedAt: "2026-09-28T00:00:00.000Z" }];
+  const drafts = [
+    { key: "new-1", entryId: null, updatedAt: "2026-09-28T01:00:00.000Z" },
+    { key: "edit:a", entryId: "a", updatedAt: "2026-09-28T03:00:00.000Z" },
+    { key: "edit:b", entryId: "b", updatedAt: "2026-09-28T02:00:00.000Z" },
+    { key: "edit:c", entryId: "c", updatedAt: "2026-09-27T02:00:00.000Z" },
+  ];
+  const list = listDiaryDrafts(drafts, entries);
+  assert.deepEqual(list.map(item => [item.draft.key, item.kind]), [["edit:a", "edit"], ["edit:b", "orphan"], ["new-1", "new"], ["edit:c", "orphan"]]);
+  assert.equal(list[0].entry, entries[0]);
+  assert.equal(list[1].entry, null);
+  assert.deepEqual(listDiaryDrafts(undefined, undefined), []);
+});
+
+test("日记日期搜索支持常见写法，年份可省略，非法日期不当作日期", () => {
+  const now = new Date(2026, 8, 28, 21, 0);
+  const day = (year, month, dayOfMonth) => ({ year, month, day: dayOfMonth });
+  const pick = value => value && { year: value.year, month: value.month, day: value.day };
+  for (const query of ["2026-09-27", "2026/9/27", "2026.9.27", "2026年9月27日", "20260927", " 2026 年 9 月 27 日 "]) assert.deepEqual(pick(parseDiaryDateQuery(query, now)), day(2026, 9, 27));
+  for (const query of ["9-27", "9/27", "9.27", "9月27日", "9月27", "09-27"]) assert.deepEqual(pick(parseDiaryDateQuery(query, now)), day(null, 9, 27));
+  assert.deepEqual(pick(parseDiaryDateQuery("2026年9月", now)), day(2026, 9, null));
+  assert.deepEqual(pick(parseDiaryDateQuery("9月", now)), day(null, 9, null));
+  assert.deepEqual(pick(parseDiaryDateQuery("昨天", now)), day(2026, 9, 27));
+  assert.equal(parseDiaryDateQuery("2月29日", now).label, "2月29日");
+  assert.equal(parseDiaryDateQuery("2026年9月27日", now).label, "2026年9月27日");
+  for (const query of ["2026-02-29", "13月1日", "9月31日", "0-1", "跑步", "", "2026-9-27-1"]) assert.equal(parseDiaryDateQuery(query, now), null);
+});
+
+test("日记搜索可按日期找出当天全部记录，同时保留文字匹配", () => {
+  const now = new Date(2026, 8, 28, 21, 0);
+  const entry = (id, occurredAt, text) => ({ id, title: "", text, photos: [], audios: [], occurredAt: occurredAt.toISOString(), deletedAt: null });
+  const entries = [entry("a", new Date(2026, 8, 27, 8), "跑步"), entry("b", new Date(2026, 8, 27, 22), "评审"),
+    entry("c", new Date(2025, 8, 27, 9), "去年"), entry("d", new Date(2026, 8, 20, 9), "想起 9.27 那天")];
+  const ids = query => selectDiaryEntries(entries, { now, query }).groups.flatMap(group => group.entries.map(item => item.id));
+  assert.deepEqual(ids("2026-09-27"), ["b", "a"]);
+  assert.deepEqual(ids("9月27日"), ["b", "a", "c"]);
+  assert.deepEqual(ids("9.27"), ["b", "a", "d", "c"]);
+  assert.deepEqual(ids("昨天"), ["b", "a"]);
+  assert.equal(selectDiaryEntries(entries, { now, query: "9月27日" }).dateLabel, "9月27日");
+  assert.equal(selectDiaryEntries(entries, { now, query: "跑步" }).dateLabel, null);
+});
+
+test("日记保存校验：可纯附件，不存空记录，时间可补写但不能在未来", () => {
+  const now = new Date(2026, 8, 28, 21, 0);
+  const past = new Date(2026, 0, 1, 8, 0);
+  assert.deepEqual(validateDiaryEntry({ title: "  标题 ", text: " 正文\n ", occurredAt: past.toISOString(), extra: 1 }, now),
+    { title: "标题", text: "正文", photos: [], audios: [], occurredAt: past.toISOString() });
+  assert.equal(validateDiaryEntry({ photos: [{ id: "p", label: "天空" }], occurredAt: past }, now).photos.length, 1);
+  assert.equal(validateDiaryEntry({ audios: [{ id: "v", seconds: 3 }], occurredAt: now }, now).audios[0].seconds, 3);
+  assert.throws(() => validateDiaryEntry({ title: " ", text: "\n", occurredAt: past }, now), /写点什么/);
+  assert.throws(() => validateDiaryEntry({ text: "a", occurredAt: new Date(2026, 8, 28, 21, 1) }, now), /晚于现在/);
+  assert.throws(() => validateDiaryEntry({ text: "a", occurredAt: "坏时间" }, now), /有效的记录时间/);
+  assert.throws(() => validateDiaryEntry({ title: "字".repeat(51), occurredAt: past }, now), /标题/);
+  for (const seconds of [0, 1.5, "3", null]) assert.throws(() => validateDiaryEntry({ audios: [{ id: "v", seconds }], occurredAt: past }, now));
+  assert.throws(() => validateDiaryEntry({ photos: [{ label: "无标识" }], occurredAt: past }, now), /标识/);
+});
+
+test("日记首页按月展示未删除记录，同日多条按时间倒序，搜索覆盖全部时间且只匹配文字", () => {
+  const now = new Date(2026, 8, 28, 21, 0);
+  const at = (month, day, hour) => new Date(2026, month, day, hour).toISOString();
+  const entry = (id, occurredAt, fields = {}) => ({ id, title: "", text: "", photos: [], audios: [], occurredAt, deletedAt: null, ...fields });
+  const entries = [
+    entry("a", at(8, 27, 8), { text: "早起跑步" }),
+    entry("b", at(8, 27, 22), { title: "评审", text: "顺利" }),
+    entry("c", at(8, 28, 9), { audios: [{ id: "v", seconds: 42 }] }),
+    entry("d", at(7, 10, 9), { text: "八月的跑步" }),
+    entry("e", at(8, 20, 9), { text: "跑步", deletedAt: at(8, 21, 9) }),
+    entry("f", "坏时间", { text: "跑步没有时间" }),
+  ];
+  const result = selectDiaryEntries(entries, { now });
+  assert.deepEqual(result.groups.map(group => group.label), ["9月28日 周一 · 今天", "9月27日 周日 · 昨天"]);
+  assert.deepEqual(result.groups[1].entries.map(item => item.id), ["b", "a"]);
+  assert.equal(result.total, 3);
+  assert.deepEqual(result.months, [{ key: "2026-09", count: 3 }, { key: "2026-08", count: 1 }]);
+  assert.equal(result.latestMonth, "2026-09");
+  const search = selectDiaryEntries(entries, { now, month: "2026-08", query: " 跑步 " });
+  assert.deepEqual(search.groups.flatMap(group => group.entries.map(item => item.id)), ["a", "d", "f"]);
+  assert.equal(search.groups.at(-1).label, "时间未记录");
+  assert.equal(selectDiaryEntries(entries, { now, query: "评审" }).total, 1);
+  assert.equal(selectDiaryEntries(entries, { now, month: "2026-07" }).total, 0);
+  for (const month of ["2026-10", "2026-13", "2026-9", null]) assert.throws(() => selectDiaryEntries(entries, { now, month }));
+});
+
+test("日记回收站保留原日期与附件，恢复不改记录日期，重复移入不改删除时间", () => {
+  const now = new Date(2026, 8, 28, 12, 0);
+  const original = { id: "x", title: "", text: "晚霞", photos: [{ id: "p", label: "天空" }], audios: [{ id: "v", seconds: 5 }], occurredAt: new Date(2026, 8, 1).toISOString(), deletedAt: null };
+  const trashed = moveDiaryToTrash(original, now);
+  assert.equal(trashed.deletedAt, now.toISOString());
+  assert.equal(moveDiaryToTrash(trashed, new Date(2026, 8, 29)).deletedAt, now.toISOString());
+  assert.deepEqual(restoreDiaryEntry(trashed), original);
+  assert.equal(original.deletedAt, null);
+  const older = { ...trashed, id: "y", deletedAt: new Date(2026, 8, 2).toISOString() };
+  assert.deepEqual(trashedDiaryEntries([older, original, trashed]).map(item => item.id), ["x", "y"]);
+});
+
+test("日记示例数据含同日多条、纯语音、照片与回收站记录，且不晚于当前时间", () => {
+  const now = new Date(2026, 8, 28, 21, 0);
+  const entries = initialDiaryEntries(now);
+  assert.equal(new Set(entries.map(item => item.id)).size, entries.length);
+  assert.ok(entries.every(item => new Date(item.occurredAt) <= now));
+  assert.ok(entries.some(item => !item.text && item.audios.length));
+  assert.ok(entries.some(item => item.photos.length > 3));
+  assert.equal(trashedDiaryEntries(entries).length, 1);
+  assert.ok(selectDiaryEntries(entries, { now }).groups.some(group => group.entries.length > 1));
+});
 
 test("进度校验清理必填笔记，完成度可选且仅允许 0–100 整数", () => {
   assert.equal(LIMITS.maxProgressNote, 2000);

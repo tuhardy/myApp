@@ -13,7 +13,7 @@ SCREENSHOT_DIRECTORY = Path(mkdtemp(prefix="focus-prototype-"))
 DESKTOP_VIEWPORT = {"width": 1440, "height": 1100}
 MOBILE_WIDTHS = (320, 375, 390, 480)
 MOBILE_HEIGHT = 844
-PAGES = ("focus", "tasks", "usage", "profile")
+PAGES = ("focus", "tasks", "diary", "usage", "profile")
 ONE_MINUTE_MS = 60_000
 HOURS_PER_DAY = 24
 STAT_PERIODS = (("day", 24), ("week", 7), ("month", 30), ("year", 12))

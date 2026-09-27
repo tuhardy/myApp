@@ -1,6 +1,6 @@
 # 项目约定
 
-- 用户已确认原型与原生开发范围。根目录保留「专注助手」浏览器原型，`android/` 是 Kotlin + Compose 原生工程；下文涉及 DOM 和内存示例数据的规则仅适用于浏览器原型。Android 使用本机真实数据，不得用示例数据替代未授权或缺失记录。
+- 用户已确认原型与原生开发范围（含日记模块，见文末「日记」一节）。根目录保留「专注助手」浏览器原型，`android/` 是 Kotlin + Compose 原生工程；下文涉及 DOM 和内存示例数据的规则仅适用于浏览器原型。Android 使用本机真实数据，不得用示例数据替代未授权或缺失记录。
 - 运行界面没有第三方依赖、远程资源或构建步骤。使用现代 Edge / Chrome，直接打开 `index.html` 即可。
 - `model.js` 是可独立测试的计时与待办模型；`app.js` 负责 DOM 交互；`styles.css` 负责响应式界面。
 - 所有原型数据仅驻留内存，刷新恢复示例。备份、权限、系统通知、用时统计与自动化执行不得描述为已接入真实手机。
@@ -144,3 +144,19 @@ powershell -ExecutionPolicy Bypass -File .\verify.ps1 -Rich testDebugUnitTest -P
 - Android 已按设计稿还原首页与计时页：首页含今日汇总行、分类字形、进度预览与「打开」箭头；计时页用自绘 `Canvas` 圆环，不限时不画进度环，无计时才显示模式切换。新建/编辑改为 `ModalBottomSheet`，时长用 LazyColumn 自绘滚轮（吸附滚动，小时 0–23、分钟 0–59，无法输入非法值）；草稿按项目保存在内存 `ProjectDrafts`，保存成功或恢复备份时清除，进程重启即丢弃。
 - 新建/编辑项目采用独立底部面板 `#project-sheet`，以文字单选按钮切换计时模式，不使用下拉框。下划线先向新位置拉伸再收拢（320ms），快速反向从当前位置接续，减少动画模式直接切换。正计时默认显示不限时，按需展开目标输入；各模式、各项目草稿独立保留，关闭/Esc/遮罩/下拖不丢草稿，保存成功后清除对应草稿，刷新仍重置。
 - 若需本机服务，在 `design/focus/` 目录运行 `uv run --no-project --python 3.12 python -m http.server 5174 --bind 127.0.0.1`。
+
+## 日记（浏览器原型 + Android）
+
+- Android 已迁移（0.6.0 / versionCode 13）：规则在 `domain/Diary.kt` 的 `DiaryRules`（校验、`parseDateQuery`、`select`、回收站、`unreferenced`），界面在 `ui/DiaryScreens.kt`（`DiaryUiState` 四视图、`DiaryDrafts`、首页/详情/编辑/回收站），附件存储在 `data/DiaryFiles.kt`，录音/播放/缩略图在 `platform/DiaryMedia.kt`，单测 `DiaryTest.kt`。
+- Room 升到 v2，`MIGRATION_1_2` 只新增 `diary` 表（与其他表同为 id/payload/position），覆盖升级保留旧数据；以后改表必须继续写迁移，不能靠破坏性重建。
+- 日记不进入现有完整备份：`restoreBackup` 必须带上 `current.diaries`，否则 `persist` 的差量同步会把日记全部删掉。备份与恢复文案已写明「暂不含日记 / 不会改动日记」。
+- 照片用系统照片选择器（`PickMultipleVisualMedia`，无需存储权限），复制到 `filesDir/diary/`，数据库只存文件名（`DiaryRules.isSafeFileName` 防路径穿越）；BitmapFactory 无法解码的格式拒绝导入。录音用 `MediaRecorder`（AAC/m4a），`RECORD_AUDIO` 首次点击才申请，拒绝后再点只引导去系统设置；编辑页 `ON_STOP`、离开编辑页、选图、返回、保存前都先停止并把录音放进草稿，不足 1 秒或设备中断时不保留并提示。
+- 草稿只在内存；返回保留，保存成功清除。启动时 `DiaryFiles.cleanOrphans` 删除未被正式日记引用的附件（此时不可能存在草稿）；保存/永久删除/放弃草稿后只删除既不属于任何日记、也不被草稿引用的文件。
+- 写日记（编辑页）时隐藏底部导航，也不弹专注进度提示。
+
+- 需求见根目录 `日记功能需求文档.md`（`docs/` 被忽略规则挡住，助手读不到）。导航顺序「专注、待办、日记、用时、我的」，`#diary` 页内含首页 / 回收站 / 详情 / 全屏编辑四个子视图，由 `state.diaryView` 切换；编辑页隐藏底部导航（`.phone.diary-editing`）。
+- 纯函数在 `model.js`：`selectDiaryEntries`（按月或全部时间搜索，匹配标题、正文或日期）、`parseDiaryDateQuery`（`2026-09-27`、`2026/9/27`、`9月27日`、`9-27`、`9.27`、`20260927`、`2026年9月`、`9月`、今天/昨天/前天，年份可省略）、`validateDiaryEntry`（至少有文字/照片/录音之一，时间可补写不可在未来）、回收站 `moveDiaryToTrash` / `restoreDiaryEntry` / `trashedDiaryEntries`。
+- 删除只进回收站，不加撤销条；回收站不自动清空，永久删除需确认。日记的删除配色为淡红（`--danger*` 变量），仅作用于日记，待办删除不变。
+- 原型照片为占位色块（模拟系统选图，含取消），录音为模拟（首次模拟授权、拒绝后不反复弹出；点一次开始再点结束；离开日记、切出页面、选图、返回、保存前都先停止并保留到草稿；不足 1 秒不保留）。不得描述为已读取相册或麦克风。
+- 草稿箱（原型已做，Android 待落实）：编辑页改的是工作副本 `diaryEditor.draft`，点返回、离开日记页、退到后台（`visibilitychange`）时有改动就存入 `diaryDrafts`（`suspendDiaryEditor` / `storeDiaryDraft`），改回原样则移出；退到后台时编辑页保持打开。新日记每次都是独立草稿（`new-N`，点「+」总是空白），修改已有日记每条最多一份（`edit:ID`，再次编辑自动接上）。入口在「更多 · 草稿」，列表规则在 `listDiaryDrafts`（按最后编辑倒序，原日记已删除或在回收站时为 orphan，保存时另存为新日记）。草稿可继续写或确认后删除，保存成功后移出草稿箱并进入详情。原型草稿只在内存，Android 需持久化到本机。
+- 页签重选（原型已做，Android 待落实）：已在日记页时再点底部「日记」，草稿箱 / 回收站 / 详情直接回日记首页（恢复首页阅读位置），已在首页则回到顶部；从别的页签切回日记仍回到离开时的页面。编辑页保持全屏、不显示导航栏、不另加按钮，只靠「返回」；若经侧栏等入口在编辑中回首页，先停录音并存草稿（`reselectDiaryTab`）。编辑页的录音条、附件区、错误提示是 `index.html` 里的静态节点，因为单测要求 `app.js` 中 `$("id")` 引用的 ID 必须存在于 HTML。

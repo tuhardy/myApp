@@ -26,6 +26,13 @@
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
     <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4 10a8 8 0 1 1 1 8M4 4v6h6"/></symbol>
     <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="16" cy="17" r="3"/></symbol>
+    <symbol id="i-diary" viewBox="0 0 24 24"><path d="M6 3h11a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1ZM9 3v18M12 8h4M12 12h4"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><path d="M5 12h.01M12 12h.01M19 12h.01" stroke-width="3"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16ZM13 7l4 4"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 8"/></symbol>
   </svg>
   <main class="workspace">
     <aside class="presentation">
@@ -37,8 +44,9 @@
         <div class="feature-map">
           <button data-page="focus" class="feature-link active"><span>01</span><div><strong>专注当下</strong><small>一段时间，只做一件事</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
           <button data-page="tasks" class="feature-link"><span>02</span><div><strong>有序行动</strong><small>让每个小目标，都有着落</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
-          <button data-page="usage" class="feature-link"><span>03</span><div><strong>看见时间</strong><small>了解习惯，找回自己的节奏</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
-          <button data-page="profile" class="feature-link"><span>04</span><div><strong>由你定义</strong><small>本地数据与未来的自动化扩展</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
+          <button data-page="diary" class="feature-link"><span>03</span><div><strong>记下生活</strong><small>随手记下发生的事与当下的感受</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
+          <button data-page="usage" class="feature-link"><span>04</span><div><strong>看见时间</strong><small>了解习惯，找回自己的节奏</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
+          <button data-page="profile" class="feature-link"><span>05</span><div><strong>由你定义</strong><small>本地数据与未来的自动化扩展</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
         </div>
       </div>
       <footer class="presentation-footer"><span class="status-dot"></span> Android 界面提案 · V0.4 <span>本地优先 / 轻量生活</span></footer>
@@ -108,6 +116,45 @@
             <div id="task-history-footer" hidden><button id="task-history-more" type="button">查看更多</button><p id="task-history-count"></p></div>
             <button class="add-task-inline" id="add-task-inline" type="button" aria-haspopup="dialog" aria-controls="todo-sheet"><svg class="icon"><use href="#i-plus"/></svg>添加一个小目标</button>
           </section>
+          <section class="page" id="page-diary" aria-labelledby="diary-heading" hidden>
+            <div id="diary-home">
+              <header class="page-header diary-page-header"><div><p class="overline">发生了什么，有什么感受</p><h2 id="diary-heading">日记<span class="heading-dot">.</span></h2></div><div class="header-actions"><button class="icon-button" id="diary-more" type="button" aria-label="更多：回收站与说明" aria-haspopup="dialog" aria-controls="modal"><svg class="icon"><use href="#i-more"/></svg></button><button class="icon-button green" id="add-diary" type="button" aria-label="记一条"><svg class="icon"><use href="#i-plus"/></svg></button></div></header>
+              <label class="diary-search"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><span class="sr-only">搜索日记文字或日期·全部时间</span><input id="diary-search" type="search" placeholder="搜索文字或日期，如 9月27日" autocomplete="off"></label>
+              <div id="diary-month-nav" class="diary-month-nav" aria-label="日记月份">
+                <button id="diary-month-prev" class="icon-button back-button" type="button" aria-label="上一月"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+                <button id="diary-month-picker" type="button" aria-haspopup="dialog" aria-controls="modal"><span id="diary-month-label">本月</span><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+                <button id="diary-month-next" class="icon-button" type="button" aria-label="下一月"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+                <button id="diary-month-current" type="button">回到本月</button>
+              </div>
+              <p id="diary-summary" class="diary-summary" role="status"></p>
+              <div id="diary-list" class="diary-list" aria-label="日记列表"></div>
+              <p class="data-note diary-note">示例日记仅驻留内存，刷新重置 · 照片与录音为占位，不读取设备</p>
+            </div>
+            <div id="diary-trash" hidden>
+              <header class="page-header timer-page-header"><button class="icon-button back-button" id="diary-trash-back" type="button" aria-label="返回日记"><svg class="icon"><use href="#i-arrow"/></svg></button><h2 class="timer-page-title" id="diary-trash-heading" tabindex="-1">回收站</h2></header>
+              <p class="diary-trash-note">删除的日记先放在这里，不会自动清空。恢复后回到原来的日期；永久删除会同时移除其照片与录音，且无法恢复。</p>
+              <div id="diary-trash-list" class="diary-trash-list" role="list" aria-label="回收站日记"></div>
+            </div>
+            <div id="diary-drafts" hidden>
+              <header class="page-header timer-page-header"><button class="icon-button back-button" id="diary-drafts-back" type="button" aria-label="返回日记"><svg class="icon"><use href="#i-arrow"/></svg></button><h2 class="timer-page-title" id="diary-drafts-heading" tabindex="-1">草稿</h2></header>
+              <p class="diary-trash-note">没写完的日记会自动存到这里：点返回、切到其他页面或退到后台时保存。保存为正式日记后移出草稿。原型的草稿只在内存中，刷新会丢失；正式版保存在本机。</p>
+              <div id="diary-drafts-list" class="diary-trash-list" role="list" aria-label="日记草稿"></div>
+            </div>
+            <div id="diary-detail" hidden>
+              <header class="page-header timer-page-header"><button class="icon-button back-button" id="diary-detail-back" type="button" aria-label="返回日记"><svg class="icon"><use href="#i-arrow"/></svg></button><h2 class="timer-page-title" id="diary-detail-heading" tabindex="-1">日记</h2><div class="header-actions"><button class="icon-button" id="diary-detail-edit" type="button" aria-label="编辑这条日记"><svg class="icon"><use href="#i-edit"/></svg></button></div></header>
+              <article id="diary-detail-body" class="diary-detail"></article>
+              <button class="diary-danger-button" id="diary-detail-delete" type="button"><svg class="icon"><use href="#i-trash"/></svg>删除（移入回收站）</button>
+            </div>
+            <div id="diary-editor" hidden>
+              <header class="diary-editor-header"><button id="diary-editor-cancel" type="button" aria-label="返回并保留草稿">返回</button><h2 id="diary-editor-title" tabindex="-1">记一条</h2><button id="diary-editor-save" type="button">保存</button></header>
+              <div id="diary-editor-body" class="diary-editor-body"></div>
+              <div id="diary-recording-bar" class="diary-recording-bar" role="status" hidden></div>
+              <div id="diary-editor-attachments" class="diary-editor-attachments"></div>
+              <p id="diary-editor-error" class="diary-editor-error" role="alert" hidden></p>
+              <p class="data-note">返回或退到后台时自动存入「更多 · 草稿」；原型刷新会丢失。</p>
+              <div class="diary-editor-toolbar" aria-label="添加内容"><button id="diary-add-photo" type="button"><svg class="icon"><use href="#i-image"/></svg>添加照片</button><button id="diary-record" type="button" aria-pressed="false"><svg class="icon"><use href="#i-mic"/></svg><span id="diary-record-label">录音</span></button></div>
+            </div>
+          </section>
           <section class="page" id="page-usage" aria-labelledby="usage-heading" hidden>
             <header class="page-header"><div><p class="overline">了解习惯，而不是责备自己</p><h2 id="usage-heading">时间足迹<span class="heading-dot">.</span></h2></div><span class="sample-tag">示例数据</span></header>
             <div class="permission-note"><svg class="icon"><use href="#i-shield"/></svg><span>正式版需授权「使用情况访问权限」</span><button id="usage-permission" aria-label="查看使用统计权限说明">了解</button></div>
@@ -131,7 +178,7 @@
           </section>
         </div>
         <div id="task-undo" role="region" aria-label="操作撤销" hidden><span id="task-undo-message" role="status"></span><button id="undo-task" type="button">撤销</button><button id="dismiss-task-undo" type="button" aria-label="关闭提示">关闭提示</button></div>
-        <nav class="bottom-nav" aria-label="主导航"><button data-page="focus" class="active" aria-current="page"><span><svg class="icon"><use href="#i-focus"/></svg></span>专注</button><button data-page="tasks"><span><svg class="icon"><use href="#i-tasks"/></svg></span>待办</button><button data-page="usage"><span><svg class="icon"><use href="#i-chart"/></svg></span>用时</button><button data-page="profile"><span><svg class="icon"><use href="#i-user"/></svg></span>我的</button></nav>
+        <nav class="bottom-nav" aria-label="主导航"><button data-page="focus" class="active" aria-current="page"><span><svg class="icon"><use href="#i-focus"/></svg></span>专注</button><button data-page="tasks"><span><svg class="icon"><use href="#i-tasks"/></svg></span>待办</button><button data-page="diary"><span><svg class="icon"><use href="#i-diary"/></svg></span>日记</button><button data-page="usage"><span><svg class="icon"><use href="#i-chart"/></svg></span>用时</button><button data-page="profile"><span><svg class="icon"><use href="#i-user"/></svg></span>我的</button></nav>
         <div class="home-indicator" aria-hidden="true"></div>
       </div>
       <p class="preview-footnote">可切换页面、添加待办和体验计时<br>刷新恢复示例 · 不执行脚本 · 不读取设备数据</p>
