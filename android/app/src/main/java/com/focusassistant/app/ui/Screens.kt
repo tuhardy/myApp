@@ -295,12 +295,10 @@ private fun phaseName(phase: TimerPhase): String = when (phase) {
 internal fun TimerScreen(
     project: Project?,
     timer: ActiveTimer?,
-    selectedTask: Todo?,
     nowElapsed: Long,
     onBack: () -> Unit,
     onStatistics: () -> Unit,
     onSettings: () -> Unit,
-    onLinkTask: () -> Unit,
     onMode: (TimerMode) -> Unit,
     onDuration: () -> Unit,
     onStart: () -> Unit,
@@ -414,14 +412,6 @@ internal fun TimerScreen(
                 TextButton(onClick = onDiscard, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(if (resting) "放弃本次休息" else "放弃本次专注", color = Muted) }
                 if (!resting && mode == TimerMode.COUNTDOWN) Caption("倒计时到零自动保存；提前结束会按已专注时长保存，放弃则不生成记录。")
             }
-            if (!resting) {
-                OutlinedButton(onClick = onLinkTask, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Outlined.Link, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(if (timer != null) timer.taskTitle ?: "关联待办" else selectedTask?.title ?: "关联待办", modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
-                }
-                if (timer?.taskTitle != null) Caption("本次记录保留开始时的待办快照。")
-            }
         }
         HorizontalDivider()
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -445,8 +435,7 @@ internal fun TodosScreen(
     onRenew: (Todo) -> Unit,
     onArchive: (Todo) -> Unit,
     onRestore: (Todo) -> Unit,
-    onDelete: (Todo) -> Unit,
-    onFocus: (Todo, TodoStep?) -> Unit
+    onDelete: (Todo) -> Unit
 ) {
     // 放下的事不参与「全部 / 进行中 / 已完成」的计数。
     val live = state.todos.filterNot { it.archived }
@@ -485,7 +474,7 @@ internal fun TodosScreen(
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     GroupHeading(group)
                     group.todos.forEach { todo ->
-                        TodoCard(todo, group.key, today, onEdit, onToggle, onToggleStep, onRenew, onArchive, onRestore, onDelete, onFocus)
+                        TodoCard(todo, group.key, today, onEdit, onToggle, onToggleStep, onRenew, onArchive, onRestore, onDelete)
                     }
                 }
             }
@@ -582,8 +571,7 @@ private fun TodoCard(
     onRenew: (Todo) -> Unit,
     onArchive: (Todo) -> Unit,
     onRestore: (Todo) -> Unit,
-    onDelete: (Todo) -> Unit,
-    onFocus: (Todo, TodoStep?) -> Unit
+    onDelete: (Todo) -> Unit
 ) {
     val age = TodoAging.age(todo, today)
     val progress = TodoAging.progress(todo)
@@ -619,17 +607,6 @@ private fun TodoCard(
                         AgeActionPill("找回", AccentDark) { onRestore(todo) }
                         AgeActionPill("删除", Muted) { onDelete(todo) }
                     }
-                }
-            }
-            if (!todo.done && !todo.archived) {
-                // 右侧只留一个进入专注的入口；删除留在编辑弹窗里，卡片不再堆按钮。
-                val step = TodoAging.nextStep(todo)
-                Box(
-                    Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)).clickable { onFocus(todo, step) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Outlined.Timer, if (step == null) "专注于：${todo.title}" else "专注于这一步：${step.title}",
-                        tint = Muted, modifier = Modifier.size(17.dp))
                 }
             }
         }
@@ -816,7 +793,7 @@ private fun emptyTodoDetail(filter: TodoFilter): String = when (filter) {
     TodoFilter.DONE -> "慢慢来，走一步算一步。"
     TodoFilter.ARCHIVED -> "放下不是删除，是承认它这阵子不重要。"
     TodoFilter.PENDING -> "这里空空的，给今天留一点自由。"
-    TodoFilter.ALL -> "待办是具体行动，学习项目是持续积累。可以把待办关联到一次专注。"
+    TodoFilter.ALL -> "记下一件想做的事，也可以拆成小步，按自己的节奏完成。"
 }
 
 private fun periodName(period: Period): String = when (period) {
@@ -911,7 +888,6 @@ private fun SessionRow(session: FocusSession, progress: ProgressEntry?, onProgre
         Caption("${timestampText(session.endedAt)} · ${session.category}")
         Text(durationText(session.durationSeconds), color = Accent, fontWeight = FontWeight.Medium)
         Caption("${modeName(session.timerMode)} · ${session.targetMinutes?.let { "目标 ${targetText(it)}" } ?: "不限时"}")
-        session.taskTitle?.let { Caption("关联待办：$it") }
         if (progress != null) {
             progress.percent?.let { Caption("完成度 $it%") }
             Text(progress.note, style = MaterialTheme.typography.bodyMedium)

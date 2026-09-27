@@ -2,6 +2,7 @@ package com.focusassistant.app.domain
 
 import com.focusassistant.app.data.BackupCodec
 import com.focusassistant.app.data.ExportCodec
+import com.focusassistant.app.data.JsonCodec
 import java.time.LocalDate
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -18,12 +19,77 @@ class BackupCodecTest {
         try { BackupCodec.decode(root.toString()); fail("应拒绝无效备份") } catch (error: Exception) { assertNotNull(error.message) }
     }
 
+    private fun assertNoLegacyFields(value: JSONObject) {
+        listOf("estimate", "taskId", "taskTitle", "taskStepId").forEach { key -> assertFalse("不应写出 $key", value.has(key)) }
+    }
+    private fun assertBackupHasNoLegacyFields(root: JSONObject) {
+        listOf("todos", "sessions").forEach { key ->
+            val values = root.getJSONArray(key)
+            repeat(values.length()) { assertNoLegacyFields(values.getJSONObject(it)) }
+        }
+    }
+    private fun legacyValues(): List<Any> = listOf(
+        "旧待办", "", "过长".repeat(Validation.MAX_TITLE), 3, 0, -1, Long.MAX_VALUE, 1.5, true,
+        JSONObject.NULL, JSONObject().put("broken", true), org.json.JSONArray().put("broken")
+    )
+    private fun reencode(data: BackupData) = JSONObject(BackupCodec.encode(
+        AppState(data.projects, data.todos, data.sessions, data.progress, data.settings)))
+
     @Test fun completeBackupRoundTripPreservesImmutableHistoryAndSettings() {
         val expected = state()
-        val restored = BackupCodec.decode(BackupCodec.encode(expected))
+        val encoded = BackupCodec.encode(expected)
+        assertBackupHasNoLegacyFields(JSONObject(encoded))
+        val restored = BackupCodec.decode(encoded)
         assertEquals(expected.projects, restored.projects); assertEquals(expected.todos, restored.todos)
         assertEquals(expected.sessions, restored.sessions); assertEquals(expected.progress, restored.progress)
         assertEquals(expected.settings, restored.settings)
+        assertEquals(restored, BackupCodec.decode(reencode(restored).toString()))
+    }
+    @Test fun legacyTodoAndSessionFieldsAreIgnoredAndNeverReencoded() {
+        val expected = BackupCodec.decode(BackupCodec.encode(state()))
+        legacyValues().forEach { value ->
+            val root = root()
+            root.getJSONArray("todos").getJSONObject(0).put("estimate", value)
+            root.getJSONArray("sessions").getJSONObject(0).put("taskId", value).put("taskTitle", value)
+                .put("taskStepId", value)
+            val restored = BackupCodec.decode(root.toString())
+            assertEquals(expected, restored)
+            assertBackupHasNoLegacyFields(reencode(restored))
+        }
+    }
+    @Test fun unpairedLegacySessionFieldsAreIgnored() {
+        listOf("taskId", "taskTitle").forEach { key ->
+            legacyValues().forEach { value ->
+                val root = root()
+                root.getJSONArray("sessions").getJSONObject(0).put(key, value)
+                val restored = BackupCodec.decode(root.toString())
+                assertEquals(session, restored.sessions.single())
+                assertBackupHasNoLegacyFields(reencode(restored))
+            }
+        }
+    }
+    @Test fun activeTimerJsonRoundTripPreservesTimerStateWithoutLegacyFields() {
+        val timer = TimerEngine.pause(TimerEngine.start(project, "active", 1000, 1000, 1), 6000)
+            .copy(targetNotified = true, recoveryPending = true)
+        val encoded = JsonCodec.timer(timer)
+        assertNoLegacyFields(encoded)
+        assertEquals(timer, JsonCodec.readTimer(JSONObject(encoded.toString())))
+    }
+    @Test fun legacyTimerFieldsAreIgnoredAndNeverReencoded() {
+        val timer = TimerEngine.checkpoint(TimerEngine.start(project, "active", 1000, 1000, 1), 6000)
+        legacyValues().forEach { value ->
+            val encoded = JsonCodec.timer(timer).put("taskId", value).put("taskTitle", value).put("taskStepId", value)
+            val restored = JsonCodec.readTimer(JSONObject(encoded.toString()))
+            assertEquals(timer, restored)
+            assertNoLegacyFields(JsonCodec.timer(restored))
+        }
+        listOf("taskId", "taskTitle").forEach { key ->
+            legacyValues().forEach { value ->
+                val restored = JsonCodec.readTimer(JsonCodec.timer(timer).put(key, value))
+                assertEquals(timer, restored)
+                assertNoLegacyFields(JsonCodec.timer(restored))
+            }
+        }
     }
     @Test fun todoAgingAndStepsSurviveRoundTrip() {
         val rich = Todo("t2", "梳理想法", "工作", important = true, createdAt = "2026-03-11",
@@ -35,11 +101,16 @@ class BackupCodecTest {
         val root = root()
         val todo = root.getJSONArray("todos").getJSONObject(0)
         todo.remove("createdAt"); todo.remove("steps"); todo.remove("archived")
-        val restored = BackupCodec.decode(root.toString()).todos.single()
+        todo.put("estimate", 3)
+        root.getJSONArray("sessions").getJSONObject(0).put("taskId", "t").put("taskTitle", "待办快照")
+        val backup = BackupCodec.decode(root.toString())
+        val restored = backup.todos.single()
         // 旧备份没有这些字段，不臆造放入日期、小步或放下状态。
         assertEquals("", restored.createdAt)
         assertTrue(restored.steps.isEmpty())
         assertFalse(restored.archived)
+        assertEquals(session, backup.sessions.single())
+        assertBackupHasNoLegacyFields(reencode(backup))
     }
     @Test fun brokenTodoAgingFieldsAreRejected() {
         rejected(root().also { it.getJSONArray("todos").getJSONObject(0).put("createdAt", "2026-3-1") })
@@ -136,6 +207,7 @@ class BackupCodecTest {
         assertEquals(1, root.getJSONArray("progress").length())
         assertEquals(2L, root.getJSONObject("allTimeSummary").getLong("seconds"))
         assertEquals("已完成第一步", root.getJSONArray("sessions").getJSONObject(0).getJSONObject("latestProgress").getString("note"))
+        assertNoLegacyFields(root.getJSONArray("sessions").getJSONObject(0))
         assertTrue(root.has("range") && root.has("timeZone") && root.has("summary"))
         rejected(root)
     }

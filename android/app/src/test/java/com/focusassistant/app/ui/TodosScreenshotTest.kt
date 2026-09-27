@@ -72,7 +72,7 @@ class TodosScreenshotTest {
                     filter = filter,
                     today = today,
                     onFilter = {}, onCreate = {}, onEdit = {}, onToggle = {}, onToggleStep = { _, _ -> },
-                    onRenew = {}, onArchive = {}, onRestore = {}, onDelete = {}, onFocus = { _, _ -> }
+                    onRenew = {}, onArchive = {}, onRestore = {}, onDelete = {}
                 )
             }
         }

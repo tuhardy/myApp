@@ -48,8 +48,6 @@ object BackupCodec {
         Validation.settings(data.settings)
         data.sessions.forEach { session ->
             Validation.project(Project(session.projectId, session.projectTitle, session.category, session.timerMode, session.targetMinutes))
-            require((session.taskId == null) == (session.taskTitle == null)) { "待办快照不完整" }
-            if (session.taskId != null) require(session.taskId.isNotBlank() && session.taskId.length <= 128 && session.taskTitle!!.trim().length in 1..80)
             date(session.startedAt); date(session.endedAt)
             require(session.endedAt > session.startedAt && session.durationSeconds in 1..(MAX_DATE / 1000)) { "记录时长无效" }
             require(session.timerMode != TimerMode.COUNTDOWN || session.durationSeconds <= requireNotNull(session.targetMinutes) { "倒计时记录缺少目标时长" } * 60L) { "倒计时时长超出目标" }
@@ -78,7 +76,6 @@ internal fun JSONObject.string(key: String): String = get(key).let { require(it 
 internal fun JSONObject.long(key: String): Long = get(key).let { require(it is Int || it is Long) { "$key 必须为整数" }; (it as Number).toLong() }
 internal fun JSONObject.integer(key: String): Int = long(key).let { require(it in Int.MIN_VALUE..Int.MAX_VALUE) { "$key 超出整数范围" }; it.toInt() }
 internal fun JSONObject.boolean(key: String): Boolean = get(key).let { require(it is Boolean) { "$key 必须为布尔值" }; it }
-internal fun JSONObject.nullableString(key: String): String? { require(has(key)) { "缺少 $key" }; return if (isNull(key)) null else string(key) }
 /** 目标时长可为 null（不限时的正计时）。键必须存在，避免把损坏的备份当成不限时。 */
 internal fun JSONObject.nullableInteger(key: String): Int? { require(has(key)) { "缺少 $key" }; return if (isNull(key)) null else integer(key) }
 internal fun JSONObject.objects(key: String, limit: Int): List<JSONObject> {
@@ -93,20 +90,20 @@ internal object JsonCodec {
     fun readProject(value: JSONObject) = Project(value.string("id"), value.string("title"), value.string("category"), TimerMode.valueOf(value.string("timerMode")), value.nullableInteger("targetMinutes"))
     fun step(value: TodoStep): JSONObject = JSONObject().put("id", value.id).put("title", value.title).put("done", value.done)
     fun readStep(value: JSONObject) = TodoStep(value.string("id"), value.string("title"), value.boolean("done"))
-    fun todo(value: Todo): JSONObject = JSONObject().put("id", value.id).put("title", value.title).put("category", value.category).put("important", value.important).put("done", value.done).put("estimate", value.estimate)
+    fun todo(value: Todo): JSONObject = JSONObject().put("id", value.id).put("title", value.title).put("category", value.category).put("important", value.important).put("done", value.done)
         .put("createdAt", value.createdAt).put("steps", JSONArray(value.steps.map(::step))).put("archived", value.archived)
     /** 旧备份没有发酵与小步字段，按「今天放进来、没有小步、未放下」读入，不臆造历史。 */
-    fun readTodo(value: JSONObject) = Todo(value.string("id"), value.string("title"), value.string("category"), value.boolean("important"), value.boolean("done"), value.integer("estimate"),
+    fun readTodo(value: JSONObject) = Todo(value.string("id"), value.string("title"), value.string("category"), value.boolean("important"), value.boolean("done"),
         if (value.has("createdAt")) value.string("createdAt") else "",
         if (value.has("steps")) value.objects("steps", Validation.MAX_STEPS).map(::readStep) else emptyList(),
         if (value.has("archived")) value.boolean("archived") else false)
     fun segment(value: TimeSegment): JSONObject = JSONObject().put("startedAt", value.startedAt).put("endedAt", value.endedAt)
     fun readSegment(value: JSONObject) = TimeSegment(value.long("startedAt"), value.long("endedAt"))
     fun session(value: FocusSession): JSONObject = JSONObject().put("id", value.id).put("projectId", value.projectId).put("projectTitle", value.projectTitle).put("category", value.category)
-        .put("timerMode", value.timerMode.name).put("targetMinutes", nullable(value.targetMinutes)).put("taskId", nullable(value.taskId)).put("taskTitle", nullable(value.taskTitle))
+        .put("timerMode", value.timerMode.name).put("targetMinutes", nullable(value.targetMinutes))
         .put("startedAt", value.startedAt).put("endedAt", value.endedAt).put("durationSeconds", value.durationSeconds).put("segments", JSONArray(value.segments.map(::segment))).put("progressPrompted", value.progressPrompted)
     fun readSession(value: JSONObject) = FocusSession(value.string("id"), value.string("projectId"), value.string("projectTitle"), value.string("category"), TimerMode.valueOf(value.string("timerMode")), value.nullableInteger("targetMinutes"),
-        value.nullableString("taskId"), value.nullableString("taskTitle"), value.long("startedAt"), value.long("endedAt"), value.long("durationSeconds"), value.objects("segments", 10000).map(::readSegment), value.boolean("progressPrompted"))
+        value.long("startedAt"), value.long("endedAt"), value.long("durationSeconds"), value.objects("segments", 10000).map(::readSegment), value.boolean("progressPrompted"))
     fun progress(value: ProgressEntry): JSONObject = JSONObject().put("id", value.id).put("sessionId", value.sessionId).put("projectId", value.projectId).put("sessionEndedAt", value.sessionEndedAt).put("note", value.note).put("percent", nullable(value.percent)).put("updatedAt", value.updatedAt)
     fun readProgress(value: JSONObject): ProgressEntry {
         require(value.has("percent")) { "缺少 percent" }
@@ -116,10 +113,10 @@ internal object JsonCodec {
     fun readSettings(value: JSONObject) = AppSettings(value.integer("dailyGoalMinutes"), value.boolean("usageReminders"), value.integer("shortBreakMinutes"), value.integer("longBreakMinutes"))
     fun timer(value: ActiveTimer): JSONObject = JSONObject().put("sessionId", value.sessionId).put("projectId", value.projectId).put("projectTitle", value.projectTitle).put("category", value.category)
         .put("timerMode", value.timerMode.name).put("targetMinutes", nullable(value.targetMinutes)).put("phase", value.phase.name).put("status", value.status.name)
-        .put("startedAt", value.startedAt).put("taskId", nullable(value.taskId)).put("taskTitle", nullable(value.taskTitle)).put("accumulatedMs", value.accumulatedMs)
+        .put("startedAt", value.startedAt).put("accumulatedMs", value.accumulatedMs)
         .put("anchorElapsed", value.anchorElapsed).put("anchorWall", value.anchorWall).put("bootCount", value.bootCount).put("segments", JSONArray(value.segments.map(::segment)))
         .put("targetNotified", value.targetNotified).put("recoveryPending", value.recoveryPending)
     fun readTimer(value: JSONObject) = ActiveTimer(value.string("sessionId"), value.string("projectId"), value.string("projectTitle"), value.string("category"), TimerMode.valueOf(value.string("timerMode")), value.nullableInteger("targetMinutes"),
-        TimerPhase.valueOf(value.string("phase")), TimerStatus.valueOf(value.string("status")), value.long("startedAt"), value.nullableString("taskId"), value.nullableString("taskTitle"),
+        TimerPhase.valueOf(value.string("phase")), TimerStatus.valueOf(value.string("status")), value.long("startedAt"),
         value.long("accumulatedMs"), value.long("anchorElapsed"), value.long("anchorWall"), value.integer("bootCount"), value.objects("segments", 10000).map(::readSegment), value.boolean("targetNotified"), value.boolean("recoveryPending"))
 }

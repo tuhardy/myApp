@@ -95,10 +95,10 @@ object Statistics {
             if (text.trimStart().firstOrNull() in listOf('=', '+', '-', '@') || text.firstOrNull() in listOf('\t', '\r', '\n')) text = "'" + text
             return "\"" + text.replace("\"", "\"\"") + "\""
         }
-        val rows = mutableListOf<List<Any?>>(listOf("日期", "任务", "分类", "开始时间", "结束时间", "时长（分钟）", "来源", "计时模式", "专注项", "目标时长（分钟）", "时长（秒）", "学习进度", "完成度（%）", "进度更新时间"))
+        val rows = mutableListOf<List<Any?>>(listOf("日期", "分类", "开始时间", "结束时间", "时长（分钟）", "来源", "计时模式", "专注项", "目标时长（分钟）", "时长（秒）", "学习进度", "完成度（%）", "进度更新时间"))
         sessions.forEach { session ->
             val latest = latestForSession(progress, session.id)
-            rows += listOf(date(session, zone).toString(), session.taskTitle, session.category, timestamp(session.startedAt), timestamp(session.endedAt),
+            rows += listOf(date(session, zone).toString(), session.category, timestamp(session.startedAt), timestamp(session.endedAt),
                 session.durationSeconds / 60.0, "专注计时", if (session.timerMode == TimerMode.COUNTUP) "正计时" else "倒计时", session.projectTitle,
                 session.targetMinutes ?: "不限时", session.durationSeconds, latest?.note, latest?.percent, latest?.updatedAt?.let { timestamp(it) })
         }

@@ -44,12 +44,6 @@ object TodoAging {
 
     fun nextStep(todo: Todo): TodoStep? = todo.steps.firstOrNull { !it.done }
 
-    /** 专注记录里保留的是「父任务 · 这一步」，子步骤不单独入账。 */
-    fun stepFocusTitle(todo: Todo, step: TodoStep?): String {
-        val child = step?.title?.trim().orEmpty()
-        return if (child.isEmpty()) todo.title.trim() else "${todo.title.trim()} · $child"
-    }
-
     /**
      * 勾掉父任务把剩余小步一并算走过；任一步回退父任务也回到未完成。
      * 全部走完则父任务自动完成。

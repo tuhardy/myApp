@@ -6,10 +6,10 @@ object TimerEngine {
     const val CHECKPOINT_INTERVAL_MS = 5000L
     const val MIN_SESSION_MS = 1000L
 
-    fun start(project: Project, sessionId: String, wall: Long, elapsed: Long, bootCount: Int, task: Todo? = null): ActiveTimer {
+    fun start(project: Project, sessionId: String, wall: Long, elapsed: Long, bootCount: Int): ActiveTimer {
         Validation.project(project)
         return ActiveTimer(sessionId, project.id, project.title, project.category, project.timerMode,
-            project.targetMinutes, TimerPhase.FOCUS, TimerStatus.RUNNING, wall, task?.id, task?.title,
+            project.targetMinutes, TimerPhase.FOCUS, TimerStatus.RUNNING, wall,
             anchorElapsed = elapsed, anchorWall = wall, bootCount = bootCount)
     }
 
@@ -84,7 +84,7 @@ object TimerEngine {
             else maxOf(timer.anchorWall, wall)
         } else stopped.anchorWall
         return FocusSession(timer.sessionId, timer.projectId, timer.projectTitle, timer.category,
-            timer.timerMode, timer.targetMinutes, timer.taskId, timer.taskTitle, timer.startedAt,
+            timer.timerMode, timer.targetMinutes, timer.startedAt,
             endedAt, seconds, segments)
     }
 }

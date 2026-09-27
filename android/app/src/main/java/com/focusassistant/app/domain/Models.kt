@@ -14,13 +14,13 @@ data class TodoStep(val id: String, val title: String, val done: Boolean = false
  */
 data class Todo(
     val id: String, val title: String, val category: String, val important: Boolean = false,
-    val done: Boolean = false, val estimate: Int = 1,
+    val done: Boolean = false,
     val createdAt: String = "", val steps: List<TodoStep> = emptyList(), val archived: Boolean = false
 )
 data class TimeSegment(val startedAt: Long, val endedAt: Long)
 data class FocusSession(
     val id: String, val projectId: String, val projectTitle: String, val category: String,
-    val timerMode: TimerMode, val targetMinutes: Int?, val taskId: String? = null, val taskTitle: String? = null,
+    val timerMode: TimerMode, val targetMinutes: Int?,
     val startedAt: Long, val endedAt: Long, val durationSeconds: Long,
     val segments: List<TimeSegment>, val progressPrompted: Boolean = false
 )
@@ -29,7 +29,7 @@ data class AppSettings(val dailyGoalMinutes: Int = 240, val usageReminders: Bool
 data class ActiveTimer(
     val sessionId: String, val projectId: String, val projectTitle: String, val category: String,
     val timerMode: TimerMode, val targetMinutes: Int?, val phase: TimerPhase, val status: TimerStatus,
-    val startedAt: Long, val taskId: String? = null, val taskTitle: String? = null,
+    val startedAt: Long,
     val accumulatedMs: Long = 0, val anchorElapsed: Long = 0, val anchorWall: Long = startedAt,
     val bootCount: Int = 0, val segments: List<TimeSegment> = emptyList(),
     val targetNotified: Boolean = false, val recoveryPending: Boolean = false
@@ -85,7 +85,6 @@ object Validation {
     fun todo(value: Todo) {
         require(value.id.isNotBlank() && value.id.length <= 128) { "待办标识无效" }
         require(value.title.isNotBlank() && value.title.length <= MAX_TITLE && value.category.length <= MAX_TITLE) { "待办名称或分类无效" }
-        require(value.estimate in 1..1000) { "预计专注次数须为 1–1000" }
         require(value.createdAt.isBlank() || DATE_KEY.matches(value.createdAt)) { "放入日期须为 YYYY-MM-DD" }
         require(value.steps.size <= MAX_STEPS) { "每件事最多 $MAX_STEPS 个小步" }
         val ids = value.steps.map { it.id }

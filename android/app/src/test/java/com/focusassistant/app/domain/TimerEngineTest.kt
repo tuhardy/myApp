@@ -79,13 +79,14 @@ class TimerEngineTest {
     @Test fun breaksNeverProduceFocusHistory() {
         assertNull(TimerEngine.finish(start(TimerMode.COUNTDOWN).copy(phase = TimerPhase.SHORT_BREAK), 80_000))
     }
-    @Test fun taskAndProjectSnapshotsAreRetained() {
-        val task = Todo("t", "初始任务", "任务分类")
-        val timer = TimerEngine.start(project, "s", 100_000, 10_000, 7, task)
+    @Test fun projectSnapshotIsRetained() {
+        val timer = TimerEngine.start(project, "s", 100_000, 10_000, 7)
         val session = TimerEngine.finish(timer, 12_000)!!
+        assertEquals(project.id, session.projectId)
         assertEquals(project.title, session.projectTitle)
-        assertEquals(task.title, session.taskTitle)
         assertEquals(project.category, session.category)
+        assertEquals(project.timerMode, session.timerMode)
+        assertEquals(project.targetMinutes, session.targetMinutes)
     }
     @Test fun pausedCountdownRetainsExactPlannedEndAfterResumeAndCheckpoint() {
         val paused = TimerEngine.pause(start(TimerMode.COUNTDOWN), 30_000)

@@ -16,7 +16,7 @@
   const timer = new Timer();
   const state = {
     tasks: initialTasks(), filter: "all", period: "today", goal: UI.initialGoalMinutes,
-    linkedTask: null, linkedStep: null, records: initialFocusRecords(), activeFocus: null, overviewDay: "",
+    records: initialFocusRecords(), activeFocus: null, overviewDay: "",
     statsPeriod: "day", statsAnchor: new Date(), includeSamples: true, recordLimit: UI.recordPageSize,
     focusItems: initialFocusItems(), selectedFocusItem: "focus-reading", nextFocusItemId: 1,
     reminders: false, nextTaskId: 1, nextRecordId: 1, nextStepId: 1,
@@ -124,11 +124,6 @@
     return `${TIMING_NAMES[item.timerMode]} · ${item.timerMode === "countup" ? "目标 " : ""}${item.durationMinutes} 分钟`;
   }
 
-  function updateLinkedTask() {
-    const task = state.tasks.find(item => item.id === state.linkedTask);
-    $("linked-task-name").textContent = task ? `${task.title}${task.done ? "（已完成）" : ""}` : "不关联待办";
-  }
-
   function renderFocusItem() {
     const item = currentFocusItem();
     $("focus-item-name").textContent = item.title;
@@ -196,13 +191,9 @@
 
   function startTimer() {
     if (timer.mode === "focus") {
-      const task = state.tasks.find(item => item.id === state.linkedTask);
       const item = currentFocusItem();
       if (!state.activeFocus) {
-        const step = linkedStepOf(task);
-        state.activeFocus = { taskId: task?.id || null,
-          taskTitle: task ? FocusModel.stepFocusTitle(task, step) : item.title,
-          focusItemId: item.id, focusItemTitle: item.title, category: item.category, timerMode: item.timerMode,
+        state.activeFocus = { focusItemId: item.id, focusItemTitle: item.title, category: item.category, timerMode: item.timerMode,
           targetMinutes: item.durationMinutes, startedAt: new Date().toISOString(), startedMonotonic: performance.now(),
           segments: [], segmentStart: null, targetNotified: false };
       }
@@ -228,8 +219,8 @@
   function saveFocusCompletion(completion, endedAt) {
     const session = state.activeFocus;
     const durationSeconds = Math.round(completion.minutes * LIMITS.secondsPerMinute);
-    const { taskId, taskTitle, focusItemId, focusItemTitle, category, timerMode, targetMinutes, startedAt, segments } = session;
-    const record = { id: `session-${state.nextRecordId++}`, taskId, taskTitle, focusItemId, focusItemTitle, category, timerMode,
+    const { focusItemId, focusItemTitle, category, timerMode, targetMinutes, startedAt, segments } = session;
+    const record = { id: `session-${state.nextRecordId++}`, focusItemId, focusItemTitle, category, timerMode,
       targetMinutes, startedAt, endedAt: new Date(endedAt).toISOString(), segments,
       durationSeconds, durationMinutes: durationSeconds / LIMITS.secondsPerMinute, source: "session" };
     state.records.push(record);
@@ -332,12 +323,7 @@
 
   function openProject(item) {
     const open = () => {
-      if (item.id !== state.selectedFocusItem) {
-        state.linkedTask = null;
-        state.linkedStep = null;
-        applyFocusItem(item);
-        updateLinkedTask();
-      }
+      if (item.id !== state.selectedFocusItem) applyFocusItem(item);
       navigate("timer");
     };
     if (item.id === state.selectedFocusItem) open();
@@ -677,9 +663,7 @@
       remove.type = "button";
       remove.addEventListener("click", () => confirmAction("删除这个待办？", `将从本次演示中移除「${task.title}」。`, () => {
         state.tasks = state.tasks.filter(item => item.id !== task.id);
-        if (state.linkedTask === task.id) { state.linkedTask = null; state.linkedStep = null; }
         renderTasks();
-        updateLinkedTask();
         toast("待办已删除。");
       }, "确认删除"));
       actions.append(remove);
@@ -704,7 +688,6 @@
         state.filter = "all";
         closeModal();
         renderTasks();
-        updateLinkedTask();
         toast(task ? "待办已更新。" : "小目标已记下，现在就可以开始。");
       } catch (error) {
         validation.textContent = error.message;
@@ -712,25 +695,6 @@
       }
     });
     showModal(task ? "编辑这个小目标" : "记下一个小目标", form);
-  }
-
-  function focusOnTask(task, step = null) {
-    const action = () => {
-      state.linkedTask = task.id;
-      // 子步骤不单独入账：记录仍挂在父待办上，只有标题快照记成「父任务 · 这一步」。
-      state.linkedStep = step ? step.id : null;
-      applyFocusItem(currentFocusItem());
-      updateLinkedTask();
-      navigate("timer");
-      const what = step ? `这一步「${step.title}」` : "待办";
-      toast(`${what}已关联，使用「${currentFocusItem().title}」的${itemDescription(currentFocusItem())}。`);
-    };
-    guardedTimerChange(action, "更换专注任务会重置当前计时，是否继续？");
-  }
-
-  function linkedStepOf(task) {
-    if (!task || !state.linkedStep) return null;
-    return (task.steps || []).find(step => step.id === state.linkedStep) || null;
   }
 
   function renderTasks() {
@@ -810,14 +774,6 @@
     if (!task.done && !task.archived && age.stage !== "fresh") body.append(buildAgeActions(task));
 
     card.append(check, body);
-    if (!task.done && !task.archived) {
-      const start = element("button", "task-start");
-      const step = FocusModel.nextStep(task);
-      start.setAttribute("aria-label", step ? `专注于这一步：${step.title}` : `专注于：${task.title}`);
-      start.append(icon("focus"));
-      start.addEventListener("click", () => focusOnTask(task, step));
-      card.append(start);
-    }
     return card;
   }
 
@@ -854,9 +810,7 @@
     release.setAttribute("aria-label", `放下「${task.title}」`);
     release.addEventListener("click", () => {
       task.archived = true;
-      if (state.linkedTask === task.id) { state.linkedTask = null; state.linkedStep = null; }
       renderTasks();
-      updateLinkedTask();
       toast(`「${task.title}」已放下，可以在「放下的」里找回。`);
     });
     row.append(renew, release);
@@ -868,7 +822,6 @@
     // 勾掉父任务时把没走完的小步一并算走过，避免进度和状态互相矛盾。
     if (task.done && Array.isArray(task.steps)) task.steps.forEach(step => { step.done = true; });
     renderTasks();
-    updateLinkedTask();
   }
 
   function toggleStep(task, step) {
@@ -876,27 +829,6 @@
     // 小步全部走完，父任务随之完成；有任何一步回退，父任务也回到未完成。
     task.done = task.steps.length > 0 && task.steps.every(item => item.done);
     renderTasks();
-    updateLinkedTask();
-  }
-
-  function chooseTask() {
-    const content = element("div");
-    const choices = [{ id: null, title: "不关联待办" }, ...state.tasks.filter(task => !task.done)];
-    choices.forEach(task => {
-      const button = element("button", "task-choice", task.title);
-      button.addEventListener("click", () => {
-        closeModal();
-        if (state.linkedTask !== task.id) guardedTimerChange(() => {
-          state.linkedTask = task.id;
-          state.linkedStep = null;
-          resetTimer();
-          updateLinkedTask();
-          renderTimer();
-        }, "更换关联任务会重置当前计时，是否继续？");
-      });
-      content.append(button);
-    });
-    showModal("这一段，想做什么？", content);
   }
 
   function durationLabel(minutes) {
@@ -1079,22 +1011,22 @@
   }
 
   function renderFocusRanking(records) {
-    const ranking = focusBreakdown(records.map(record => ({ ...record, taskTitle: record.focusItemTitle || record.taskTitle })), "taskTitle");
+    const ranking = focusBreakdown(records, "focusItemTitle");
     const maximum = ranking[0]?.minutes || 1;
-    $("statistics-ranking").replaceChildren(...ranking.map((task, index) => {
+    $("statistics-ranking").replaceChildren(...ranking.map((item, index) => {
       const row = element("li");
       const detail = element("div", "rank-detail");
       const heading = element("div", "rank-heading");
-      heading.append(element("span", "", task.name), element("small", "", `${numberLabel(task.minutes)} 分钟 / ${task.count} 次`));
+      heading.append(element("span", "", item.name), element("small", "", `${numberLabel(item.minutes)} 分钟 / ${item.count} 次`));
       const track = element("div", "rank-track");
       const fill = element("div");
-      fill.style.width = `${task.minutes / maximum * 100}%`;
+      fill.style.width = `${item.minutes / maximum * 100}%`;
       track.append(fill);
       detail.append(heading, track);
       row.append(element("span", "rank-number", String(index + 1).padStart(2, "0")), detail);
       return row;
     }));
-    if (!ranking.length) $("statistics-ranking").append(element("li", "data-note", "暂无任务投入记录。"));
+    if (!ranking.length) $("statistics-ranking").append(element("li", "data-note", "暂无专注项投入记录。"));
   }
 
   function renderFocusRecords(records) {
@@ -1107,8 +1039,8 @@
       const timeOptions = { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false };
       const startDate = localDateKey(started) === localDateKey(ended) ? "" : `${localDateKey(started)} `;
       const seconds = record.durationSeconds ?? Math.round(record.durationMinutes * LIMITS.secondsPerMinute);
-      heading.append(element("strong", "", record.focusItemTitle || record.taskTitle), element("span", "", formatTime(seconds)));
-      row.append(heading, element("div", "record-meta", `${localDateKey(ended)} · ${startDate}${started.toLocaleTimeString("zh-CN", timeOptions)} — ${ended.toLocaleTimeString("zh-CN", timeOptions)}\n${TIMING_NAMES[record.timerMode || "countdown"]} · ${record.category} · ${record.source === "sample" ? "示例记录" : "本次计时"}${record.taskId ? `\n关联待办：${record.taskTitle}` : ""}`));
+      heading.append(element("strong", "", record.focusItemTitle), element("span", "", formatTime(seconds)));
+      row.append(heading, element("div", "record-meta", `${localDateKey(ended)} · ${startDate}${started.toLocaleTimeString("zh-CN", timeOptions)} — ${ended.toLocaleTimeString("zh-CN", timeOptions)}\n${TIMING_NAMES[record.timerMode || "countdown"]} · ${record.category} · ${record.source === "sample" ? "示例记录" : "本次计时"}`));
       if (record.progress) row.append(element("p", "project-progress-note", `${record.progress.percent == null ? "" : `${record.progress.percent}% · `}${record.progress.note}`));
       const progress = element("button", "text-button record-progress-button", record.progress ? "编辑进度" : "补写进度");
       progress.dataset.recordId = record.id;
@@ -1303,7 +1235,6 @@
   });
   $("timer-settings").addEventListener("click", () => focusItemEditor(state.selectedFocusItem));
   $("preferences-button").addEventListener("click", timerSettings);
-  $("link-task").addEventListener("click", chooseTask);
   $("add-task").addEventListener("click", () => taskEditor());
   $("add-task-inline").addEventListener("click", () => taskEditor());
   $("edit-goal").addEventListener("click", goalSettings);
@@ -1341,7 +1272,6 @@
   renderTasks();
   renderUsage();
   applyFocusItem(currentFocusItem());
-  updateLinkedTask();
   navigate(location.hash.slice(1), false);
   setInterval(tickTimer, UI.tickMs);
 })();

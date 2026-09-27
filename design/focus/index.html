@@ -123,9 +123,6 @@
     .timer-page[data-state="paused"] .status-dot { background:#a49c95; }
     .timer-page[data-state="completed"] .timer-digits { font-size:45px; letter-spacing:-1px; }
     .timer-page .timer-digits.long-time { font-size:42px; letter-spacing:-1px; }
-    .linked-task { display:flex; align-items:center; justify-content:center; gap:7px; width:100%; color:var(--muted); font-size:11px; padding:6px 0; }
-    .linked-task .icon { width:16px; height:16px; }
-    .linked-task span { min-width:0; overflow-wrap:anywhere; }
     .timer-actions { display:grid; gap:8px; padding-top:15px; }
     .primary { width:100%; display:flex; align-items:center; justify-content:center; gap:9px; border-radius:15px; min-height:52px; background:var(--accent); color:white; font-size:14px; font-weight:500; padding:10px 14px; }
     .primary:hover { background:var(--accent-dark); }
@@ -304,7 +301,6 @@
             <div class="timer-config" id="timer-config"><div class="mode-switch" aria-label="计时方式"><button data-mode="countdown" aria-pressed="true">倒计时</button><button data-mode="countup" aria-pressed="false">正计时</button></div><button class="duration-button" id="duration-button"><span id="duration-label">25 分钟</span><span>调整</span></button></div>
             <p class="session-target" id="session-target" hidden></p>
             <div class="dial-space"><div class="dial"><svg viewBox="0 0 280 280" aria-hidden="true"><circle class="dial-track" cx="140" cy="140" r="127"/><circle class="dial-progress" id="dial-progress" cx="140" cy="140" r="127"/></svg><div class="dial-center"><p class="timer-status"><span class="status-dot"></span><span id="timer-status">准备好，就开始</span></p><div class="timer-digits" id="timer-digits">25:00</div><p class="timer-unit" id="timer-unit">给这件事一段完整的时间</p></div></div></div>
-            <button class="linked-task" id="linked-task"><svg class="icon"><use href="#i-tasks"/></svg><span id="linked-task-label">关联待办 · 可选</span><svg class="icon"><use href="#i-arrow"/></svg></button>
             <div class="timer-actions"><button class="primary" id="primary-action"><svg class="icon"><use id="primary-icon" href="#i-play"/></svg><span id="primary-label">开始专注</span></button><button class="secondary" id="finish-action" hidden>结束并保存</button><button class="quiet-action" id="secondary-action" hidden>放弃本次专注</button></div>
             <p class="timer-hint" id="timer-hint">结束后，记下一点新的进展。</p>
           </div></div>
@@ -331,7 +327,7 @@
     ];
     const SHEET = Object.freeze({ indicatorMs:320, indicatorWidth:40, stretchOffset:.48, revealMs:180, enterMs:240, dragThreshold:80, viewportGap:16, presets:[15,25,45] });
     const WHEEL = Object.freeze({ rowHeight:44, dragSlop:4, pageStep:5, syncGuardMs:360, wheelIdleMs:80 });
-    const state = { selected:"english", phase:"ready", linked:false, toastId:null, projectSnapshot:null, modeTargets:new Map(), projectDrafts:new Map(), sheetController:null };
+    const state = { selected:"english", phase:"ready", toastId:null, projectSnapshot:null, modeTargets:new Map(), projectDrafts:new Map(), sheetController:null };
     const $ = id => document.getElementById(id);
     const current = () => projects.find(project => project.id === state.selected);
     const modeLabel = mode => mode === "countdown" ? "倒计时" : "正计时";
@@ -373,7 +369,7 @@
     }
     function setPhase(phase) { state.phase = phase; render(); }
     function selectProject(id) {
-      const choose = () => { if (state.selected !== id) { state.selected = id; state.phase = "ready"; state.linked = false; } render(); showView("timer", true); };
+      const choose = () => { if (state.selected !== id) { state.selected = id; state.phase = "ready"; } render(); showView("timer", true); };
       if (state.selected !== id && ["running","paused"].includes(state.phase)) {
         openDialog("切换专注项目？", [element("p", "", "当前计时为设计演示。切换后会回到待开始状态，不会保存任何真实记录。"), button("切换预览", () => { $("dialog").close(); choose(); }, "primary"), button("保留当前", () => $("dialog").close())]);
       } else choose();
@@ -436,8 +432,6 @@
       $("dial-progress").style.strokeDasharray = circumference;
       $("dial-progress").style.strokeDashoffset = circumference * (1 - progress);
       $("dial-progress").style.opacity = ready || noTarget ? "0" : "1";
-      $("linked-task").hidden = !ready;
-      $("linked-task-label").textContent = state.linked ? "已关联 · 今天的一小步" : "关联待办 · 可选";
       $("primary-label").textContent = ready ? "开始专注" : running ? "暂停" : paused ? "继续专注" : "记下这一步进展";
       $("primary-icon").setAttribute("href", running ? "#i-pause" : "#i-play");
       $("finish-action").hidden = !(project.mode === "countup" && (running || paused));
@@ -730,7 +724,7 @@
     function projectMenu(project) {
       const busy = state.selected === project.id && ["running","paused"].includes(state.phase);
       const edit = button("编辑项目", () => projectForm(project)); edit.disabled = busy;
-      const remove = button("删除项目", () => openDialog("删除这个预览项目？", [element("p", "", project.title), element("p", "small-note", "只移除当前设计稿中的卡片。正式版删除项目应保留历史记录。"), button("确认删除", () => { projects.splice(projects.indexOf(project),1); if (state.selected === project.id) { state.selected = projects[0].id; state.phase = "ready"; state.linked = false; } $("dialog").close(); render(); }, "secondary danger"), button("取消", () => $("dialog").close())]), "secondary danger");
+      const remove = button("删除项目", () => openDialog("删除这个预览项目？", [element("p", "", project.title), element("p", "small-note", "只移除当前设计稿中的卡片。正式版删除项目应保留历史记录。"), button("确认删除", () => { projects.splice(projects.indexOf(project),1); if (state.selected === project.id) { state.selected = projects[0].id; state.phase = "ready"; } $("dialog").close(); render(); }, "secondary danger"), button("取消", () => $("dialog").close())]), "secondary danger");
       remove.disabled = busy || projects.length === 1;
       openDialog(project.title, [button("项目进度", () => showProgress(project)), edit, remove, element("p", "small-note", busy ? "先结束当前演示计时，再编辑或删除。" : "管理按需出现，不占据项目首页；设计稿至少保留一个项目。")]);
     }
@@ -785,7 +779,6 @@
     }
     $("sheet-grip").addEventListener("pointerup",endSheetDrag);
     $("sheet-grip").addEventListener("pointercancel",endSheetDrag);
-    $("linked-task").addEventListener("click", () => openDialog("关联一个待办", [element("p", "", "待办是本次具体要做的事，专注项目用于持续积累。"), button("今天的一小步", () => { state.linked = true; $("dialog").close(); render(); }), button("不关联待办", () => { state.linked = false; $("dialog").close(); render(); })]));
     $("timer-help").addEventListener("click", () => openDialog("留给专注的空间", [element("p", "", "倒计时须设置时长，到零自动完成。正计时可以不设目标，手动结束后保存；设置目标时，到时只提醒，计时继续。时长可按小时与分钟输入。暂停和放弃不计入有效专注。"), element("p", "", "返回首页不停止计时。开始前设置模式与时长；计时中收起配置，避免分心。"), element("p", "small-note", "这是一份静态状态设计稿，不实际计时、不持久化。用页面外的状态按钮查看已完成效果。") ]));
     $("statistics").addEventListener("click", () => openDialog("今日的小积累", [element("p", "", "示例：今日专注 45 分钟，完成 2 次。"), element("p", "", "完整统计继续放在独立统计页。首页只保留一行摘要，不再堆叠数据卡片。") ]));
     document.querySelectorAll(".mobile-switch [data-view]").forEach(item => item.addEventListener("click", () => showView(item.dataset.view)));

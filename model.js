@@ -12,7 +12,6 @@
     maxTimerMinutes: 120,
     minGoalMinutes: 30,
     maxGoalMinutes: 1440,
-    maxEstimatedSessions: 12,
     maxTaskSteps: 8,
     maxTaskStepTitle: 40,
     restDays: 3,
@@ -171,16 +170,9 @@
     return { total, walked, percent: Math.round(walked / total * 100) };
   }
 
-  /** 下一步未走的小步，用于「从这一步开始专注」。 */
+  /** 下一步未走的小步，用于显示待办的小路提示。 */
   function nextStep(task) {
     return (Array.isArray(task?.steps) ? task.steps : []).find(step => !step.done) || null;
-  }
-
-  /** 专注记录里保留的是「父任务 · 这一步」，子步骤不单独入账。 */
-  function stepFocusTitle(task, step) {
-    const parent = String(task?.title ?? "").trim();
-    const child = String(step?.title ?? "").trim();
-    return child ? `${parent} · ${child}` : parent;
   }
 
   /**
@@ -268,7 +260,6 @@
 
   function initialFocusRecords(now = new Date()) {
     const { start } = periodRange("day", now);
-    const tasks = initialTasks();
     const focusItems = initialFocusItems();
     const records = [];
     for (let offset = 0; offset < SAMPLE_HISTORY_DAYS; offset += 1) {
@@ -277,7 +268,6 @@
       day.setDate(day.getDate() - offset);
       const sessions = offset === 0 ? LIMITS.sampleSessions : offset % SAMPLE_START_HOURS.length + 1;
       for (let session = 0; session < sessions; session += 1) {
-        const task = tasks[(offset + session) % tasks.length];
         const focusItem = focusItems[(offset + session) % focusItems.length];
         const durationMinutes = offset === 0 ? MODES.focus : SAMPLE_DURATIONS[(offset + session) % SAMPLE_DURATIONS.length];
         const startedAt = new Date(day);
@@ -285,8 +275,6 @@
         const endedAt = new Date(startedAt.getTime() + durationMinutes * MILLISECONDS_PER_MINUTE);
         records.push({
           id: `sample-focus-${localDateKey(day)}-${session + 1}`,
-          taskId: task.id,
-          taskTitle: task.title,
           category: focusItem.category,
           startedAt: startedAt.toISOString(),
           endedAt: endedAt.toISOString(),
@@ -443,7 +431,7 @@
   }
 
   function focusBreakdown(records, field) {
-    if (!["category", "taskTitle"].includes(field)) throw new Error("请选择分类或任务分组。");
+    if (!["category", "focusItemTitle"].includes(field)) throw new Error("请选择分类或专注项分组。");
     const groups = new Map();
     for (const record of records) {
       const name = record[field];
@@ -481,14 +469,14 @@
   }
 
   function exportFocusCsv(records) {
-    const rows = [["日期", "任务", "分类", "开始时间", "结束时间", "时长（分钟）", "来源", "计时模式", "专注项", "目标时长（分钟）", "时长（秒）", "学习进度", "完成度（%）", "进度更新时间"]];
+    const rows = [["日期", "分类", "开始时间", "结束时间", "时长（分钟）", "来源", "计时模式", "专注项", "目标时长（分钟）", "时长（秒）", "学习进度", "完成度（%）", "进度更新时间"]];
     for (const record of records) {
       const endedAt = new Date(record.endedAt);
       rows.push([
-        localDateKey(endedAt), record.taskTitle, record.category,
+        localDateKey(endedAt), record.category,
         localDateTime(new Date(record.startedAt)), localDateTime(endedAt), record.durationMinutes,
         record.source === "sample" ? "示例" : "专注计时",
-        record.timerMode === "countup" ? "正计时" : "倒计时", record.focusItemTitle ?? record.taskTitle,
+        record.timerMode === "countup" ? "正计时" : "倒计时", record.focusItemTitle,
         record.targetMinutes ?? record.durationMinutes, recordSeconds(record),
         record.progress?.note, record.progress?.percent, record.progress?.updatedAt,
       ]);
@@ -615,7 +603,7 @@
   }
 
   const api = Object.freeze({
-    LIMITS, MODES, CATEGORIES, USAGE, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, stepFocusTitle, daysBetween, formatTime, Timer,
+    LIMITS, MODES, CATEGORIES, USAGE, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, daysBetween, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
     validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary,
   });

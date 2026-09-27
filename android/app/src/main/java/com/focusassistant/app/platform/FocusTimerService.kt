@@ -22,7 +22,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class FocusTimerService : Service() {
-    private data class Command(val action: String, val projectId: String? = null, val taskId: String? = null, val taskStepId: String? = null)
+    private data class Command(val action: String, val projectId: String? = null)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val commands = Channel<Command>(Channel.UNLIMITED)
     private val repository get() = (applicationContext as FocusApplication).repository
@@ -44,7 +44,7 @@ class FocusTimerService : Service() {
                     val event = when (command.action) {
                         TimerServiceCommands.START -> {
                             require(!command.projectId.isNullOrBlank()) { "请选择专注项目" }
-                            repository.startTimer(command.projectId, command.taskId, command.taskStepId)
+                            repository.startTimer(command.projectId)
                             null
                         }
                         TimerServiceCommands.PAUSE -> { repository.pauseTimer(); null }
@@ -103,8 +103,7 @@ class FocusTimerService : Service() {
             }
             pendingCommands++
             val command = Command(intent?.action ?: TimerServiceCommands.RESTORE,
-                intent?.getStringExtra(TimerServiceCommands.PROJECT_ID), intent?.getStringExtra(TimerServiceCommands.TASK_ID),
-                intent?.getStringExtra(TimerServiceCommands.TASK_STEP_ID))
+                intent?.getStringExtra(TimerServiceCommands.PROJECT_ID))
             if (!commands.trySend(command).isSuccess) {
                 pendingCommands--
                 throw IllegalStateException("计时服务正在关闭，请重试")

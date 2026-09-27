@@ -116,11 +116,4 @@ class TodoAgingTest {
         // 没有小步的事仍然只有两种状态。
         assertTrue(TodoAging.toggleDone(todo("2026-03-20")).done)
     }
-
-    @Test fun focusTitleSnapshotsParentAndStep() {
-        val parent = Todo("t", "梳理想法", "工作", createdAt = "2026-03-20", steps = listOf(TodoStep("a", "画草图")))
-        assertEquals("梳理想法 · 画草图", TodoAging.stepFocusTitle(parent, parent.steps[0]))
-        assertEquals("梳理想法", TodoAging.stepFocusTitle(parent, null))
-        assertEquals("梳理想法", TodoAging.stepFocusTitle(parent, TodoStep("b", "   ")))
-    }
 }

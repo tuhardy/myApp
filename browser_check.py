@@ -17,7 +17,7 @@ PAGES = ("focus", "tasks", "usage", "profile")
 ONE_MINUTE_MS = 60_000
 HOURS_PER_DAY = 24
 STAT_PERIODS = (("day", 24), ("week", 7), ("month", 30), ("year", 12))
-CSV_HEADERS = ["日期", "任务", "分类", "开始时间", "结束时间", "时长（分钟）", "来源", "计时模式", "专注项", "目标时长（分钟）", "时长（秒）", "学习进度", "完成度（%）", "进度更新时间"]
+CSV_HEADERS = ["日期", "分类", "开始时间", "结束时间", "时长（分钟）", "来源", "计时模式", "专注项", "目标时长（分钟）", "时长（秒）", "学习进度", "完成度（%）", "进度更新时间"]
 PROJECT_TITLES = ("Spring Boot 实战", "个人 APP 开发", "算法与数据结构")
 ALLTIME_IDS = ("alltime-duration", "alltime-calendar-average", "alltime-active-average")
 MIN_TOUCH_TARGET = 44
@@ -45,6 +45,21 @@ def assert_statistics_period(page, period, trend_count):
     return assert_hour_distribution(page)
 
 
+def assert_no_task_fields(value):
+    if isinstance(value, dict):
+        assert not {"taskId", "taskTitle", "taskStepId", "estimate"}.intersection(value), value
+        for child in value.values():
+            assert_no_task_fields(child)
+    elif isinstance(value, list):
+        for child in value:
+            assert_no_task_fields(child)
+
+
+def assert_no_task_focus_ui(page):
+    expect(page.locator("#link-task, #linked-task, #linked-task-name, .linked-task, .task-start, .task-choice")).to_have_count(0)
+    expect(page.get_by_role("button", name=re.compile("关联.*待办|专注于"))).to_have_count(0)
+
+
 def download_statistics(page, file_format):
     page.locator("#export-statistics").click()
     page.locator('select[name="format"]').select_option("JSON（明细与汇总）" if file_format == "json" else "CSV（Excel 可打开）")
@@ -55,6 +70,7 @@ def download_statistics(page, file_format):
     data = Path(download.path()).read_bytes()
     if file_format == "json":
         payload = json.loads(data.decode("utf-8"))
+        assert_no_task_fields(payload)
         if "hourDistribution" in payload:
             assert len(payload["hourDistribution"]) == HOURS_PER_DAY
             assert abs(sum(bin["minutes"] for bin in payload["hourDistribution"]) - payload["summary"]["minutes"]) < 0.02
@@ -64,7 +80,7 @@ def download_statistics(page, file_format):
     rows = list(csv.reader(io.StringIO(data.decode("utf-8-sig"))))
     assert rows[0] == CSV_HEADERS
     assert all(len(row) == len(CSV_HEADERS) for row in rows)
-    return rows
+    return [dict(zip(rows[0], row)) for row in rows[1:]]
 
 
 def fresh_timer_page(browser, errors, clock_hour=8):
@@ -235,7 +251,7 @@ def check_independent_countup(browser, errors):
         records = payload["records"]
         assert sorted(record["durationSeconds"] for record in records) == [1, 90]
         assert all(record["focusItemTitle"] == title and record["timerMode"] == "countup" and record["targetMinutes"] == 1 and record["category"] == "工作" for record in records)
-        assert all(record["source"] == "session" and record["taskId"] is None and record["taskTitle"] == title for record in records)
+        assert all(record["source"] == "session" for record in records)
         record = next(record for record in records if record["durationSeconds"] == 90)
         assert record["durationMinutes"] == 1.5
         assert len(record["segments"]) == 2
@@ -248,12 +264,12 @@ def check_independent_countup(browser, errors):
         if "hourDistribution" in payload:
             assert all(abs(bin["minutes"] - minutes) < 0.000001 for bin, minutes in zip(payload["hourDistribution"], bins))
         rows = download_statistics(page, "csv")
-        assert len(rows) == 3
-        assert {row[7] for row in rows[1:]} == {"正计时"}
-        assert {row[8] for row in rows[1:]} == {title}
-        assert {row[9] for row in rows[1:]} == {"1"}
-        assert sorted(int(row[10]) for row in rows[1:]) == [1, 90]
-        assert abs(sum(float(row[5]) for row in rows[1:]) - 91 / 60) < 0.000001
+        assert len(rows) == 2
+        assert {row["计时模式"] for row in rows} == {"正计时"}
+        assert {row["专注项"] for row in rows} == {title}
+        assert {row["目标时长（分钟）"] for row in rows} == {"1"}
+        assert sorted(int(row["时长（秒）"]) for row in rows) == [1, 90]
+        assert abs(sum(float(row["时长（分钟）"]) for row in rows) - 91 / 60) < 0.000001
     page.close()
     print("PASS: independent items, 80-character mobile dialogs, countup targets, early/paused finish, immutable history and four-period CSV/JSON.", flush=True)
 
@@ -319,6 +335,67 @@ def check_task_grouping(browser, errors):
     page.screenshot(path=str(SCREENSHOT_DIRECTORY / "mobile-task-groups.png"))
     page.close()
     print("PASS: important tasks pinned on top, work and life shown as separate groups.", flush=True)
+
+
+def check_task_focus_independence(browser, errors):
+    page = fresh_timer_page(browser, errors)
+    assert_no_task_focus_ui(page)
+    choose_focus_item(page, PROJECT_TITLES[1])
+    page.locator("#timer-toggle").click()
+    page.clock.fast_forward(5_000)
+    page.locator('.bottom-nav [data-page="tasks"]').click()
+    assert_no_task_focus_ui(page)
+    task = page.locator(".task-card").filter(has_text="梳理个人 APP 的想法")
+    steps = task.locator(".step-dot")
+    expect(steps).to_have_count(3)
+    assert steps.evaluate_all("buttons => buttons.map(button => button.getAttribute('aria-pressed'))") == ["true", "true", "false"]
+    steps.last.click()
+    expect(task.locator(".task-checkbox")).to_have_attribute("aria-pressed", "true")
+    expect(task.locator(".step-caption")).to_have_text("3 步都走完了")
+    steps.first.click()
+    expect(task.locator(".task-checkbox")).to_have_attribute("aria-pressed", "false")
+    task.locator(".task-checkbox").click()
+    assert steps.evaluate_all("buttons => buttons.every(button => button.getAttribute('aria-pressed') === 'true')")
+    steps.last.click()
+    expect(task.locator(".task-checkbox")).to_have_attribute("aria-pressed", "false")
+    task.locator(".task-info").click()
+    page.locator('input[name="title"]').fill("独立待办改名")
+    page.get_by_role("button", name="保存修改", exact=True).click()
+    expect(page.locator("#modal")).not_to_be_visible()
+    expect(page.locator("#page-tasks")).to_be_visible()
+    expect(page.locator("#focus-item-name")).to_have_text(PROJECT_TITLES[1])
+    expect(page.locator("#timer-time")).to_have_text("00:05")
+    expect(page.locator("#focus-sessions")).to_have_text("3")
+    page.clock.fast_forward(5_000)
+    choose_focus_item(page, PROJECT_TITLES[1])
+    expect(page.locator("#timer-time")).to_have_text("00:10")
+    page.locator("#timer-toggle").click()
+    page.locator('.bottom-nav [data-page="tasks"]').click()
+    task = page.locator(".task-card").filter(has_text="独立待办改名")
+    expect(task.locator(".task-checkbox")).to_have_attribute("aria-pressed", "false")
+    expect(task.locator(".step-dot").last).to_have_attribute("aria-pressed", "false")
+    task.locator(".task-info").click()
+    page.get_by_role("button", name="删除", exact=True).click()
+    page.get_by_role("button", name="确认删除", exact=True).click()
+    expect(page.locator("#all-count")).to_have_text("3")
+    page.clock.fast_forward(5_000)
+    choose_focus_item(page, PROJECT_TITLES[1])
+    expect(page.locator("#timer-time")).to_have_text("00:10")
+    page.locator("#timer-finish").click()
+    expect(page.locator("#focus-sessions")).to_have_text("4")
+    skip_progress(page, return_to_timer=False)
+    page.locator('.bottom-nav [data-page="tasks"]').click()
+    expect(page.locator("#task-summary")).to_have_text("已完成 1 / 3 件")
+    assert_no_task_focus_ui(page)
+    open_statistics(page)
+    page.locator("#statistics-source").select_option("session")
+    payload = download_statistics(page, "json")
+    assert len(payload["records"]) == 1
+    record = payload["records"][0]
+    assert record["focusItemTitle"] == PROJECT_TITLES[1] and record["category"] == "工作"
+    assert record["durationSeconds"] == 10 and record["timerMode"] == "countup" and record["targetMinutes"] == 50
+    page.close()
+    print("PASS: no task-focus UI, step/parent completion and rollback, task edits/deletion preserve running/paused focus, focus completion leaves todos unchanged.", flush=True)
 
 
 def check_focus_configuration(browser, errors):
@@ -395,18 +472,17 @@ def check_focus_configuration(browser, errors):
     page.locator("#timer-toggle").click()
     page.clock.fast_forward(5_000)
     page.locator("#timer-toggle").click()
-    page.locator('.bottom-nav [data-page="tasks"]').click()
-    task = page.locator(".task-card").filter(has_text="梳理个人 APP 的想法")
-    task.locator(".task-start").click()
+    choose_focus_item(page, PROJECT_TITLES[1])
     page.get_by_role("button", name="取消", exact=True).click()
     expect(page.locator("#timer-time")).to_have_text("00:05")
-    expect(page.locator("#linked-task-name")).to_have_text("不关联待办")
-    task.locator(".task-start").click()
+    expect(page.locator("#focus-item-name")).to_have_text(title)
+    choose_focus_item(page, PROJECT_TITLES[1])
     page.get_by_role("button", name="放弃并继续", exact=True).click()
     expect(page.locator("#page-timer")).to_be_visible()
     expect(page.locator("#timer-time")).to_have_text("00:00")
-    expect(page.locator("#linked-task-name")).to_have_text("梳理个人 APP 的想法")
-    expect(page.locator("#focus-item-name")).to_have_text(title)
+    expect(page.locator("#focus-item-name")).to_have_text(PROJECT_TITLES[1])
+    expect(page.locator("#focus-item-description")).to_contain_text("目标 50 分钟")
+    choose_focus_item(page, title)
     expect(page.locator("#focus-item-description")).to_contain_text("目标 2 分钟")
     expect(page.locator("#focus-sessions")).to_have_text("3")
     page.locator('[data-timing-mode="countdown"]').click()
@@ -416,16 +492,13 @@ def check_focus_configuration(browser, errors):
     expect(page.locator("#timer-time")).to_have_text("00:00")
     expect(page.locator("#focus-sessions")).to_have_text("4")
     skip_progress(page)
-    page.locator('.bottom-nav [data-page="tasks"]').click()
-    task.locator(".task-info").click()
-    page.locator('input[name="title"]').fill("修改后的关联待办")
-    page.get_by_role("button", name="保存修改", exact=True).click()
-    page.locator('.bottom-nav [data-page="focus"]').click()
-    page.locator("#open-statistics").click()
+    open_statistics(page)
     page.locator("#statistics-source").select_option("session")
     expect(page.locator("#statistics-count")).to_have_text("1")
     expect(page.locator("#statistics-minutes")).to_have_text("2")
-    expect(page.locator("#statistics-records")).to_contain_text("关联待办：梳理个人 APP 的想法")
+    expect(page.locator("#statistics-records .record-heading strong")).to_have_text([title])
+    expect(page.locator("#statistics-ranking .rank-heading > span")).to_have_text([title])
+    expect(page.locator("#statistics-records")).not_to_contain_text("关联待办")
     assert_hour_distribution(page)
     payload = download_statistics(page, "json")
     record = payload["records"][0]
@@ -433,13 +506,14 @@ def check_focus_configuration(browser, errors):
     assert record["focusItemTitle"] == title
     assert record["timerMode"] == "countdown" and record["targetMinutes"] == 2
     assert record["durationSeconds"] == 120 and record["durationMinutes"] == 2
-    # M：这件事有小步，记录的标题快照是「父任务 · 这一步」，后续改名不追改历史。
-    assert record["taskTitle"] == "梳理个人 APP 的想法 · 选一个先做" and record["category"] == "生活"
+    assert record["category"] == "生活"
     rows = download_statistics(page, "csv")
-    assert rows[1][8] == "'" + title
-    assert rows[1][7] == "倒计时" and rows[1][9:11] == ["2", "120"]
+    assert len(rows) == 1
+    assert rows[0]["专注项"] == "'" + title
+    assert rows[0]["计时模式"] == "倒计时"
+    assert rows[0]["目标时长（分钟）"] == "2" and rows[0]["时长（秒）"] == "120"
     page.close()
-    print("PASS: default/custom focus configuration, rest-only preferences, reset/item/mode/task cancellation, task snapshots and CSV escaping.", flush=True)
+    print("PASS: default/custom focus configuration, rest-only preferences, reset/item/mode cancellation and discard, independent focus records and CSV escaping.", flush=True)
 
 
 def check_cancelled_settings_drafts(browser, errors):
@@ -491,7 +565,7 @@ def check_project_navigation(browser, errors):
     expect(expand).to_have_attribute("aria-expanded", "false")
     choose_focus_item(page, PROJECT_TITLES[0])
     expect(page.locator("#page-timer")).to_be_visible()
-    expect(page.locator("#linked-task-name")).to_have_text("不关联待办")
+    assert_no_task_focus_ui(page)
     page.locator("#timer-toggle").click()
     page.clock.fast_forward(10_000)
     page.locator("#timer-back").click()
@@ -613,7 +687,7 @@ def check_progress_workflow(browser, errors):
     assert latest["progress"]["note"] == unsafe_note and latest["progress"]["percent"] is None
     assert all(entry["recordId"] in {record["id"] for record in payload["records"]} for entry in payload["progressHistory"])
     rows = download_statistics(page, "csv")
-    assert any(row[11] == "'" + unsafe_note and row[12] == "" and row[13] for row in rows[1:]), rows
+    assert any(row["学习进度"] == "'" + unsafe_note and row["完成度（%）"] == "" and row["进度更新时间"] for row in rows), rows
     home(page)
     expand_project(page, title)
     page.get_by_role("button", name=f"编辑项目：{title}", exact=True).click()
@@ -877,26 +951,33 @@ def run_checks():
         page.get_by_role("button", name="保存修改", exact=True).click()
         added = page.locator(".task-card").filter(has_text="自动测试待办")
         added.locator(".task-checkbox").click()
-        added.locator(".task-start").click()
+        page.locator('[data-filter="all"]').click()
+        expect(added.locator(".task-checkbox")).to_have_attribute("aria-pressed", "false")
+        expect(page.locator("#focus-item-name")).to_have_text(PROJECT_TITLES[0])
+        expect(page.locator("#focus-sessions")).to_have_text("4")
+        assert_no_task_focus_ui(page)
+        choose_focus_item(page, PROJECT_TITLES[0])
         expect(page.locator("#page-timer")).to_be_visible()
-        expect(page.locator("#linked-task-name")).to_have_text("自动测试待办")
         page.locator("#timer-toggle").click()
         page.clock.fast_forward(ONE_MINUTE_MS)
         expect(page.locator("#focus-sessions")).to_have_text("5")
         skip_progress(page)
         page.locator('.bottom-nav [data-page="tasks"]').click()
+        expect(added.locator(".task-checkbox")).to_have_attribute("aria-pressed", "false")
+        expect(page.locator("#task-summary")).to_have_text("已完成 1 / 5 件")
         added.locator(".task-info").click()
         page.get_by_role("button", name="删除", exact=True).click()
         expect(page.get_by_role("button", name="取消", exact=True)).to_be_focused()
         page.get_by_role("button", name="确认删除", exact=True).click()
         expect(page.locator("#all-count")).to_have_text("4")
-        expect(page.locator("#linked-task-name")).to_have_text("不关联待办")
+        assert_no_task_focus_ui(page)
 
         page.locator('.bottom-nav [data-page="focus"]').click()
         page.locator("#open-statistics").click()
         expect(page.locator("#statistics-minutes")).to_have_text("77")
         expect(page.locator("#statistics-count")).to_have_text("5")
-        expect(page.locator("#statistics-records")).to_contain_text("自动测试待办")
+        expect(page.locator("#statistics-records")).not_to_contain_text("自动测试待办")
+        expect(page.locator("#statistics-records")).not_to_contain_text("关联待办")
         page.locator("#statistics-source").select_option("session")
         expect(page.locator("#statistics-count")).to_have_text("2")
         expect(page.locator("#statistics-minutes")).to_have_text("2")
@@ -904,33 +985,18 @@ def run_checks():
             assert_statistics_period(page, period, count)
             expect(page.locator("#statistics-minutes")).to_have_text("2")
         page.locator('[data-stat-period="day"]').click()
-        page.locator("#export-statistics").click()
-        page.locator('select[name="format"]').select_option("JSON（明细与汇总）")
-        with page.expect_download() as download_event:
-            page.get_by_role("button", name="下载统计文件", exact=True).click()
-        download = download_event.value
-        payload = json.loads(Path(download.path()).read_text(encoding="utf-8"))
-        assert download.suggested_filename.endswith(".json")
+        payload = download_statistics(page, "json")
         assert payload["includesSamples"] is False
         assert payload["summary"]["count"] == 2
         assert payload["summary"]["minutes"] == 2
-        assert {record["taskTitle"] for record in payload["records"]} == {PROJECT_TITLES[0], "自动测试待办"}
         assert all(record["source"] == "session" for record in payload["records"])
         assert all(record["focusItemTitle"] == PROJECT_TITLES[0] and record["timerMode"] == "countdown" and record["targetMinutes"] == 1 and record["durationSeconds"] == 60 for record in payload["records"])
         assert all(len(record["segments"]) == 1 for record in payload["records"])
         page.locator("#statistics-source").select_option("all")
-        page.locator("#export-statistics").click()
-        with page.expect_download() as download_event:
-            page.get_by_role("button", name="下载统计文件", exact=True).click()
-        download = download_event.value
-        csv_bytes = Path(download.path()).read_bytes()
-        assert csv_bytes.startswith(b"\xef\xbb\xbf")
-        csv_rows = list(csv.reader(io.StringIO(csv_bytes.decode("utf-8-sig"))))
-        assert csv_rows[0] == CSV_HEADERS
-        assert all(len(row) == len(CSV_HEADERS) for row in csv_rows)
-        assert len(csv_rows) == 6
-        assert sum(float(row[5]) for row in csv_rows[1:]) == 77
-        assert {row[6] for row in csv_rows[1:]} == {"示例", "专注计时"}
+        csv_rows = download_statistics(page, "csv")
+        assert len(csv_rows) == 5
+        assert sum(float(row["时长（分钟）"]) for row in csv_rows) == 77
+        assert {row["来源"] for row in csv_rows} == {"示例", "专注计时"}
         page.locator("#statistics-anchor").fill("2024-02-29")
         page.locator("#statistics-anchor").dispatch_event("change")
         expect(page.locator(".calendar-day")).to_have_count(29)
@@ -948,11 +1014,8 @@ def run_checks():
         expect(page.locator("#statistics-records > li")).to_have_count(20)
         page.locator("#statistics-more").click()
         expect(page.locator("#statistics-records > li")).to_have_count(min(40, expected_records))
-        page.locator("#export-statistics").click()
-        with page.expect_download() as download_event:
-            page.get_by_role("button", name="下载统计文件", exact=True).click()
-        rows = list(csv.reader(io.StringIO(Path(download_event.value.path()).read_text(encoding="utf-8-sig"))))
-        assert len(rows) - 1 == expected_records
+        rows = download_statistics(page, "csv")
+        assert len(rows) == expected_records
 
         page.locator('.bottom-nav [data-page="usage"]').click()
         page.locator('[data-period="week"]').click()
@@ -1052,6 +1115,7 @@ def run_checks():
             midnight_page.get_by_role("button", name="下载统计文件", exact=True).click()
         print("Midnight completion verified; reading export.", flush=True)
         payload = json.loads(Path(download_event.value.path()).read_text(encoding="utf-8"))
+        assert_no_task_fields(payload)
         record = payload["records"][0]
         started = datetime.fromisoformat(record["startedAt"].replace("Z", "+00:00"))
         ended = datetime.fromisoformat(record["endedAt"].replace("Z", "+00:00"))
@@ -1082,11 +1146,13 @@ def run_checks():
         with boundary_page.expect_download() as download_event:
             boundary_page.get_by_role("button", name="下载统计文件", exact=True).click()
         payload = json.loads(Path(download_event.value.path()).read_text(encoding="utf-8"))
+        assert_no_task_fields(payload)
         assert payload["summary"]["count"] == 4, "export must include completions while dialog is open"
         assert payload["summary"]["minutes"] == 76
         skip_progress(boundary_page, return_to_timer=False)
         boundary_page.close()
         check_task_grouping(browser, errors)
+        check_task_focus_independence(browser, errors)
         check_focus_configuration(browser, errors)
         check_independent_countup(browser, errors)
         check_project_navigation(browser, errors)

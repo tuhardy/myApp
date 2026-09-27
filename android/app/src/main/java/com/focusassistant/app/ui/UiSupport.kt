@@ -441,7 +441,7 @@ internal fun TodoEditorDialog(
         else onSave(Todo(todo?.id ?: UUID.randomUUID().toString(), title.trim(), category, important,
             // 有小步时父任务的完成状态由小步决定，避免保存后两者不一致。
             if (trimmed.isNotEmpty()) trimmed.all { it.done } else todo?.done ?: false,
-            todo?.estimate ?: 1, todo?.createdAt.orEmpty(), trimmed, todo?.archived ?: false))
+            todo?.createdAt.orEmpty(), trimmed, todo?.archived ?: false))
     }) { Text(if (busy) "保存中" else "保存") } }, dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("取消") } })
 }
 

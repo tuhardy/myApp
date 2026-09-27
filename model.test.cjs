@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { Timer, LIMITS, MODES, USAGE, CATEGORIES, initialTasks, taskSummary, groupTasks, validateTask, validateSteps, taskAge, taskProgress, nextStep, stepFocusTitle, daysBetween, formatTime } = require("./model.js");
+const { Timer, LIMITS, MODES, USAGE, CATEGORIES, initialTasks, taskSummary, groupTasks, validateTask, validateSteps, taskAge, taskProgress, nextStep, daysBetween, formatTime } = require("./model.js");
 const { localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv } = require("./model.js");
 const { execFileSync } = require("node:child_process");
 const { initialFocusItems, validateFocusItem, focusHourDistribution, validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary } = require("./model.js");
@@ -126,14 +126,14 @@ test("累计自然日使用日历序数，跨时区及夏令时开始结束不�
   }
 });
 
-test("CSV 十四列附加当前进度快照，保留零完成度和更新时间并转义多行公式", () => {
+test("CSV 十三列附加当前进度快照，保留零完成度和更新时间并转义多行公式", () => {
   const record = focusRecord("progress-csv", new Date(2024, 1, 29, 12), 25, {
     focusItemTitle: "历史项目名称", progress: Object.freeze({ note: '=学习,"JWT"\r\n下一步', percent: 0, updatedAt: "2024-03-01T10:00:00Z" }),
   });
   Object.freeze(record);
   const snapshot = JSON.stringify(record);
   const csv = exportFocusCsv([record]);
-  assert.equal(csv.split("\r\n")[0].split(",").length, 14);
+  assert.equal(csv.split("\r\n")[0].split(",").length, 13);
   assert.ok(csv.endsWith(`,"历史项目名称","25","1500","'=学习,""JWT""\r\n下一步","0","2024-03-01T10:00:00Z"\r\n`));
   for (const note of ["+1", "-1", "@SUM(A1)", " \t=1", "\r\n+1", "<script>alert(1)</script>"]) {
     const escaped = /^[\s]*[=+\-@]/.test(note) ? `'${note}` : note;
@@ -279,10 +279,12 @@ test("M：走过的小步即进度，没有小步只有两种状态", () => {
   assert.equal(nextStep({ steps: [] }), null);
 });
 
-test("M：专注记录的标题快照记成「父任务 · 这一步」", () => {
-  const task = { title: "梳理想法", steps: [{ id: "a", title: "画草图", done: false }] };
-  assert.equal(stepFocusTitle(task, task.steps[0]), "梳理想法 · 画草图");
-  assert.equal(stepFocusTitle(task, null), "梳理想法");
+test("待办不再建模预估时长或专注标题关联", () => {
+  assert.equal(Object.hasOwn(require("./model.js"), "stepFocusTitle"), false);
+  assert.equal(Object.hasOwn(LIMITS, "maxEstimatedSessions"), false);
+  const task = validateTask({ title: "梳理想法", category: "工作", estimate: 3 });
+  assert.equal(Object.hasOwn(task, "estimate"), false);
+  assert.ok(initialTasks().every(item => !Object.hasOwn(item, "estimate")));
 });
 
 test("重要的事跨分类置顶，其余按分类分组，完成的事沉底且空组不出现", () => {
@@ -368,6 +370,8 @@ test("新增纯接口同时通过 CommonJS 和浏览器 FocusModel 导出", () =
   const common = require("./model.js");
   assert.deepEqual(Object.keys(browser.FocusModel), Object.keys(common));
   assert.equal(Object.isFrozen(browser.FocusModel), true);
+  assert.equal(Object.hasOwn(browser.FocusModel, "stepFocusTitle"), false);
+  assert.equal(Object.hasOwn(common, "stepFocusTitle"), false);
   for (const name of ["localDateKey", "periodRange", "initialFocusRecords", "selectFocusRecords", "focusSummary", "focusTrend", "focusBreakdown", "monthActivity", "exportFocusCsv", "initialFocusItems", "validateFocusItem", "focusHourDistribution", "validateProgress", "initialProgressEntries", "latestProjectProgress", "allTimeFocusSummary"]) {
     assert.equal(typeof browser.FocusModel[name], "function");
     assert.equal(typeof common[name], "function");
@@ -376,7 +380,7 @@ test("新增纯接口同时通过 CommonJS 和浏览器 FocusModel 导出", () =
 
 function focusRecord(id, endedAt, durationMinutes = 25, extra = {}) {
   return {
-    id, taskId: null, taskTitle: "阅读", category: "个人成长",
+    id, focusItemId: "focus-reading", focusItemTitle: "阅读", category: "个人成长",
     startedAt: new Date(endedAt.getTime() - durationMinutes * 60000).toISOString(),
     endedAt: endedAt.toISOString(), durationMinutes, source: "session", ...extra,
   };
@@ -473,7 +477,7 @@ test("示例记录确定且独立，今天恰好三次共 75 分钟并覆盖近 
   const oldest = new Date(Math.min(...records.map(record => Date.parse(record.endedAt))));
   assert.ok(localDateKey(oldest) <= "2024-04-17");
   for (const record of records) {
-    assert.deepEqual(Object.keys(record).sort(), ["id", "taskId", "taskTitle", "category", "startedAt", "endedAt", "durationMinutes", "source", "timerMode", "focusItemTitle", "focusItemId", "targetMinutes", "durationSeconds", "segments"].sort());
+    assert.deepEqual(Object.keys(record).sort(), ["id", "category", "startedAt", "endedAt", "durationMinutes", "source", "timerMode", "focusItemTitle", "focusItemId", "targetMinutes", "durationSeconds", "segments"].sort());
     assert.equal(record.timerMode, "countdown");
     const project = initialFocusItems().find(item => item.id === record.focusItemId);
     assert.ok(project);
@@ -483,12 +487,12 @@ test("示例记录确定且独立，今天恰好三次共 75 分钟并覆盖近 
     assert.equal(record.durationSeconds, record.durationMinutes * 60);
     assert.deepEqual(record.segments, [{ startedAt: record.startedAt, endedAt: record.endedAt }]);
     assert.equal(record.source, "sample");
-    assert.ok(record.taskId === null || typeof record.taskId === "string");
+    for (const field of ["taskId", "taskTitle", "taskStepId"]) assert.equal(Object.hasOwn(record, field), false);
     assert.equal(Date.parse(record.endedAt) - Date.parse(record.startedAt), record.durationMinutes * 60000);
     assert.ok(localDateKey(new Date(record.endedAt)) <= localDateKey(now));
   }
-  records[0].taskTitle = "已修改";
-  assert.notEqual(initialFocusRecords(now)[0].taskTitle, "已修改");
+  records[0].focusItemTitle = "已修改";
+  assert.notEqual(initialFocusRecords(now)[0].focusItemTitle, "已修改");
   assert.equal(now.getTime(), new Date(2024, 5, 15, 0, 1).getTime());
 });
 
@@ -531,19 +535,24 @@ test("趋势以完成时间整笔入箱，按小时、日期和月份补齐零�
   assert.throws(() => focusTrend([], "invalid", anchor));
 });
 
-test("分类和任务分组按分钟降序，平手维持首次出现顺序，支持特殊名称", () => {
+test("分类和专注项分组按分钟降序，平手维持首次出现顺序，支持特殊名称", () => {
   const records = [
-    focusRecord("a", new Date(2024, 1, 1), 25, { category: "工作", taskTitle: "__proto__" }),
-    focusRecord("b", new Date(2024, 1, 2), 50, { category: "生活", taskTitle: "第二项" }),
-    focusRecord("c", new Date(2024, 1, 3), 25, { category: "工作", taskTitle: "__proto__" }),
-    focusRecord("d", new Date(2024, 1, 4), 10, { category: "个人成长", taskTitle: "第三项" }),
+    focusRecord("a", new Date(2024, 1, 1), 25, { category: "工作", focusItemTitle: "__proto__" }),
+    focusRecord("b", new Date(2024, 1, 2), 50, { category: "生活", focusItemTitle: "第二项" }),
+    focusRecord("c", new Date(2024, 1, 3), 25, { category: "工作", focusItemTitle: "__proto__" }),
+    focusRecord("d", new Date(2024, 1, 4), 10, { category: "个人成长", focusItemTitle: "第三项" }),
   ];
   assert.deepEqual(focusBreakdown(records, "category"), [
     { name: "工作", minutes: 50, count: 2 }, { name: "生活", minutes: 50, count: 1 }, { name: "个人成长", minutes: 10, count: 1 },
   ]);
-  assert.deepEqual(focusBreakdown(records, "taskTitle")[0], { name: "__proto__", minutes: 50, count: 2 });
+  assert.deepEqual(focusBreakdown(records, "focusItemTitle"), [
+    { name: "__proto__", minutes: 50, count: 2 }, { name: "第二项", minutes: 50, count: 1 }, { name: "第三项", minutes: 10, count: 1 },
+  ]);
   assert.deepEqual(focusBreakdown([], "category"), []);
-  assert.throws(() => focusBreakdown(records, "source"));
+  assert.deepEqual(focusBreakdown([], "focusItemTitle"), []);
+  for (const field of ["source", "taskTitle", "taskId"]) {
+    assert.throws(() => focusBreakdown(records, field), { message: "请选择分类或专注项分组。" });
+  }
 });
 
 test("汇总、趋势、分类和月日历总和一致，所有 API 均不修改输入", () => {
@@ -555,7 +564,7 @@ test("汇总、趋势、分类和月日历总和一致，所有 API 均不修改
     const selected = selectFocusRecords(records, { period, anchor });
     const summary = focusSummary(selected);
     assert.equal(focusTrend(records, period, anchor).reduce((sum, item) => sum + item.minutes, 0), summary.minutes);
-    for (const field of ["category", "taskTitle"]) {
+    for (const field of ["category", "focusItemTitle"]) {
       const breakdown = focusBreakdown(selected, field);
       assert.equal(breakdown.reduce((sum, item) => sum + item.minutes, 0), summary.minutes);
       assert.equal(breakdown.reduce((sum, item) => sum + item.count, 0), summary.count);
@@ -574,17 +583,47 @@ test("汇总、趋势、分类和月日历总和一致，所有 API 均不修改
 
 test("CSV 使用 BOM、中文表头、CRLF 和双引号转义，并阻止用户文本公式注入", () => {
   const record = focusRecord("csv", new Date(2024, 1, 29, 12, 30), 25, {
-    taskTitle: '读书,"笔记"\r\n下一行', category: "个人成长", source: "sample",
+    focusItemTitle: '读书,"笔记"\r\n下一行', category: "个人成长", source: "sample",
   });
-  const header = '\uFEFF"日期","任务","分类","开始时间","结束时间","时长（分钟）","来源","计时模式","专注项","目标时长（分钟）","时长（秒）","学习进度","完成度（%）","进度更新时间"\r\n';
+  const header = '\uFEFF"日期","分类","开始时间","结束时间","时长（分钟）","来源","计时模式","专注项","目标时长（分钟）","时长（秒）","学习进度","完成度（%）","进度更新时间"\r\n';
   assert.equal(exportFocusCsv([]), header);
-  assert.equal(exportFocusCsv([record]), header + `"2024-02-29","读书,""笔记""\r\n下一行","个人成长","2024-02-29 12:05:00","2024-02-29 12:30:00","25","示例","倒计时","读书,""笔记""\r\n下一行","25","1500","","",""\r\n`);
+  assert.equal(exportFocusCsv([record]), header + `"2024-02-29","个人成长","2024-02-29 12:05:00","2024-02-29 12:30:00","25","示例","倒计时","读书,""笔记""\r\n下一行","25","1500","","",""\r\n`);
   for (const text of ['=1+1', '+SUM(A1)', '-1+2', '@SUM(A1)', '  =1+1', '\t=1+1', '\r\n+1', '\u00a0@SUM(A1)', '="引号,换行\n"']) {
-    const csv = exportFocusCsv([{ ...record, taskTitle: text, category: text, focusItemTitle: text, source: "session" }]);
+    const csv = exportFocusCsv([{ ...record, category: text, focusItemTitle: text, source: "session" }]);
     const escaped = `"'${text.replaceAll('"', '""')}"`;
-    assert.ok(csv.includes(`${escaped},${escaped},`));
+    assert.ok(csv.includes(`"2024-02-29",${escaped},"2024-02-29 12:05:00"`));
     assert.ok(csv.endsWith(`,"专注计时","倒计时",${escaped},"25","1500","","",""\r\n`));
   }
+});
+
+test("CSV 十三列表头与每行逐列对齐，缺失专注项不回退待办名称", () => {
+  const records = ["独立项目", undefined, null, ""].map((focusItemTitle, index) => Object.freeze(focusRecord(`csv-${index}`, new Date(2024, 1, 29, 12, 30), 25, {
+    focusItemTitle, taskId: "legacy-task", taskTitle: "旧待办名称", timerMode: "countup", targetMinutes: 50, durationSeconds: 1500,
+    progress: { note: '笔记,"引号"\r\n下一行', percent: 0, updatedAt: "2024-03-01T10:00:00Z" },
+  })));
+  const snapshot = JSON.stringify(records);
+  const csv = exportFocusCsv(records);
+  const rows = [];
+  let row = [];
+  let consumed = 1;
+  for (const match of csv.matchAll(/"((?:[^"]|"")*)"(,|\r\n)/g)) {
+    assert.equal(match.index, consumed);
+    consumed += match[0].length;
+    row.push(match[1].replaceAll('""', '"'));
+    if (match[2] === "\r\n") {
+      rows.push(row);
+      row = [];
+    }
+  }
+  assert.equal(consumed, csv.length);
+  assert.equal(rows.length, records.length + 1);
+  assert.deepEqual(rows[0], ["日期", "分类", "开始时间", "结束时间", "时长（分钟）", "来源", "计时模式", "专注项", "目标时长（分钟）", "时长（秒）", "学习进度", "完成度（%）", "进度更新时间"]);
+  for (const [index, record] of records.entries()) {
+    assert.equal(rows[index + 1].length, rows[0].length);
+    assert.deepEqual(rows[index + 1], ["2024-02-29", "个人成长", "2024-02-29 12:05:00", "2024-02-29 12:30:00", "25", "专注计时", "正计时", record.focusItemTitle ?? "", "50", "1500", record.progress.note, "0", record.progress.updatedAt]);
+  }
+  assert.doesNotMatch(csv, /旧待办名称|legacy-task/);
+  assert.equal(JSON.stringify(records), snapshot);
 });
 
 test("专注项独立可复用，输入清理且不携带待办字段", () => {
@@ -745,7 +784,7 @@ test("秒级统计不丢失小数，片段毫秒差异按记录秒数归一化",
   assert.equal(focusSummary(records).minutes, 1);
   assert.equal(focusSummary(records).averageMinutes, 1);
   assert.equal(focusTrend(records, "day", anchor)[9].minutes, 1);
-  assert.equal(focusBreakdown(records, "taskTitle")[0].minutes, 1);
+  assert.equal(focusBreakdown(records, "focusItemTitle")[0].minutes, 1);
   assert.equal(monthActivity(records, anchor).at(-1).minutes, 1);
   assert.equal(focusHourDistribution(records)[9].minutes, 1);
   for (const apiMinutes of [focusSummary(records.slice(0, 1)).minutes, focusHourDistribution(records.slice(0, 1))[9].minutes]) closeMinutes(apiMinutes, 1 / 60);
@@ -830,7 +869,7 @@ test("计时进度读取不倒退，旧剩余毫秒写入和时长重设保持�
   assert.deepEqual(timer.tick(), { mode: "focus", minutes: 1 });
 });
 
-test("CSV 在原有七列后追加模式、独立专注项、目标和实际整秒", () => {
+test("CSV 在基础六列后追加模式、独立专注项、目标和实际整秒", () => {
   const record = focusRecord("csv-seconds", new Date(2024, 1, 29, 12), 61 / 60, {
     timerMode: "countup", focusItemTitle: "编程", targetMinutes: 50, durationSeconds: 61,
   });

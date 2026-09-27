@@ -131,15 +131,11 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
     suspend fun markProgressPrompted(sessionId: String) {
         mutate { current -> current.copy(sessions = current.sessions.map { if (it.id == sessionId) it.copy(progressPrompted = true) else it }) }
     }
-    suspend fun startTimer(projectId: String, taskId: String? = null, taskStepId: String? = null) {
+    suspend fun startTimer(projectId: String) {
         mutate { current ->
             require(current.timer == null) { "已有计时，请先结束或确认放弃" }
             val project = current.projects.find { it.id == projectId } ?: error("项目不存在")
-            val task = taskId?.let { requested -> current.todos.find { it.id == requested } ?: error("待办不存在") }
-            // 小步不是独立实体：记录仍挂在父待办的 id 上，只有标题快照记成「父任务 · 这一步」。
-            val step = taskStepId?.let { requested -> task?.steps?.find { it.id == requested } }
-            val snapshot = task?.let { it.copy(title = TodoAging.stepFocusTitle(it, step)) }
-            current.copy(timer = TimerEngine.start(project, id(), System.currentTimeMillis(), SystemClock.elapsedRealtime(), bootCount, snapshot))
+            current.copy(timer = TimerEngine.start(project, id(), System.currentTimeMillis(), SystemClock.elapsedRealtime(), bootCount))
         }
     }
     suspend fun startBreak(longBreak: Boolean) {
