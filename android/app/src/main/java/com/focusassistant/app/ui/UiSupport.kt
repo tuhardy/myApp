@@ -62,8 +62,11 @@ internal object UiLimits {
 internal enum class TodoFilter { ALL, PENDING, DONE, ARCHIVED }
 
 internal val Accent = Color(0xFFC44E22)
+internal val AccentDark = Color(0xFFA33D18)
+internal val AccentSoft = Color(0xFFFFF1E9)
 internal val SoftSurface = Color(0xFFF5F5F5)
 internal val Muted = Color(0xFF626262)
+internal val Line = Color(0xFFE5E5E5)
 
 @Composable
 internal fun FocusTheme(content: @Composable () -> Unit) {
@@ -385,7 +388,15 @@ internal fun ProjectEditorDialog(
 }
 
 @Composable
-internal fun TodoEditorDialog(todo: Todo?, busy: Boolean, onDismiss: () -> Unit, onSave: (Todo) -> Unit) {
+internal fun TodoEditorDialog(
+    todo: Todo?,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    /** 删除与找回和原型一样放在编辑弹窗里，列表卡片不再堆按钮。 */
+    onDelete: (Todo) -> Unit,
+    onRestore: (Todo) -> Unit,
+    onSave: (Todo) -> Unit
+) {
     var title by rememberSaveable(todo?.id) { mutableStateOf(todo?.title.orEmpty()) }
     var category by rememberSaveable(todo?.id) { mutableStateOf(todo?.category ?: UiLimits.CATEGORIES.first()) }
     var important by rememberSaveable(todo?.id) { mutableStateOf(todo?.important ?: false) }
@@ -413,6 +424,13 @@ internal fun TodoEditorDialog(todo: Todo?, busy: Boolean, onDismiss: () -> Unit,
             }
             if (steps.size < Validation.MAX_STEPS) {
                 TextButton(onClick = { steps.add(TodoStep(UUID.randomUUID().toString(), "")); error = null }) { Text("加一步") }
+            }
+            if (todo != null) {
+                HorizontalDivider(color = Line)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (todo.archived) OutlinedButton(enabled = !busy, onClick = { onRestore(todo) }) { Text("找回", fontSize = 12.sp) }
+                    OutlinedButton(enabled = !busy, onClick = { onDelete(todo) }) { Text("删除", fontSize = 12.sp, color = AccentDark) }
+                }
             }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }

@@ -302,7 +302,10 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                     }
                 }
             }
-            "todo" -> TodoEditorDialog(state.todos.find { it.id == ui.dialogId }, ui.busy, { ui.close() }) { todo -> ui.perform { repository.saveTodo(todo); ui.close() } }
+            "todo" -> TodoEditorDialog(state.todos.find { it.id == ui.dialogId }, ui.busy, { ui.close() },
+                onDelete = { todo -> ui.open("delete-todo", todo.id) },
+                onRestore = { todo -> ui.perform { repository.archiveTodo(todo.id, false); ui.todoFilter = TodoFilter.ALL; ui.close(); ui.message("「${todo.title}」回到清单。") } }
+            ) { todo -> ui.perform { repository.saveTodo(todo); ui.close() } }
             "progress-auto", "progress-edit" -> if (session != null) ProgressEditorDialog(context, session,
                 Statistics.latestForSession(state.progress, session.id) ?: Statistics.latestProgress(state.progress, session.projectId), ui.busy, { ui.close() }) { note, percent ->
                     ui.perform { repository.saveProgress(session.id, note, percent); ProgressDrafts.remove(appContext, session.id); ui.close() }
