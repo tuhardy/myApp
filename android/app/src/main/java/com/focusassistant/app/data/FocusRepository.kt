@@ -25,7 +25,7 @@ import org.json.JSONObject
 class FocusRepository(context: Context, scope: CoroutineScope) {
     private val appContext = context.applicationContext
     private val database = Room.databaseBuilder(appContext, FocusDatabase::class.java, "focus-assistant.db")
-        .addMigrations(FocusDatabase.MIGRATION_1_2)
+        .addMigrations(FocusDatabase.MIGRATION_1_2, FocusDatabase.MIGRATION_2_3)
         .enableMultiInstanceInvalidation().build()
     private val dao = database.dao()
     private val mutex = Mutex()
@@ -49,8 +49,8 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
                     }
                     mutableState.value = loaded.first
                     loadedRevision = loaded.second
-                    // 启动时还没有任何编辑草稿，未被正式日记引用的附件都是上次中断留下的，可安全清理。
-                    DiaryFiles.cleanOrphans(appContext, loaded.first.diaries.flatMapTo(mutableSetOf()) { it.files })
+                    // 启动时还没有正在编辑的内容，既不属于日记也不属于已存草稿的附件都是上次中断留下的，可安全清理。
+                    DiaryFiles.cleanOrphans(appContext, (loaded.first.diaries.flatMap { it.files } + loaded.first.diaryDrafts.flatMap { it.files }).toSet())
                 }
                 ready.complete(Unit)
                 dao.observeRevision().collect { revision ->
@@ -222,16 +222,16 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
             mutate { current ->
                 require(current.timer == null) { "请先结束或确认放弃当前计时，再恢复备份" }
                 // 现有备份不含日记：恢复时原样保留本机日记，不能因为备份里没有而清空。
-                AppState(backup.projects.toList(), backup.todos.toList(), backup.sessions.map { it.copy(progressPrompted = true, segments = it.segments.toList()) }, backup.progress.toList(), backup.settings, loading = false, diaries = current.diaries)
+                AppState(backup.projects.toList(), backup.todos.toList(), backup.sessions.map { it.copy(progressPrompted = true, segments = it.segments.toList()) }, backup.progress.toList(), backup.settings, loading = false, diaries = current.diaries, diaryDrafts = current.diaryDrafts)
             }
         }
     }
 
     /**
      * 保存日记。附件文件必须已在私有目录中，缺失时不保存、不冒充成功。
-     * 返回旧版本中不再使用的附件文件名，由调用方在确认无草稿引用后清理。
+     * 同一事务中移出对应草稿。返回旧版本和草稿中不再使用的附件文件名，由调用方清理。
      */
-    suspend fun saveDiary(draft: DiaryEntry, existing: Boolean): Set<String> {
+    suspend fun saveDiary(draft: DiaryEntry, existing: Boolean, draftKey: String? = null): Set<String> {
         val missing = withContext(Dispatchers.IO) { draft.files.filterNot { DiaryFiles.exists(appContext, it) } }
         require(missing.isEmpty()) { "有 ${missing.size} 个附件文件已不可用，未保存。请移除后重试。" }
         var obsolete = emptySet<String>()
@@ -241,10 +241,34 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
             val now = System.currentTimeMillis()
             val stored = draft.copy(createdAt = previous?.createdAt ?: now, updatedAt = now, deletedAt = null)
             DiaryRules.validate(stored, now)
-            obsolete = previous?.files.orEmpty().toSet() - stored.files.toSet()
-            current.copy(diaries = if (previous == null) listOf(stored) + current.diaries else current.diaries.map { if (it.id == stored.id) stored else it })
+            val storedDraft = current.diaryDrafts.find { it.key == draftKey }
+            obsolete = (previous?.files.orEmpty() + storedDraft?.files.orEmpty()).toSet() - stored.files.toSet()
+            current.copy(diaries = if (previous == null) listOf(stored) + current.diaries else current.diaries.map { if (it.id == stored.id) stored else it },
+                diaryDrafts = current.diaryDrafts.filterNot { it.key == draftKey })
         }
         return obsolete
+    }
+    /** 存入或更新草稿（按 key 覆盖），返回上一版草稿里已不再使用的附件文件名。 */
+    suspend fun saveDiaryDraft(draft: DiaryDraft): Set<String> {
+        var dropped = emptySet<String>()
+        mutate { current ->
+            val stored = draft.copy(updatedAt = System.currentTimeMillis())
+            DiaryRules.validateDraft(stored)
+            val previous = current.diaryDrafts.find { it.key == stored.key }
+            dropped = previous?.files.orEmpty().toSet() - stored.files.toSet()
+            current.copy(diaryDrafts = if (previous == null) listOf(stored) + current.diaryDrafts else current.diaryDrafts.map { if (it.key == stored.key) stored else it })
+        }
+        return dropped
+    }
+    /** 移出草稿，返回其附件文件名供清理；已保存的日记不受影响。 */
+    suspend fun removeDiaryDraft(key: String): Set<String> {
+        var files = emptySet<String>()
+        mutate { current ->
+            val draft = current.diaryDrafts.find { it.key == key } ?: return@mutate current
+            files = draft.files.toSet()
+            current.copy(diaryDrafts = current.diaryDrafts.filterNot { it.key == key })
+        }
+        return files
     }
     /** 删除只移入回收站，不删除正文与附件。 */
     suspend fun trashDiary(id: String) = updateDiary(id) { DiaryRules.moveToTrash(it, System.currentTimeMillis()) }
@@ -260,9 +284,12 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         }
         return files
     }
-    /** 只删除既不属于任何日记、也不被草稿使用的文件。 */
+    /** 只删除既不属于任何日记、已存草稿，也不被正在编辑的内容（protected）使用的文件。 */
     suspend fun deleteDiaryFiles(candidates: Collection<String>, protected: Set<String>) = withContext(Dispatchers.IO) {
-        DiaryFiles.delete(appContext, DiaryRules.unreferenced(candidates, state.value.diaries, protected))
+        mutex.withLock {
+            val snapshot = state.value
+            DiaryFiles.delete(appContext, DiaryRules.unreferenced(candidates, snapshot.diaries, protected, snapshot.diaryDrafts))
+        }
     }
     private suspend fun updateDiary(id: String, change: (DiaryEntry) -> DiaryEntry) {
         mutate { current ->
@@ -296,7 +323,8 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         progress = dao.progress().map { JsonCodec.readProgress(JSONObject(it.payload)) },
         settings = dao.settings()?.let { JsonCodec.readSettings(JSONObject(it.payload)) } ?: AppSettings(),
         timer = dao.timer()?.let { JsonCodec.readTimer(JSONObject(it.payload)) }, loading = false,
-        diaries = dao.diaries().map { JsonCodec.readDiary(JSONObject(it.payload)) })
+        diaries = dao.diaries().map { JsonCodec.readDiary(JSONObject(it.payload)) },
+        diaryDrafts = dao.diaryDrafts().map { JsonCodec.readDiaryDraft(JSONObject(it.payload)) })
 
     private suspend fun persist(old: AppState, next: AppState) {
         if (old == next) return
@@ -305,6 +333,7 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         sync(old.sessions, next.sessions, { it.id }, dao::removeSessions) { changed -> dao.putSessions(changed.map { (index, item) -> SessionRow(item.id, JsonCodec.session(item).toString(), index) }) }
         sync(old.progress, next.progress, { it.id }, dao::removeProgress) { changed -> dao.putProgress(changed.map { (index, item) -> ProgressRow(item.id, JsonCodec.progress(item).toString(), index) }) }
         sync(old.diaries, next.diaries, { it.id }, dao::removeDiaries) { changed -> dao.putDiaries(changed.map { (index, item) -> DiaryRow(item.id, JsonCodec.diary(item).toString(), index) }) }
+        sync(old.diaryDrafts, next.diaryDrafts, { it.key }, dao::removeDiaryDrafts) { changed -> dao.putDiaryDrafts(changed.map { (index, item) -> DiaryDraftRow(item.key, JsonCodec.diaryDraft(item).toString(), index) }) }
         if (old.settings != next.settings) dao.putSettings(SettingsRow(payload = JsonCodec.settings(next.settings).toString()))
         if (old.timer != next.timer) {
             if (next.timer == null) dao.clearTimer() else dao.putTimer(TimerRow(payload = JsonCodec.timer(next.timer).toString()))

@@ -131,6 +131,17 @@ internal object JsonCodec {
         value.long("occurredAt"), value.long("createdAt"), value.long("updatedAt"),
         if (!value.has("deletedAt") || value.isNull("deletedAt")) null else value.long("deletedAt")
     ).also { DiaryRules.validate(it) }
+    fun diaryDraft(value: DiaryDraft): JSONObject = JSONObject().put("key", value.key).put("entryId", nullable(value.entryId))
+        .put("title", value.title).put("text", value.text).put("occurredAt", value.occurredAt).put("updatedAt", value.updatedAt)
+        .put("photos", JSONArray(value.photos.map { JSONObject().put("id", it.id).put("file", it.file) }))
+        .put("audios", JSONArray(value.audios.map { JSONObject().put("id", it.id).put("file", it.file).put("durationMs", it.durationMs) }))
+    fun readDiaryDraft(value: JSONObject) = DiaryDraft(value.string("key"),
+        if (!value.has("entryId") || value.isNull("entryId")) null else value.string("entryId"),
+        value.string("title"), value.string("text"), value.long("occurredAt"),
+        value.objects("photos", Int.MAX_VALUE).map { DiaryPhoto(it.string("id"), it.string("file")) },
+        value.objects("audios", Int.MAX_VALUE).map { DiaryAudio(it.string("id"), it.string("file"), it.long("durationMs")) },
+        value.long("updatedAt")
+    ).also { DiaryRules.validateDraft(it) }
     fun readTimer(value: JSONObject) = ActiveTimer(value.string("sessionId"), value.string("projectId"), value.string("projectTitle"), value.string("category"), TimerMode.valueOf(value.string("timerMode")), value.nullableInteger("targetMinutes"),
         TimerPhase.valueOf(value.string("phase")), TimerStatus.valueOf(value.string("status")), value.long("startedAt"),
         value.long("accumulatedMs"), value.long("anchorElapsed"), value.long("anchorWall"), value.integer("bootCount"), value.objects("segments", 10000).map(::readSegment), value.boolean("targetNotified"), value.boolean("recoveryPending"))

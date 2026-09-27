@@ -90,6 +90,60 @@ class DiaryTest {
         assertEquals(setOf("photo-old.jpg"), removable)
     }
 
+    private fun draft(key: String, entryId: String?, updatedAt: Long, text: String = "草稿", photos: List<DiaryPhoto> = emptyList()) =
+        DiaryDraft(key, entryId, "", text, at(9, 28, 8), photos, emptyList(), updatedAt)
+
+    @Test fun draftListSortsByLastEditAndMarksDeletedOriginalAsOrphan() {
+        val alive = entry("a", at(9, 1, 9), "原文")
+        val trashed = entry("b", at(9, 2, 9), "删了", deletedAt = at(9, 3, 9))
+        val list = DiaryRules.listDrafts(listOf(
+            draft("new-1", null, 100), draft(DiaryRules.editDraftKey("a"), "a", 300),
+            draft(DiaryRules.editDraftKey("b"), "b", 200), draft(DiaryRules.editDraftKey("c"), "c", 50)), listOf(alive, trashed))
+        assertEquals(listOf("edit:a" to DiaryDraftKind.EDIT, "edit:b" to DiaryDraftKind.ORPHAN, "new-1" to DiaryDraftKind.NEW, "edit:c" to DiaryDraftKind.ORPHAN),
+            list.map { it.draft.key to it.kind })
+        assertEquals(alive, list.first().entry)
+        assertNull(list[1].entry)
+    }
+
+    @Test fun draftChangeIgnoresNewEntryTimeAndRevertedEdits() {
+        val original = entry("a", at(9, 1, 9), "原文", photos = listOf(DiaryPhoto("p", "photo-1.jpg")))
+        val fresh = DiaryRules.freshDraft(DiaryRules.editDraftKey("a"), original, at(9, 28, 9))
+        assertFalse(DiaryRules.draftChanged(fresh, original))
+        assertTrue(DiaryRules.draftChanged(fresh.copy(text = "原文，补一句"), original))
+        assertFalse(DiaryRules.draftChanged(fresh.copy(text = "原文，补一句").copy(text = "原文"), original))
+        assertTrue(DiaryRules.draftChanged(fresh.copy(occurredAt = at(8, 1, 9)), original))
+        assertTrue(DiaryRules.draftChanged(fresh.copy(photos = emptyList()), original))
+        val blank = DiaryRules.freshDraft(DiaryRules.newDraftKey(), null, at(9, 28, 9))
+        assertTrue(blank.key.startsWith(DiaryRules.NEW_DRAFT_PREFIX))
+        assertNull(blank.entryId)
+        assertFalse(DiaryRules.draftChanged(blank.copy(occurredAt = at(9, 1, 9)), null))
+        assertTrue(DiaryRules.draftChanged(blank.copy(audios = listOf(DiaryAudio("v", "audio-1.m4a", 3_000))), null))
+        assertNotEquals(DiaryRules.newDraftKey(), DiaryRules.newDraftKey())
+    }
+
+    @Test fun draftValidationAllowsEmptyContentButRejectsBadKeysFilesAndTimes() {
+        DiaryRules.validateDraft(draft("new-1", null, 100, text = ""))
+        DiaryRules.validateDraft(draft(DiaryRules.editDraftKey("a"), "a", 100))
+        fun rejected(value: DiaryDraft) { try { DiaryRules.validateDraft(value); fail("应拒绝 ${value.key}") } catch (error: IllegalArgumentException) { assertNotNull(error.message) } }
+        rejected(draft("other-1", null, 100))
+        rejected(draft("new-1", "", 100))
+        rejected(draft("new-1", null, -1))
+        rejected(draft("new-1", null, 100, photos = listOf(DiaryPhoto("p", "../x.jpg"))))
+        rejected(draft("new-1", null, 100, text = "字".repeat(DiaryRules.MAX_TEXT + 1)))
+    }
+
+    @Test fun draftJsonRoundTripAndFileCleanupProtectsStoredDrafts() {
+        val value = DiaryDraft(DiaryRules.editDraftKey("a"), "a", "标题", "正文", at(9, 1, 9),
+            listOf(DiaryPhoto("p", "photo-draft.jpg")), listOf(DiaryAudio("v", "audio-draft.m4a", 2_000)), at(9, 28, 9))
+        assertEquals(value, JsonCodec.readDiaryDraft(JSONObject(JsonCodec.diaryDraft(value).toString())))
+        val newDraft = value.copy(key = "new-x", entryId = null)
+        assertEquals(newDraft, JsonCodec.readDiaryDraft(JsonCodec.diaryDraft(newDraft).apply { remove("entryId") }))
+        val removable = DiaryRules.unreferenced(listOf("photo-draft.jpg", "audio-draft.m4a", "photo-old.jpg"), emptyList(), drafts = listOf(value))
+        assertEquals(setOf("photo-old.jpg"), removable)
+        val backup = JSONObject(BackupCodec.encode(AppState(loading = false, diaryDrafts = listOf(value))))
+        assertFalse(backup.toString().contains("photo-draft.jpg"))
+    }
+
     @Test fun jsonRoundTripPreservesEntryAndBackupStillExcludesDiaries() {
         val value = entry("x", at(9, 1, 9), "正文", "标题", deletedAt = at(9, 2, 9),
             photos = listOf(DiaryPhoto("p", "photo-1.jpg")), audios = listOf(DiaryAudio("v", "audio-1.m4a", 5_000)))

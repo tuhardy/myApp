@@ -22,6 +22,21 @@ data class DiaryEntry(
     val hasContent: Boolean get() = title.isNotBlank() || text.isNotBlank() || photos.isNotEmpty() || audios.isNotEmpty()
 }
 
+/**
+ * 没写完的日记。新日记每篇一份（key = new-UUID），修改已有日记每条最多一份（key = edit:日记ID）。
+ * entryId 为空表示新日记；原日记已删除时列表标为 ORPHAN，保存时另存为新日记。
+ */
+data class DiaryDraft(
+    val key: String, val entryId: String?, val title: String, val text: String, val occurredAt: Long,
+    val photos: List<DiaryPhoto>, val audios: List<DiaryAudio>, val updatedAt: Long = 0
+) {
+    val files: List<String> get() = photos.map { it.file } + audios.map { it.file }
+    val hasContent: Boolean get() = title.isNotBlank() || text.isNotBlank() || photos.isNotEmpty() || audios.isNotEmpty()
+    fun toEntry(id: String) = DiaryEntry(id, title.trim(), text.trim(), photos, audios, occurredAt, 0, 0)
+}
+enum class DiaryDraftKind { NEW, EDIT, ORPHAN }
+data class DiaryDraftItem(val draft: DiaryDraft, val entry: DiaryEntry?, val kind: DiaryDraftKind)
+
 data class DiaryGroup(val date: LocalDate?, val label: String, val entries: List<DiaryEntry>)
 data class DiaryDateQuery(val year: Int?, val month: Int, val day: Int?, val label: String)
 data class DiarySelection(
@@ -122,9 +137,47 @@ object DiaryRules {
     fun moveToTrash(entry: DiaryEntry, now: Long): DiaryEntry = if (entry.deletedAt != null) entry else entry.copy(deletedAt = now)
     fun restore(entry: DiaryEntry): DiaryEntry = entry.copy(deletedAt = null)
 
-    /** 仍被其他日记引用的文件不能清理。 */
-    fun unreferenced(candidates: Collection<String>, entries: List<DiaryEntry>, protected: Set<String> = emptySet()): Set<String> {
-        val used = entries.flatMapTo(mutableSetOf()) { it.files } + protected
+    /** 仍被日记、已存草稿或正在编辑的内容引用的文件不能清理。 */
+    fun unreferenced(candidates: Collection<String>, entries: List<DiaryEntry>, protected: Set<String> = emptySet(), drafts: List<DiaryDraft> = emptyList()): Set<String> {
+        val used = entries.flatMapTo(mutableSetOf()) { it.files } + drafts.flatMap { it.files } + protected
         return candidates.filterTo(mutableSetOf()) { it !in used && isSafeFileName(it) }
+    }
+
+    const val NEW_DRAFT_PREFIX = "new-"
+    const val EDIT_DRAFT_PREFIX = "edit:"
+    fun newDraftKey(): String = NEW_DRAFT_PREFIX + java.util.UUID.randomUUID()
+    fun editDraftKey(entryId: String): String = EDIT_DRAFT_PREFIX + entryId
+
+    /** 以日记（或空白）为起点的工作副本。 */
+    fun freshDraft(key: String, entry: DiaryEntry?, now: Long) = DiaryDraft(key, entry?.id, entry?.title.orEmpty(), entry?.text.orEmpty(),
+        entry?.occurredAt ?: now, entry?.photos.orEmpty(), entry?.audios.orEmpty())
+
+    /** 与起点相比是否有改动；新日记只改了记录时间不算改动。改回原样视为没改。 */
+    fun draftChanged(draft: DiaryDraft, entry: DiaryEntry?): Boolean {
+        val base = freshDraft(draft.key, entry, draft.occurredAt)
+        return draft.title != base.title || draft.text != base.text || draft.photos != base.photos || draft.audios != base.audios ||
+            (entry != null && draft.occurredAt != base.occurredAt)
+    }
+
+    /** 草稿可以暂时为空（例如把原日记正文删光），但字段长度、附件文件名和时间必须合法。 */
+    fun validateDraft(draft: DiaryDraft) {
+        require(draft.key.startsWith(NEW_DRAFT_PREFIX) || draft.key.startsWith(EDIT_DRAFT_PREFIX)) { "草稿标识无效" }
+        require(draft.key.length <= MAX_ID + EDIT_DRAFT_PREFIX.length) { "草稿标识过长" }
+        require(draft.entryId == null || (draft.entryId.isNotBlank() && draft.entryId.length <= MAX_ID)) { "草稿关联的日记标识无效" }
+        require(draft.title.length <= MAX_TITLE && draft.text.length <= MAX_TEXT) { "草稿内容过长" }
+        val ids = draft.photos.map { it.id } + draft.audios.map { it.id }
+        require(ids.all { it.isNotBlank() && it.length <= MAX_ID } && ids.toSet().size == ids.size) { "草稿附件标识缺失或重复" }
+        require(draft.files.all(::isSafeFileName) && draft.files.toSet().size == draft.files.size) { "草稿附件文件名无效" }
+        require(draft.audios.all { it.durationMs >= MIN_AUDIO_MS }) { "草稿录音时长无效" }
+        require(draft.occurredAt in 0..Validation.MAX_TIMESTAMP_MS && draft.updatedAt in 0..Validation.MAX_TIMESTAMP_MS) { "草稿时间无效" }
+    }
+
+    /** 草稿箱按最后编辑倒序；原日记已删除或在回收站时为 ORPHAN。 */
+    fun listDrafts(drafts: List<DiaryDraft>, entries: List<DiaryEntry>): List<DiaryDraftItem> {
+        val alive = entries.filter { it.deletedAt == null }.associateBy { it.id }
+        return drafts.map { draft ->
+            val entry = draft.entryId?.let(alive::get)
+            DiaryDraftItem(draft, entry, when { draft.entryId == null -> DiaryDraftKind.NEW; entry != null -> DiaryDraftKind.EDIT; else -> DiaryDraftKind.ORPHAN })
+        }.sortedByDescending { it.draft.updatedAt }
     }
 }

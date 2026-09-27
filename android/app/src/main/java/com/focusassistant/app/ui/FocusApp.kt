@@ -236,6 +236,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
     val appContext = context.applicationContext
     val state by repository.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    val navScope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current
     val usageMonitor = remember { UsageMonitor(appContext) }
     var refresh by remember { mutableIntStateOf(0) }
@@ -415,7 +416,12 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                 listOf(Screen.PROJECTS, Screen.TODOS, Screen.DIARY, Screen.USAGE, Screen.SETTINGS).forEach { page ->
                     val label = when (page) { Screen.PROJECTS -> "专注"; Screen.TODOS -> "待办"; Screen.DIARY -> "日记"; Screen.USAGE -> "用时"; else -> "我的" }
                     val image = when (page) { Screen.PROJECTS -> Icons.Outlined.Timer; Screen.TODOS -> Icons.Outlined.CheckCircle; Screen.DIARY -> Icons.Outlined.Book; Screen.USAGE -> Icons.Outlined.BarChart; else -> Icons.Outlined.PersonOutline }
-                    NavigationBarItem(selected = selected == page, onClick = { ui.screen = page }, icon = { Icon(image, label) }, label = { Text(label) })
+                    NavigationBarItem(selected = selected == page, onClick = {
+                        // 已在日记页时再点「日记」：二级页回首页，已在首页则滚回顶部；从别的页签切回仍回到离开时的页面。
+                        if (page == Screen.DIARY && ui.screen == Screen.DIARY) {
+                            if (ui.diary.reselect()) navScope.launch { ui.diary.homeList.animateScrollToItem(0) }
+                        } else ui.screen = page
+                    }, icon = { Icon(image, label) }, label = { Text(label) })
                 }
             }
         }) { padding ->
@@ -444,12 +450,12 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                         onPickMonth = { ui.open("todo-month") }, onHelp = { ui.open("todo-help") }
                     )
                     Screen.DIARY -> DiaryScreen(state, ui.diary, today, ui.busy, DiaryActions(
-                        save = { entry, existing ->
+                        save = { entry, existing, draftKey ->
                             ui.perform {
-                                val obsolete = repository.saveDiary(entry, existing)
-                                DiaryDrafts.remove(if (existing) entry.id else null)
-                                repository.deleteDiaryFiles(obsolete, DiaryDrafts.files())
+                                // 保存与移出草稿在同一事务中完成。
+                                val obsolete = repository.saveDiary(entry, existing, draftKey)
                                 repository.state.value.diaries.find { it.id == entry.id }?.let { ui.diary.showSaved(it, created = !existing) }
+                                repository.deleteDiaryFiles(obsolete, ui.diary.editorFiles())
                                 ui.message(if (existing) "已保存修改" else "已保存")
                             }
                         },
@@ -465,7 +471,13 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                             ui.perform { repository.restoreDiary(entry.id); ui.message("已恢复到 ${timestampText(entry.occurredAt).substringBefore(' ')}") }
                         },
                         purge = { entry -> ui.open("diary-purge", entry.id) },
-                        discardFiles = { files -> ui.background { repository.deleteDiaryFiles(files, DiaryDrafts.files()) } },
+                        storeDraft = { draft ->
+                            ui.background { repository.deleteDiaryFiles(repository.saveDiaryDraft(draft), ui.diary.editorFiles()) }
+                        },
+                        dropDraft = { key, extra ->
+                            ui.background { repository.deleteDiaryFiles(repository.removeDiaryDraft(key) + extra, ui.diary.editorFiles()) }
+                        },
+                        deleteDraft = { draft -> ui.open("diary-draft-delete", draft.key) },
                         pickMonth = { ui.open("diary-month") },
                         help = { ui.open("diary-help") },
                         message = ui::message
@@ -553,9 +565,24 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                 "日记可以只写文字，也可以只放照片或只录一段原声；同一天可以记多条。",
                 "照片会复制一份保存到本应用内，相册原图删除后日记里的照片仍在。录音只保存原声，暂不转文字。",
                 "录音只在你点击时开始；离开日记、切到后台或锁屏会停止并保留已录内容，不在后台继续录音。",
-                "日记保存在本机，暂不包含在「导出完整备份」中；恢复备份不会改动日记。卸载应用或清除数据会删除日记。",
+                "没写完就返回或退到后台时，内容会自动存入「更多 · 草稿」，关掉应用也还在；保存为日记后移出草稿。",
+                "日记与草稿保存在本机，暂不包含在「导出完整备份」中；恢复备份不会改动它们。卸载应用或清除数据会删除日记。",
                 "首版不设单独的日记锁。"
             ), { ui.close() })
+            "diary-draft-delete" -> {
+                val draft = state.diaryDrafts.find { it.key == ui.dialogId }
+                if (draft == null) InformationDialog("这份草稿已不在草稿箱", listOf("可能已保存为日记或已被删除。"), { ui.close() })
+                else {
+                    val attachments = diaryAttachments(draft.photos.size, draft.audios.size)
+                    ConfirmDialog("删除这份草稿？", "草稿会被删除${if (attachments.isNotEmpty()) "，其中新添加的照片与录音也会一并删除" else ""}；已保存的日记不受影响。", ui.busy, { ui.close() }) {
+                        ui.perform {
+                            repository.deleteDiaryFiles(repository.removeDiaryDraft(draft.key), ui.diary.editorFiles())
+                            ui.close()
+                            ui.message("已删除草稿")
+                        }
+                    }
+                }
+            }
             "diary-purge" -> {
                 val entry = state.diaries.find { it.id == ui.dialogId && it.deletedAt != null }
                 if (entry == null) InformationDialog("这条日记已不在回收站", listOf("可能已被恢复或删除。"), { ui.close() })
@@ -564,7 +591,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                     ConfirmDialog("永久删除这条日记？", "「${diaryName(entry)}」${if (attachments.isNotEmpty()) "及其 $attachments" else ""}将被永久删除，无法恢复。", ui.busy, { ui.close() }) {
                         ui.perform {
                             val files = repository.purgeDiary(entry.id)
-                            repository.deleteDiaryFiles(files, DiaryDrafts.files())
+                            repository.deleteDiaryFiles(files, ui.diary.editorFiles())
                             ui.close()
                             ui.message("已永久删除")
                         }

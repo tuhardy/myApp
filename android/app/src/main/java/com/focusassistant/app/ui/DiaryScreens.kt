@@ -90,10 +90,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-internal enum class DiaryView { HOME, TRASH, DETAIL, EDITOR }
+internal enum class DiaryView { HOME, TRASH, DRAFTS, DETAIL, EDITOR }
 
 internal object DiaryUiLimits {
-    const val NEW_DRAFT = "new"
     const val VISIBLE_PHOTOS = 3
     const val PHOTO_COLUMNS = 3
     const val THUMB_PX = 360
@@ -112,19 +111,27 @@ internal val DangerLine = Color(0xFFF4C7C3)
 
 internal data class DiaryPhotoViewer(val files: List<String>, val index: Int)
 
+/**
+ * 正在编辑的工作副本，放在界面模型里，旋转屏幕不丢；退到后台、返回时有改动就写入本机草稿箱。
+ * restoredAt 非空表示是从草稿继续写；orphan 表示原日记已删除，保存时另存为新日记。
+ */
+internal data class DiaryEditorSession(
+    val draft: DiaryDraft, val returnTo: DiaryView, val restoredAt: Long? = null, val orphan: Boolean = false
+)
+
 @Stable
 internal class DiaryUiState {
     var view by mutableStateOf(DiaryView.HOME)
     var month by mutableStateOf(YearMonth.now())
     var query by mutableStateOf("")
     var detailId by mutableStateOf<String?>(null)
-    var editorId by mutableStateOf<String?>(null)
-    var editorReturn by mutableStateOf(DiaryView.HOME)
+    var editor by mutableStateOf<DiaryEditorSession?>(null)
     var openSwipeId by mutableStateOf<String?>(null)
     var viewer by mutableStateOf<DiaryPhotoViewer?>(null)
     /** 首页列表位置保存在界面模型里，从详情返回时回到原阅读位置。 */
     val homeList = LazyListState()
     val trashList = LazyListState()
+    val draftList = LazyListState()
 
     fun selectMonth(value: YearMonth) {
         if (value > YearMonth.now() || value.year < TodoUiLimits.MIN_YEAR) return
@@ -132,50 +139,43 @@ internal class DiaryUiState {
     }
     fun search(value: String) { if (query != value) { query = value; openSwipeId = null } }
     fun openDetail(id: String) { detailId = id; openSwipeId = null; view = DiaryView.DETAIL }
-    fun openEditor(id: String?) {
-        editorReturn = if (view == DiaryView.DETAIL && id != null) DiaryView.DETAIL else DiaryView.HOME
-        editorId = id; openSwipeId = null; view = DiaryView.EDITOR
+    /** 点「+」总是空白新日记；编辑已有日记时自动接上它的草稿。 */
+    fun openEditor(entry: DiaryEntry?, drafts: List<DiaryDraft>, now: Long = System.currentTimeMillis()) {
+        val returnTo = if (view == DiaryView.DETAIL && entry != null) DiaryView.DETAIL else DiaryView.HOME
+        val stored = entry?.let { value -> drafts.find { it.key == DiaryRules.editDraftKey(value.id) } }
+        editor = if (stored != null) DiaryEditorSession(stored.copy(entryId = entry?.id), returnTo, stored.updatedAt)
+            else DiaryEditorSession(DiaryRules.freshDraft(entry?.let { DiaryRules.editDraftKey(it.id) } ?: DiaryRules.newDraftKey(), entry, now), returnTo)
+        openSwipeId = null; view = DiaryView.EDITOR
     }
-    fun closeEditor() { view = editorReturn; editorId = null }
+    fun openDraft(item: DiaryDraftItem) {
+        editor = DiaryEditorSession(item.draft.copy(entryId = item.entry?.id), DiaryView.DRAFTS, item.draft.updatedAt, item.kind == DiaryDraftKind.ORPHAN)
+        view = DiaryView.EDITOR
+    }
+    fun edit(block: (DiaryDraft) -> DiaryDraft) { editor = editor?.let { it.copy(draft = block(it.draft)) } }
+    fun editorFiles(): Set<String> = editor?.draft?.files?.toSet().orEmpty()
+    fun closeEditor() { view = editor?.returnTo ?: DiaryView.HOME; editor = null }
     fun showSaved(entry: DiaryEntry, created: Boolean) {
         if (created && query.isBlank()) DiaryRules.localDate(entry)?.let { month = YearMonth.from(it) }
-        editorId = null; detailId = entry.id; view = DiaryView.DETAIL
+        editor = null; detailId = entry.id; view = DiaryView.DETAIL
     }
-}
-
-/** 编辑草稿按日记隔离在进程内存；返回保留，保存成功后清除，进程结束即丢弃。 */
-internal data class DiaryDraft(
-    val id: String, val title: String, val text: String, val occurredAt: Long,
-    val photos: List<DiaryPhoto>, val audios: List<DiaryAudio>
-) {
-    val files: List<String> get() = photos.map { it.file } + audios.map { it.file }
-    val hasContent: Boolean get() = title.isNotBlank() || text.isNotBlank() || photos.isNotEmpty() || audios.isNotEmpty()
-    fun toEntry() = DiaryEntry(id, title.trim(), text.trim(), photos, audios, occurredAt, 0, 0)
-}
-
-internal object DiaryDrafts {
-    private val drafts = mutableMapOf<String, DiaryDraft>()
-    fun key(entryId: String?) = entryId ?: DiaryUiLimits.NEW_DRAFT
-    fun has(entryId: String?) = drafts.containsKey(key(entryId))
-    fun fresh(entry: DiaryEntry?, now: Long) = DiaryDraft(entry?.id ?: UUID.randomUUID().toString(), entry?.title.orEmpty(), entry?.text.orEmpty(),
-        entry?.occurredAt ?: now, entry?.photos.orEmpty(), entry?.audios.orEmpty())
-    fun open(entry: DiaryEntry?, now: Long): DiaryDraft = drafts[key(entry?.id)] ?: fresh(entry, now)
-    fun put(entryId: String?, draft: DiaryDraft) { drafts[key(entryId)] = draft }
-    fun remove(entryId: String?) { drafts.remove(key(entryId)) }
-    fun files(): Set<String> = drafts.values.flatMapTo(mutableSetOf()) { it.files }
-    /** 新建时只改了记录时间不算修改。 */
-    fun changed(draft: DiaryDraft, entry: DiaryEntry?): Boolean {
-        val base = fresh(entry, draft.occurredAt).copy(id = draft.id)
-        return base != draft
+    /** 已在日记页时再点「日记」：二级页回首页；已在首页返回 true，由调用方滚回顶部。编辑页没有导航栏，不走这里。 */
+    fun reselect(): Boolean {
+        if (view == DiaryView.HOME) return true
+        if (view != DiaryView.EDITOR) { view = DiaryView.HOME; openSwipeId = null }
+        return false
     }
 }
 
 internal class DiaryActions(
-    val save: (DiaryEntry, Boolean) -> Unit,
+    val save: (entry: DiaryEntry, existing: Boolean, draftKey: String) -> Unit,
     val trash: (DiaryEntry) -> Unit,
     val restore: (DiaryEntry) -> Unit,
     val purge: (DiaryEntry) -> Unit,
-    val discardFiles: (Collection<String>) -> Unit,
+    /** 后台写入草稿箱，不占用忙碌状态。 */
+    val storeDraft: (DiaryDraft) -> Unit,
+    /** 移出草稿箱（若存在），并清理 extra 中不再使用的附件。 */
+    val dropDraft: (key: String, extra: Collection<String>) -> Unit,
+    val deleteDraft: (DiaryDraft) -> Unit,
     val pickMonth: () -> Unit,
     val help: () -> Unit,
     val message: (String) -> Unit
@@ -235,16 +235,20 @@ internal fun DiaryScreen(state: AppState, ui: DiaryUiState, today: LocalDate, bu
     when (ui.view) {
         DiaryView.HOME -> DiaryHome(state, ui, today, busy, playback, actions)
         DiaryView.TRASH -> DiaryTrash(state, ui, busy, actions)
+        DiaryView.DRAFTS -> DiaryDraftBox(state, ui, busy, actions)
         DiaryView.DETAIL -> {
             val entry = state.diaries.find { it.id == ui.detailId && it.deletedAt == null }
             LaunchedEffect(entry == null) { if (entry == null) ui.view = DiaryView.HOME }
-            if (entry != null) DiaryDetail(entry, ui, today, busy, playback, actions)
+            if (entry != null) DiaryDetail(entry, ui, state.diaryDrafts, today, busy, playback, actions)
         }
         DiaryView.EDITOR -> {
-            val entry = ui.editorId?.let { id -> state.diaries.find { it.id == id && it.deletedAt == null } }
-            if (ui.editorId != null && entry == null) {
-                LaunchedEffect(Unit) { actions.message("这条日记已不在列表中。"); ui.editorId = null; ui.view = DiaryView.HOME }
-            } else key(ui.editorId) { DiaryEditor(entry, ui, busy, playback, actions) }
+            val session = ui.editor
+            LaunchedEffect(session == null) { if (session == null) ui.view = DiaryView.HOME }
+            if (session != null) {
+                // 编辑途中原日记被删除时，按「另存为新日记」处理，内容不丢。
+                val entry = session.draft.entryId?.let { id -> state.diaries.find { it.id == id && it.deletedAt == null } }
+                key(session.draft.key) { DiaryEditor(session, entry, ui, busy, playback, actions) }
+            }
         }
     }
     ui.viewer?.let { viewer -> DiaryPhotoViewerDialog(viewer) { ui.viewer = null } }
@@ -269,15 +273,17 @@ private fun DiaryHome(state: AppState, ui: DiaryUiState, today: LocalDate, busy:
                         fontSize = 25.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
                 }
                 Box {
-                    IconButton(onClick = { menu = true }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.MoreHoriz, "更多：回收站与说明") }
+                    IconButton(onClick = { menu = true }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.MoreHoriz, "更多：草稿、回收站与说明") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = Color.White) {
+                        DropdownMenuItem(text = { Text("草稿 · ${state.diaryDrafts.size} 份") }, leadingIcon = { Icon(Icons.Outlined.EditNote, null) },
+                            onClick = { menu = false; ui.openSwipeId = null; ui.view = DiaryView.DRAFTS })
                         DropdownMenuItem(text = { Text("回收站 · $trashCount 条") }, leadingIcon = { Icon(Icons.Outlined.DeleteOutline, null) },
                             onClick = { menu = false; ui.openSwipeId = null; ui.view = DiaryView.TRASH })
                         DropdownMenuItem(text = { Text("关于日记") }, leadingIcon = { Icon(Icons.Outlined.Info, null) },
                             onClick = { menu = false; actions.help() })
                     }
                 }
-                IconButton(enabled = !busy, onClick = { ui.openEditor(null) },
+                IconButton(enabled = !busy, onClick = { ui.openEditor(null, state.diaryDrafts) },
                     modifier = Modifier.padding(start = 6.dp).size(48.dp).clip(CircleShape).background(Accent)) {
                     Icon(Icons.Outlined.Add, "记一条", tint = Color.White, modifier = Modifier.size(21.dp))
                 }
@@ -320,7 +326,7 @@ private fun DiaryHome(state: AppState, ui: DiaryUiState, today: LocalDate, busy:
                 }
                 Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 Text(detail, color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
-                if (!searching && selection.months.isEmpty()) OutlinedButton(enabled = !busy, onClick = { ui.openEditor(null) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("记一条", fontSize = 12.sp) }
+                if (!searching && selection.months.isEmpty()) OutlinedButton(enabled = !busy, onClick = { ui.openEditor(null, state.diaryDrafts) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("记一条", fontSize = 12.sp) }
                 val latest = selection.latestMonth
                 if (!searching && latest != null && latest != month) OutlinedButton(onClick = { ui.selectMonth(latest) }, modifier = Modifier.heightIn(min = 48.dp)) {
                     Text("查看最近有日记的月份", fontSize = 12.sp)
@@ -508,12 +514,12 @@ private fun DangerButton(label: String, enabled: Boolean, modifier: Modifier = M
 }
 
 @Composable
-private fun DiaryDetail(entry: DiaryEntry, ui: DiaryUiState, today: LocalDate, busy: Boolean, playback: DiaryPlayback, actions: DiaryActions) {
+private fun DiaryDetail(entry: DiaryEntry, ui: DiaryUiState, drafts: List<DiaryDraft>, today: LocalDate, busy: Boolean, playback: DiaryPlayback, actions: DiaryActions) {
     BackHandler { ui.view = DiaryView.HOME }
     val date = DiaryRules.localDate(entry)
     Column(Modifier.fillMaxSize().background(Color.White).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp)) {
         DiarySubHeader(date?.let { DiaryRules.dayLabel(it, today).substringBefore(" · ") } ?: "时间未记录", { ui.view = DiaryView.HOME }) {
-            IconButton(enabled = !busy, onClick = { ui.openEditor(entry.id) }) { Icon(Icons.Outlined.Edit, "编辑这条日记") }
+            IconButton(enabled = !busy, onClick = { ui.openEditor(entry, drafts) }) { Icon(Icons.Outlined.Edit, "编辑这条日记") }
         }
         Column(Modifier.padding(horizontal = 4.dp)) {
             Text("${date?.year ?: "—"}年 · ${clock(entry.occurredAt)}", color = Muted, fontSize = 12.sp)
@@ -572,16 +578,66 @@ private fun DiaryTrash(state: AppState, ui: DiaryUiState, busy: Boolean, actions
     }
 }
 
+/** 草稿箱：没写完就离开或退到后台的日记。点卡片或「继续写」接着编辑，删除需确认。 */
+@Composable
+private fun DiaryDraftBox(state: AppState, ui: DiaryUiState, busy: Boolean, actions: DiaryActions) {
+    BackHandler { ui.view = DiaryView.HOME }
+    val items = DiaryRules.listDrafts(state.diaryDrafts, state.diaries)
+    LazyColumn(state = ui.draftList, modifier = Modifier.fillMaxSize().background(Color.White), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
+        item(key = "drafts-header") {
+            DiarySubHeader("草稿", { ui.view = DiaryView.HOME })
+            Text("没写完的日记会自动存到这里：点返回或退到后台时保存，关掉应用、重启手机也还在。保存为正式日记后移出草稿。",
+                color = Muted, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(horizontal = 4.dp).padding(bottom = 14.dp))
+        }
+        if (items.isEmpty()) item(key = "drafts-empty") {
+            Column(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("没有草稿", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text("没写完就离开时，日记会自动存到这里。", color = Muted, fontSize = 12.sp)
+            }
+        }
+        items.forEach { item ->
+            item(key = "draft:${item.draft.key}") {
+                val draft = item.draft
+                val attachments = diaryAttachments(draft.photos.size, draft.audios.size)
+                val (label, tint, background) = when (item.kind) {
+                    DiaryDraftKind.NEW -> Triple("新日记", Muted, SoftSurface)
+                    DiaryDraftKind.EDIT -> Triple("修改：${item.entry?.let(::diaryName) ?: "日记"}", AccentDark, AccentSoft)
+                    DiaryDraftKind.ORPHAN -> Triple("原日记已删除 · 将另存为新日记", Danger, DangerSoft)
+                }
+                val summary = draft.title.trim().ifEmpty { draft.text.trim() }.ifEmpty { attachments }.ifEmpty { "空白草稿" }
+                Column(Modifier.fillMaxWidth().padding(bottom = 10.dp).clip(RoundedCornerShape(15.dp)).border(1.dp, Line, RoundedCornerShape(15.dp))) {
+                    Column(Modifier.fillMaxWidth().clickable(enabled = !busy, onClickLabel = "继续写") { ui.openDraft(item) }
+                        .semantics { contentDescription = "草稿：$label，$summary" }
+                        .padding(start = 14.dp, end = 14.dp, top = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(label, color = tint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(background).padding(horizontal = 8.dp, vertical = 2.dp))
+                        Text("最后编辑 ${timestampText(draft.updatedAt)} · 记录时间 ${timestampText(draft.occurredAt)}", color = Muted, fontSize = 11.sp)
+                        if (draft.title.isNotBlank()) Text(draft.title.trim(), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        val body = draft.text.trim().ifEmpty { if (draft.title.isBlank()) summary else "" }
+                        if (body.isNotEmpty()) Text(body, color = Muted, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        if (attachments.isNotEmpty()) Text(attachments, color = Muted, fontSize = 11.sp)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        OutlinedButton(enabled = !busy, onClick = { ui.openDraft(item) }, modifier = Modifier.heightIn(min = 44.dp),
+                            border = BorderStroke(1.dp, Line), shape = RoundedCornerShape(22.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentDark)) { Text("继续写", fontSize = 12.sp) }
+                        DangerButton("删除草稿", enabled = !busy) { actions.deleteDraft(draft) }
+                    }
+                }
+            }
+        }
+    }
+}
+
 private fun Activity?.shouldExplainMicrophone(): Boolean = this != null && ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.RECORD_AUDIO)
 
 @Composable
-private fun DiaryEditor(entry: DiaryEntry?, ui: DiaryUiState, busy: Boolean, playback: DiaryPlayback, actions: DiaryActions) {
+private fun DiaryEditor(session: DiaryEditorSession, entry: DiaryEntry?, ui: DiaryUiState, busy: Boolean, playback: DiaryPlayback, actions: DiaryActions) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
-    val restored = remember { DiaryDrafts.has(entry?.id) }
-    var draft by remember { mutableStateOf(DiaryDrafts.open(entry, System.currentTimeMillis())) }
-    var showRestored by remember { mutableStateOf(restored) }
+    val draft = session.draft
+    val currentEntry by rememberUpdatedState(entry)
     var error by remember { mutableStateOf<String?>(null) }
     var importing by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
@@ -592,9 +648,15 @@ private fun DiaryEditor(entry: DiaryEntry?, ui: DiaryUiState, busy: Boolean, pla
     var elapsed by remember { mutableLongStateOf(0L) }
     val savedAudio = remember(entry) { entry?.audios.orEmpty().map { it.id }.toSet() }
     fun edit(block: (DiaryDraft) -> DiaryDraft) {
-        draft = block(draft)
-        DiaryDrafts.put(entry?.id, draft)
+        ui.edit(block)
         error = null
+    }
+    /** 有改动就写入本机草稿箱，没改动（或改回原样）就移出。返回是否存为草稿。 */
+    fun persistDraft(): Boolean {
+        val current = ui.editor?.draft ?: return false
+        val changed = DiaryRules.draftChanged(current, currentEntry)
+        if (changed) actions.storeDraft(current) else actions.dropDraft(current.key, emptyList())
+        return changed
     }
     fun stopRecording(note: String? = null) {
         val result = recorder.stop() ?: return
@@ -644,17 +706,19 @@ private fun DiaryEditor(entry: DiaryEntry?, ui: DiaryUiState, busy: Boolean, pla
     }
     fun close() {
         stopRecording("返回前已停止录音，已录内容保留在草稿中")
-        if (DiaryDrafts.changed(draft, entry)) actions.message("草稿已保留，再次打开可继续；应用关闭后丢弃")
-        else DiaryDrafts.remove(entry?.id)
+        val kept = persistDraft()
         ui.closeEditor()
+        if (kept) actions.message("已存入草稿，可在「更多 · 草稿」继续写")
     }
     fun save() {
         stopRecording("录音已停止")
+        val latest = ui.editor?.draft ?: return
         when {
-            !draft.hasContent -> error = "写点什么，或添加照片、录音后再保存。"
-            draft.occurredAt > System.currentTimeMillis() -> error = "记录时间不能晚于现在。"
-            draft.title.trim().length > DiaryRules.MAX_TITLE -> error = "标题最多 ${DiaryRules.MAX_TITLE} 字。"
-            else -> actions.save(draft.toEntry(), entry != null)
+            !latest.hasContent -> error = "写点什么，或添加照片、录音后再保存。"
+            latest.occurredAt > System.currentTimeMillis() -> error = "记录时间不能晚于现在。"
+            latest.title.trim().length > DiaryRules.MAX_TITLE -> error = "标题最多 ${DiaryRules.MAX_TITLE} 字。"
+            // 原日记已删除时另存为新日记，不覆盖回收站里的记录。
+            else -> actions.save(latest.toEntry(entry?.id ?: UUID.randomUUID().toString()), entry != null, latest.key)
         }
     }
     fun pickTime() {
@@ -674,8 +738,14 @@ private fun DiaryEditor(entry: DiaryEntry?, ui: DiaryUiState, busy: Boolean, pla
 
     BackHandler { close() }
     LaunchedEffect(recording) { while (recording) { elapsed = recorder.elapsedMs(); delay(DiaryUiLimits.TICK_MS) } }
+    // 退到后台、锁屏或被切走：先停录音，再把没写完的内容写入本机草稿箱；工作副本仍留在界面模型里，回来可以接着写。
     DisposableEffect(lifecycle) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) stopRecording("切出时已停止录音，已录内容保留在草稿中") }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                stopRecording("退到后台时已停止录音，已录内容保留在草稿中")
+                if (persistDraft()) actions.message("已自动存入草稿")
+            }
+        }
         lifecycle.lifecycle.addObserver(observer)
         onDispose {
             lifecycle.lifecycle.removeObserver(observer)
@@ -693,9 +763,11 @@ private fun DiaryEditor(entry: DiaryEntry?, ui: DiaryUiState, busy: Boolean, pla
         }
         HorizontalDivider(color = Line)
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp)) {
-            if (showRestored) Row(Modifier.fillMaxWidth().padding(bottom = 10.dp).clip(RoundedCornerShape(12.dp)).background(SoftSurface).padding(start = 12.dp),
+            val restoredAt = session.restoredAt
+            if (restoredAt != null) Row(Modifier.fillMaxWidth().padding(bottom = 10.dp).clip(RoundedCornerShape(12.dp)).background(if (session.orphan) DangerSoft else SoftSurface).padding(start = 12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                Text("已恢复上次未保存的草稿", color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite })
+                Text(if (session.orphan) "原日记已删除，保存时将另存为新日记" else "继续草稿 · 最后编辑 ${timestampText(restoredAt)}",
+                    color = if (session.orphan) Danger else Muted, fontSize = 12.sp, modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite })
                 TextButton(onClick = { confirmDiscard = true }) { Text("放弃草稿", fontSize = 12.sp) }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -742,7 +814,7 @@ private fun DiaryEditor(entry: DiaryEntry?, ui: DiaryUiState, busy: Boolean, pla
                 Text(it, color = Danger, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(10.dp))
                     .background(DangerSoft).padding(horizontal = 12.dp, vertical = 10.dp).semantics { liveRegion = LiveRegionMode.Assertive })
             }
-            Text("草稿只保存在内存：返回会保留，应用关闭后丢弃。", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 16.dp))
+            Text("返回或退到后台时自动存入「更多 · 草稿」，保存为日记后移出草稿。", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 16.dp))
         }
         if (recording) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).clip(RoundedCornerShape(14.dp)).background(AccentSoft)
             .border(1.dp, Color(0xFFE8C4B5), RoundedCornerShape(14.dp)).padding(start = 14.dp, end = 4.dp).semantics { liveRegion = LiveRegionMode.Polite },
@@ -769,11 +841,10 @@ private fun DiaryEditor(entry: DiaryEntry?, ui: DiaryUiState, busy: Boolean, pla
     if (confirmDiscard) ConfirmDialog("放弃这份草稿？", "未保存的修改会被丢弃，已保存的日记不受影响。", false, { confirmDiscard = false }) {
         confirmDiscard = false
         stopRecording()
-        val fresh = DiaryDrafts.fresh(entry, System.currentTimeMillis())
-        actions.discardFiles(draft.files - fresh.files.toSet())
-        DiaryDrafts.remove(entry?.id)
-        draft = fresh
-        showRestored = false
+        val current = ui.editor ?: return@ConfirmDialog
+        val fresh = DiaryRules.freshDraft(current.draft.key, entry, System.currentTimeMillis())
+        ui.editor = current.copy(draft = fresh, restoredAt = null, orphan = false)
+        actions.dropDraft(current.draft.key, current.draft.files - fresh.files.toSet())
     }
     if (micSettings) AlertDialog(onDismissRequest = { micSettings = false }, title = { Text("麦克风权限未开启") },
         text = { Text("录音需要麦克风权限。可以在系统设置中开启；文字和照片不受影响。") },
