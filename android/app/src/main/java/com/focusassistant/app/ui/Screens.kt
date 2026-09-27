@@ -1,6 +1,35 @@
 package com.focusassistant.app.ui
 
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import android.provider.Settings
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.Canvas
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.IntOffset
+import java.time.YearMonth
+import kotlin.math.roundToInt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,6 +51,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -29,7 +59,6 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -80,21 +109,6 @@ private fun EmptyMessage(title: String, detail: String) {
     }
 }
 
-/** 待办分组小标题：重要组用强调色，其余用中性灰，右侧跟本组件数。 */
-@Composable
-private fun GroupHeading(group: TodoGroup) {
-    val important = group.key == TodoGrouping.IMPORTANT_KEY
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            group.label,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = if (important) Accent else MaterialTheme.colorScheme.onSurface
-        )
-        Text("${group.todos.size}", color = Muted, style = MaterialTheme.typography.bodySmall)
-    }
-}
-
 /** 已放下的事不显示发酵状态，已完成的也不再发酵。 */
 private fun todoAgeLabel(todo: Todo, age: TodoAge): String? = when {
     todo.archived -> "已放下"
@@ -102,13 +116,12 @@ private fun todoAgeLabel(todo: Todo, age: TodoAge): String? = when {
     else -> age.label
 }
 
-/** L：躺得越久越淡，像一杯放凉的茶。已完成不参与发酵，已放下按原型压到半透明。 */
-private fun todoAlpha(todo: Todo, age: TodoAge): Float = when {
-    todo.archived -> 0.5f
-    todo.done -> 1f
-    age.stage == TodoStage.RESTING -> 0.72f
-    age.stage == TodoStage.STALE -> 0.48f
-    else -> 1f
+/** L：躺得越久底色越浅，正文与操作始终保持可读，不降低整卡透明度。 */
+private fun todoBackground(todo: Todo, age: TodoAge): Color = when {
+    todo.done || todo.archived -> Color.White
+    age.stage == TodoStage.RESTING -> Color(0xFFFDFDFD)
+    age.stage == TodoStage.STALE -> Color(0xFFFAFAFA)
+    else -> Color.White
 }
 
 /** 卡片描边随发酵变浅，对应原型的 age-resting / age-stale。 */
@@ -116,7 +129,7 @@ private fun todoBorder(todo: Todo, age: TodoAge): Color = when {
     todo.done || todo.archived -> Line
     age.stage == TodoStage.RESTING -> Color(0xFFEFEFEF)
     age.stage == TodoStage.STALE -> Color(0xFFF3F3F3)
-    else -> Line
+    else -> Color(0xFFE8C4B5)
 }
 
 /**
@@ -133,10 +146,9 @@ private fun todoMetaTags(todo: Todo, groupKey: String): List<Pair<String, Boolea
 }
 
 private fun todoListHeading(filter: TodoFilter): String = when (filter) {
-    TodoFilter.DONE -> "已经完成的事"
-    TodoFilter.ARCHIVED -> "放下的事"
-    TodoFilter.PENDING -> "还在进行的事"
-    TodoFilter.ALL -> "留给今天的事"
+    TodoFilter.DONE -> "走过的路，都算数"
+    TodoFilter.ARCHIVED -> "暂时放下，也没关系"
+    TodoFilter.PENDING -> "从眼前的一步开始"
 }
 
 /** 按分类给项目一个稳定的图标与配色，纯展示，不参与任何统计。 */
@@ -425,259 +437,471 @@ internal fun TimerScreen(
 @Composable
 internal fun TodosScreen(
     state: AppState,
-    filter: TodoFilter,
+    ui: TodoUiState,
     today: LocalDate,
-    onFilter: (TodoFilter) -> Unit,
+    now: Long = System.currentTimeMillis(),
+    busy: Boolean = false,
     onCreate: () -> Unit,
     onEdit: (Todo) -> Unit,
-    onToggle: (Todo) -> Unit,
+    onDetails: (Todo) -> Unit,
+    onComplete: (Todo) -> Unit,
     onToggleStep: (Todo, TodoStep) -> Unit,
     onRenew: (Todo) -> Unit,
     onArchive: (Todo) -> Unit,
     onRestore: (Todo) -> Unit,
-    onDelete: (Todo) -> Unit
+    onDelete: (Todo) -> Unit,
+    onUndo: () -> Unit,
+    onDismissUndo: () -> Unit,
+    onPickMonth: () -> Unit,
+    onHelp: () -> Unit
 ) {
-    // 放下的事不参与「全部 / 进行中 / 已完成」的计数。
+    ObserveTodoMotion(ui)
     val live = state.todos.filterNot { it.archived }
-    val visible = when (filter) {
-        TodoFilter.ALL -> live
-        TodoFilter.PENDING -> live.filterNot { it.done }
-        TodoFilter.DONE -> live.filter { it.done }
+    val done = live.count { it.done }
+    val pending = live.size - done
+    val archived = state.todos.count { it.archived }
+    val view = ui.view()
+    val historyMonth = minOf(ui.month, YearMonth.from(today))
+    LaunchedEffect(historyMonth) { if (ui.month > historyMonth) ui.selectMonth(historyMonth) }
+    val history = if (ui.filter == TodoFilter.DONE) TodoHistory.select(
+        state.todos, month = historyMonth, query = ui.query, undated = ui.undated, limit = view.limit, now = now
+    ) else null
+    val visible = when (ui.filter) {
+        TodoFilter.PENDING -> live.filter { !it.done || (!ui.reduceMotion && ui.finishing.containsKey(it.id)) }
+        TodoFilter.DONE -> emptyList()
         TodoFilter.ARCHIVED -> state.todos.filter { it.archived }
     }
-    val done = live.count { it.done }
-    ScreenBody {
-        // 标题区按原型：上方一行小字，主标题后跟一个强调色的点，右侧是实心圆形添加按钮。
-        Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("给想做的事，一点秩序", color = Muted, fontSize = 11.sp)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("待办", fontSize = 25.sp, fontWeight = FontWeight.SemiBold)
-                    Text(".", fontSize = 25.sp, fontWeight = FontWeight.SemiBold, color = Accent)
-                }
-            }
-            Box(
-                Modifier.size(44.dp).clip(CircleShape).background(Accent).clickable(onClick = onCreate),
-                contentAlignment = Alignment.Center
-            ) { Icon(Icons.Outlined.Add, "添加待办", tint = Color.White, modifier = Modifier.size(20.dp)) }
-        }
-        DailyProgressCard(done, live.size)
-        TodoTabs(filter, live.size, onFilter)
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(todoListHeading(filter), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            Text("点击任务可编辑", color = Muted, fontSize = 11.sp)
-        }
-        if (visible.isEmpty()) EmptyMessage(emptyTodoTitle(filter), emptyTodoDetail(filter))
-        // 重要的事跨分类置顶，其余按分类分开查看；已完成的事沉到各组末尾。
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            remember(visible) { TodoGrouping.group(visible) }.forEach { group ->
-                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GroupHeading(group)
-                    group.todos.forEach { todo ->
-                        TodoCard(todo, group.key, today, onEdit, onToggle, onToggleStep, onRenew, onArchive, onRestore, onDelete)
-                    }
-                }
-            }
-        }
-        // 虚线框的行内入口，和原型的「添加一个小目标」一致。
-        Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onCreate)
-                .border(1.dp, Color(0xFFC9C9C9), RoundedCornerShape(14.dp)).padding(vertical = 15.dp),
-            horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Outlined.Add, null, tint = Muted, modifier = Modifier.size(16.dp))
-            Text("添加一个小目标", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 7.dp))
-        }
-        if (filter != TodoFilter.ARCHIVED) {
-            Surface(color = SoftSurface, shape = RoundedCornerShape(15.dp)) {
-                Row(Modifier.fillMaxWidth().padding(16.dp)) {
-                    Icon(Icons.Outlined.Timer, null, tint = Muted, modifier = Modifier.size(19.dp))
-                    Column(Modifier.padding(start = 11.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("躺久了会变淡", fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                        Text("一件事放得越久，卡片越浅。可以「续一天」让它回到眼前，也可以「放下」——那不是删除，只是承认。",
-                            color = Muted, fontSize = 11.sp, lineHeight = 19.sp)
-                    }
-                }
-            }
-        }
+    // 临时完成项保持原位置，不能被分组的「完成沉底」规则移动。
+    val visibleById = visible.associateBy { it.id }
+    val groups = history?.groups ?: TodoGrouping.group(visible.map { it.copy(done = false) }).map { group ->
+        group.copy(todos = group.todos.map { item -> visibleById.getValue(item.id) })
     }
-}
-
-/** 顶部完成度卡片：只汇总本机真实待办，没有待办时显示 0%。 */
-@Composable
-private fun DailyProgressCard(done: Int, total: Int) {
-    val percent = if (total > 0) Math.round(done * 100.0 / total).toInt() else 0
-    Surface(color = SoftSurface, shape = RoundedCornerShape(20.dp)) {
-        Column(Modifier.fillMaxWidth().padding(start = 17.dp, end = 17.dp, top = 20.dp, bottom = 17.dp)) {
-            Row(Modifier.fillMaxWidth()) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("ONE STEP AT A TIME", color = Muted, fontSize = 11.sp, letterSpacing = 1.4.sp)
-                    Text("小步前进，也很了不起", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                    Text("已完成 $done / $total 件事", color = Muted, fontSize = 11.sp)
-                }
-                Row(Modifier.padding(start = 8.dp), verticalAlignment = Alignment.Bottom) {
-                    Text("$percent", fontSize = 29.sp, fontWeight = FontWeight.Light, color = AccentDark)
-                    Text("%", fontSize = 11.sp, color = AccentDark, modifier = Modifier.padding(start = 2.dp, bottom = 5.dp))
-                }
-            }
-            Box(Modifier.fillMaxWidth().padding(top = 18.dp).height(4.dp).clip(RoundedCornerShape(3.dp)).background(Color(0xFFDEDEDE))) {
-                Box(Modifier.fillMaxWidth(percent / 100f).fillMaxHeight().background(Accent))
-            }
-        }
-    }
-}
-
-/** 下划线页签，和原型一样只在「全部」上带件数。 */
-@Composable
-private fun TodoTabs(filter: TodoFilter, total: Int, onFilter: (TodoFilter) -> Unit) {
-    Box(Modifier.fillMaxWidth()) {
-        HorizontalDivider(Modifier.align(Alignment.BottomCenter), color = Line)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-            TodoFilter.entries.forEach { value ->
-                val selected = filter == value
-                Column(
-                    // 必须限成内容宽度：下划线用了 fillMaxWidth，在 Row 里会去填剩余宽度，
-                    // 把其余页签挤成零宽（文字竖排），下划线也会横跨整行。
-                    Modifier.width(IntrinsicSize.Max)
-                        .selectable(selected = selected, role = Role.Tab, onClick = { onFilter(value) }),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Row(Modifier.padding(top = 10.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(todoFilterName(value), fontSize = 12.sp,
-                            color = if (selected) AccentDark else Muted,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
-                        if (value == TodoFilter.ALL) {
-                            Text("$total", fontSize = 11.sp, color = Muted,
-                                modifier = Modifier.padding(start = 3.dp).clip(RoundedCornerShape(4.dp))
-                                    .background(Color(0xFFEDEDED)).padding(horizontal = 5.dp, vertical = 1.dp))
+    Column(Modifier.fillMaxSize().background(Color.White)) {
+        LazyColumn(state = view.listState, modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp)) {
+            item(key = "todo-header") {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Text(buildAnnotatedString { append("待办"); withStyle(SpanStyle(color = Accent)) { append(".") } },
+                            fontSize = 25.sp, fontWeight = FontWeight.SemiBold)
+                        TextButton(onClick = onHelp, contentPadding = PaddingValues(horizontal = 8.dp),
+                            modifier = Modifier.padding(start = 8.dp).weight(1f, fill = false).heightIn(min = 48.dp)) {
+                            Text("使用指南", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
-                    Box(Modifier.fillMaxWidth().height(2.dp).background(if (selected) Accent else Color.Transparent))
+                    IconButton(enabled = !busy, onClick = onCreate,
+                        modifier = Modifier.size(48.dp).clip(CircleShape).background(Accent)) {
+                        Icon(Icons.Outlined.Add, "新增待办", tint = Color.White, modifier = Modifier.size(21.dp))
+                    }
+                }
+                TodoTabs(ui.filter, pending, done, archived, ui::setFilter)
+            }
+            if (history != null) {
+                item(key = "history-controls") { TodoHistoryControls(ui, history, today, onPickMonth) }
+            } else {
+                item(key = "todo-intro") {
+                    Row(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(todoListHeading(ui.filter), fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                        Text("小步前进，也很好", color = Muted, fontSize = 11.sp)
+                    }
+                }
+            }
+            if (groups.isEmpty()) {
+                item(key = "todo-empty") {
+                    val title = when {
+                        history == null -> emptyTodoTitle(ui.filter)
+                        ui.query.isNotBlank() -> "没有找到这件事"
+                        ui.undated -> "没有时间未记录的事项"
+                        else -> "这一月，还没有完成记录"
+                    }
+                    val detail = when {
+                        history == null -> emptyTodoDetail(ui.filter)
+                        ui.query.isNotBlank() -> "搜索范围是全部时间，换个名称、分类或小步关键词试试。"
+                        ui.undated -> "有明确完成时间的事都在对应月份里。"
+                        else -> "可以切换月份回看，或搜索全部时间的完成记录。"
+                    }
+                    EmptyMessage(title, detail)
+                    if (history?.latestMonth != null && ui.query.isBlank() && !ui.undated && history.latestMonth != ui.month) {
+                        OutlinedButton(onClick = { ui.selectMonth(history.latestMonth) }, modifier = Modifier.heightIn(min = 48.dp)) {
+                            Text("查看最近有记录的月份", fontSize = 12.sp)
+                        }
+                    }
+                    if (ui.filter == TodoFilter.PENDING) OutlinedButton(enabled = !busy, onClick = onCreate,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), shape = RoundedCornerShape(14.dp)) {
+                        Icon(Icons.Outlined.Add, null, modifier = Modifier.size(16.dp))
+                        Text("添加一个小目标", fontSize = 12.sp, modifier = Modifier.padding(start = 7.dp))
+                    }
+                }
+            }
+            groups.forEach { group ->
+                item(key = "group:${group.key}") {
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp).semantics { heading() },
+                        verticalAlignment = Alignment.CenterVertically) {
+                        if (group.key == TodoGrouping.IMPORTANT_KEY) Text("▲", color = AccentDark, fontSize = 8.sp, modifier = Modifier.padding(end = 5.dp))
+                        Text(group.label, fontSize = 12.sp,
+                            color = if (group.key == TodoGrouping.IMPORTANT_KEY) AccentDark else Muted,
+                            fontWeight = FontWeight.Medium, modifier = if (history != null) Modifier.weight(1f) else Modifier)
+                        Text(if (history != null) "${group.todos.size} 件已展示" else "${group.todos.size}", fontSize = 11.sp, color = Muted,
+                            modifier = Modifier.padding(start = 7.dp))
+                    }
+                }
+                group.todos.forEach { todo ->
+                    item(key = "todo:${todo.id}") {
+                        TodoCard(todo, group.key, ui, today, now, busy, onEdit, onDetails, onComplete,
+                            onToggleStep, onRenew, onArchive, onRestore, onDelete)
+                    }
+                }
+            }
+            if (history != null && history.total > 0) {
+                item(key = "history-footer") {
+                    Column(Modifier.fillMaxWidth().padding(top = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (history.shown < history.total) OutlinedButton(onClick = ui::loadMore,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("查看更多", fontSize = 12.sp) }
+                        Text("已显示 ${history.shown} / ${history.total} 件", color = Muted, fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 10.dp))
+                    }
+                }
+            }
+        }
+        ui.undo.lastOrNull()?.let { entry ->
+            Surface(shape = RoundedCornerShape(14.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Line),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Row(Modifier.padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("${entry.label} · ${entry.change.before.title}（${ui.undo.size} 条可撤销）", fontSize = 12.sp,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite })
+                    TextButton(enabled = !busy, onClick = onUndo, modifier = Modifier.heightIn(min = 48.dp)) { Text("撤销", fontSize = 12.sp) }
+                    IconButton(enabled = !busy, onClick = onDismissUndo) { Icon(Icons.Outlined.Close, "关闭撤销提示", modifier = Modifier.size(18.dp)) }
                 }
             }
         }
     }
 }
 
-/** L 的发酵状态 + M 的小步小路，都在这张卡片上。 */
+@Composable
+private fun ObserveTodoMotion(ui: TodoUiState) {
+    val resolver = LocalContext.current.contentResolver
+    DisposableEffect(resolver, ui) {
+        fun update() {
+            ui.reduceMotion = Settings.Global.getFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+            if (ui.reduceMotion) { ui.finishing.clear(); ui.openSwipeId = null }
+        }
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) = update()
+        }
+        resolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE), false, observer)
+        update()
+        onDispose { resolver.unregisterContentObserver(observer) }
+    }
+}
+
+@Composable
+private fun TodoTabs(filter: TodoFilter, pending: Int, done: Int, archived: Int, onFilter: (TodoFilter) -> Unit) {
+    Box(Modifier.fillMaxWidth()) {
+        HorizontalDivider(Modifier.align(Alignment.BottomCenter), color = Line)
+        Row(Modifier.fillMaxWidth().selectableGroup()) {
+            TodoFilter.entries.forEach { value ->
+                val selected = filter == value
+                val count = when (value) { TodoFilter.PENDING -> pending; TodoFilter.DONE -> done; TodoFilter.ARCHIVED -> archived }
+                Column(Modifier.weight(1f).height(48.dp)
+                    .selectable(selected = selected, role = Role.Tab, onClick = { onFilter(value) }),
+                    horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(Modifier.weight(1f).padding(horizontal = 2.dp), contentAlignment = Alignment.Center) {
+                        Text("${todoFilterName(value)} $count", fontSize = 12.sp,
+                            color = if (selected) AccentDark else Muted, maxLines = 1,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                    }
+                    Box(Modifier.padding(horizontal = 10.dp).fillMaxWidth().height(2.dp)
+                        .background(if (selected) Accent else Color.Transparent))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TodoHistoryControls(ui: TodoUiState, history: TodoHistoryResult, today: LocalDate, onPickMonth: () -> Unit) {
+    val searching = ui.query.isNotBlank()
+    val current = YearMonth.from(today)
+    Column(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 8.dp)) {
+        OutlinedTextField(value = ui.query, onValueChange = ui::search, singleLine = true,
+            placeholder = { Text("搜索已完成的事·全部时间", fontSize = 13.sp) },
+            trailingIcon = if (ui.query.isNotEmpty()) { { IconButton(onClick = { ui.search("") }) {
+                Icon(Icons.Outlined.Close, "清空搜索", modifier = Modifier.size(18.dp))
+            } } } else null,
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, unfocusedBorderColor = Line,
+                focusedContainerColor = SoftSurface, unfocusedContainerColor = SoftSurface, cursorColor = Accent),
+            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "搜索已完成的事·全部时间" })
+        if (!searching && !ui.undated) {
+            Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(enabled = ui.month > YearMonth.of(TodoUiLimits.MIN_YEAR, 1), onClick = { ui.selectMonth(ui.month.minusMonths(1)) }) {
+                    Icon(Icons.Outlined.ChevronLeft, "上一月")
+                }
+                TextButton(onClick = onPickMonth, modifier = Modifier.weight(1f).heightIn(min = 48.dp), contentPadding = PaddingValues(0.dp)) {
+                    Text("${ui.month.year}年${ui.month.monthValue}月", color = MaterialTheme.colorScheme.onSurface, fontSize = 15.sp)
+                    Icon(Icons.Outlined.ExpandMore, null, tint = Muted, modifier = Modifier.size(16.dp))
+                }
+                IconButton(enabled = ui.month < current, onClick = { ui.selectMonth(ui.month.plusMonths(1)) }) {
+                    Icon(Icons.Outlined.ChevronRight, "下一月")
+                }
+            }
+            if (ui.month != current) TextButton(onClick = { ui.selectMonth(current) }, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text("回到本月", fontSize = 12.sp)
+            }
+        }
+        Text(when {
+            searching -> "全部时间 · 找到 ${history.total} 件"
+            ui.undated -> "完成时间未记录 · ${history.total} 件"
+            else -> "${ui.month.year}年${ui.month.monthValue}月 · 完成 ${history.total} 件"
+        }, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp).semantics { liveRegion = LiveRegionMode.Polite })
+        if (!searching && ui.undated) TextButton(onClick = { ui.showUndated(false) }, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text("返回按月查看", fontSize = 12.sp)
+        } else if (!searching && history.undatedCount > 0) TextButton(onClick = { ui.showUndated(true) }, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text("时间未记录 · ${history.undatedCount} 件", fontSize = 12.sp)
+        }
+    }
+}
+
 @Composable
 private fun TodoCard(
-    todo: Todo,
-    groupKey: String,
-    today: LocalDate,
-    onEdit: (Todo) -> Unit,
-    onToggle: (Todo) -> Unit,
-    onToggleStep: (Todo, TodoStep) -> Unit,
-    onRenew: (Todo) -> Unit,
-    onArchive: (Todo) -> Unit,
-    onRestore: (Todo) -> Unit,
-    onDelete: (Todo) -> Unit
+    todo: Todo, groupKey: String, ui: TodoUiState, today: LocalDate, now: Long, busy: Boolean,
+    onEdit: (Todo) -> Unit, onDetails: (Todo) -> Unit, onComplete: (Todo) -> Unit,
+    onToggleStep: (Todo, TodoStep) -> Unit, onRenew: (Todo) -> Unit, onArchive: (Todo) -> Unit,
+    onRestore: (Todo) -> Unit, onDelete: (Todo) -> Unit
 ) {
+    val finish = if (ui.filter == TodoFilter.PENDING && todo.done && !ui.reduceMotion) ui.finishing[todo.id] else null
+    val finishProgress = if (finish != null) rememberTodoFinishProgress(finish) else 1f
+    val finishGlow = if (finish != null) kotlin.math.sin(finishProgress * Math.PI).toFloat() else 0f
     val age = TodoAging.age(todo, today)
-    val progress = TodoAging.progress(todo)
-    val stale = !todo.done && !todo.archived && age.stage == TodoStage.STALE
-    Surface(
-        color = if (stale) Color(0xFFFCFBFA) else Color.White,
-        shape = RoundedCornerShape(15.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, todoBorder(todo, age)),
-        // 躺得越久整张卡片越淡，和原型的 opacity 一致。
-        modifier = Modifier.alpha(todoAlpha(todo, age))
-    ) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp), verticalAlignment = Alignment.Top) {
-            TodoCheckbox(todo.done, todo.title) { onToggle(todo) }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                Column(Modifier.fillMaxWidth().clickable { onEdit(todo) }.padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Text(todo.title, fontSize = 13.sp, lineHeight = 21.sp,
-                        fontWeight = if (stale) FontWeight.Normal else FontWeight.Medium,
-                        textDecoration = if (todo.done) TextDecoration.LineThrough else TextDecoration.None,
-                        color = if (todo.done) Muted else MaterialTheme.colorScheme.onSurface)
-                    // 组标题已经说明了重要或分类，卡片上只补另一半信息，再跟上发酵状态。
-                    TodoMetaRow(todo, groupKey, age)
+    val history = ui.filter == TodoFilter.DONE
+    val allowed = !busy && finish == null
+    val density = LocalDensity.current
+    val swipeWidth = with(density) { TodoUiLimits.SWIPE_WIDTH_DP.dp.toPx() }
+    val threshold = with(density) { TodoUiLimits.SWIPE_THRESHOLD_DP.dp.toPx() }
+    var dragging by remember(todo.id) { mutableStateOf(false) }
+    var dragOffset by remember(todo.id) { mutableFloatStateOf(0f) }
+    val opened = ui.openSwipeId == todo.id && allowed
+    val currentOpened by rememberUpdatedState(opened)
+    val swipe by animateFloatAsState(if (dragging) dragOffset else if (opened) -swipeWidth else 0f,
+        animationSpec = if (dragging || ui.reduceMotion) snap() else tween(TodoUiLimits.FINISH_COLLAPSE_MS.toInt()), label = "todo-swipe")
+    val collapse by animateFloatAsState(if (finish?.phase == TodoFinishPhase.EXIT) 0f else 1f,
+        animationSpec = if (ui.reduceMotion || finish == null) snap() else tween(TodoUiLimits.FINISH_COLLAPSE_MS.toInt()), label = "todo-exit")
+    var normalHeight by remember(todo.id) { mutableIntStateOf(0) }
+    val shape = RoundedCornerShape(if (history) 0.dp else 15.dp)
+    fun act(action: () -> Unit) {
+        if (!allowed || dragging) return
+        if (ui.openSwipeId != null) ui.openSwipeId = null else action()
+    }
+    Box(Modifier.fillMaxWidth().clipToBounds().layout { measurable, constraints ->
+        val fixed = if (finish != null && normalHeight > 0) constraints.copy(minHeight = normalHeight, maxHeight = normalHeight) else constraints
+        val placeable = measurable.measure(fixed)
+        layout(placeable.width, (placeable.height * collapse).roundToInt()) { placeable.placeRelative(0, 0) }
+    }.alpha(collapse).padding(bottom = if (history) 2.dp else 10.dp), propagateMinConstraints = true) {
+        Box(Modifier.fillMaxWidth().clip(shape).onSizeChanged { if (finish == null) normalHeight = it.height + with(density) { (if (history) 2.dp else 10.dp).roundToPx() } }, propagateMinConstraints = true) {
+            if ((opened || dragging) && allowed) {
+                Box(Modifier.matchParentSize().background(AccentDark), contentAlignment = Alignment.CenterEnd) {
+                    if (opened && !dragging) TextButton(enabled = allowed, onClick = { ui.openSwipeId = null; onDelete(todo) },
+                        modifier = Modifier.width(TodoUiLimits.SWIPE_WIDTH_DP.dp).fillMaxHeight().heightIn(min = 48.dp)
+                            .semantics { contentDescription = "删除待办：${todo.title}" }) {
+                        Text("删除", color = Color.White, fontSize = 13.sp)
+                    } else Text("删除", color = Color.White, fontSize = 13.sp,
+                        modifier = Modifier.width(TodoUiLimits.SWIPE_WIDTH_DP.dp).clearAndSetSemantics {}, textAlign = TextAlign.Center)
                 }
-                if (progress.total > 0) StepPath(todo, progress) { step -> onToggleStep(todo, step) }
-                // 躺久了的事只给「续一天」和「放下」两个出口。
-                if (!todo.done && !todo.archived && age.stage != TodoStage.FRESH) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AgeActionPill("续一天", AccentDark) { onRenew(todo) }
-                        AgeActionPill("放下", Muted) { onArchive(todo) }
+            }
+            Surface(color = if (finish != null) androidx.compose.ui.graphics.lerp(Color(0xFFFFFAF6), AccentSoft, finishGlow * 0.6f) else todoBackground(todo, age), shape = shape,
+                border = if (history) null else androidx.compose.foundation.BorderStroke(1.dp, if (finish != null) Accent else todoBorder(todo, age)),
+                modifier = Modifier.offset { IntOffset(swipe.roundToInt(), 0) }.fillMaxWidth()
+                    .pointerInput(todo.id, allowed, swipeWidth) {
+                        if (allowed) detectHorizontalDragGestures(
+                            onDragStart = { dragOffset = if (currentOpened) -swipeWidth else 0f; dragging = true; ui.openSwipeId = todo.id },
+                            onHorizontalDrag = { change, amount -> change.consume(); dragOffset = (dragOffset + amount).coerceIn(-swipeWidth, 0f) },
+                            onDragEnd = { ui.openSwipeId = if (dragOffset <= -threshold) todo.id else null; dragging = false },
+                            onDragCancel = { ui.openSwipeId = null; dragging = false }
+                        )
+                    }.clickable(enabled = allowed, onClickLabel = "收起滑动操作") { ui.openSwipeId = null }
+                    .semantics {
+                        if (allowed) customActions = listOf(
+                            CustomAccessibilityAction("待办详情") { ui.openSwipeId = null; onDetails(todo); true },
+                            CustomAccessibilityAction("删除待办") { ui.openSwipeId = null; onDelete(todo); true }
+                        )
+                    }) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = if (history) 0.dp else 8.dp, vertical = 6.dp)) {
+                    if (finish != null) {
+                        TodoFinishNote(finishProgress)
+                    } else {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                            TodoCheckbox(todo.done, todo.title, allowed && !dragging && !todo.done && !todo.archived,
+                                readOnly = todo.done || todo.archived, round = history) { act { onComplete(todo) } }
+                            Column(Modifier.weight(1f).heightIn(min = 48.dp)
+                                .clickable(enabled = allowed && !dragging, onClickLabel = if (todo.done || todo.archived) "查看待办" else "编辑待办") {
+                                    act { if (todo.done || todo.archived) onDetails(todo) else onEdit(todo) }
+                                }.padding(vertical = 6.dp)) {
+                                Text(todo.title, fontSize = if (history) 14.sp else 15.sp, lineHeight = 23.sp, fontWeight = FontWeight.Medium)
+                                TodoMetaRow(todo, groupKey, age, now)
+                            }
+                            IconButton(enabled = allowed && !dragging, onClick = { act { onDetails(todo) } }) {
+                                Icon(Icons.Outlined.MoreHoriz, "待办详情：${todo.title}", tint = Muted, modifier = Modifier.size(22.dp))
+                            }
+                        }
                     }
-                }
-                if (todo.archived) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AgeActionPill("找回", AccentDark) { onRestore(todo) }
-                        AgeActionPill("删除", Muted) { onDelete(todo) }
+                    if (todo.steps.isNotEmpty() && !todo.archived && (!todo.done || finish != null)) {
+                        StepPath(todo, ui.expanded[todo.id] == true, allowed && !dragging,
+                            onExpand = { act { ui.expanded[todo.id] = ui.expanded[todo.id] != true } },
+                            onToggleStep = { step -> act { onToggleStep(todo, step) } }, finishGlow = finishGlow, reduceMotion = ui.reduceMotion)
                     }
+                    if (!todo.done && !todo.archived && age.stage != TodoStage.FRESH) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            AgeActionPill("续一天", AccentDark, allowed && !dragging) { act { onRenew(todo) } }
+                            AgeActionPill("放下", Muted, allowed && !dragging) { act { onArchive(todo) } }
+                        }
+                    }
+                    if (todo.archived) AgeActionPill("找回", AccentDark, allowed && !dragging) { act { onRestore(todo) } }
+                    if (history) HorizontalDivider(color = Line, modifier = Modifier.padding(top = 6.dp))
                 }
             }
         }
     }
 }
 
-/** 圆角方框勾选：完成后填暖橙浅底并显示对勾，可点面积保持 44dp。 */
 @Composable
-private fun TodoCheckbox(done: Boolean, title: String, onToggle: () -> Unit) {
-    Box(
-        Modifier.size(44.dp).clip(RoundedCornerShape(10.dp))
-            .clickable(onClickLabel = if (done) "重新打开：$title" else "完成：$title", onClick = onToggle),
-        contentAlignment = Alignment.Center
-    ) {
-        Box(
-            Modifier.size(21.dp).clip(RoundedCornerShape(7.dp))
-                .background(if (done) AccentSoft else Color.Transparent)
-                .border(1.5.dp, Muted, RoundedCornerShape(7.dp)),
-            contentAlignment = Alignment.Center
-        ) { if (done) Icon(Icons.Outlined.Check, null, tint = AccentDark, modifier = Modifier.size(14.dp)) }
+private fun rememberTodoFinishProgress(finish: TodoFinish): Float {
+    val progress = remember(finish.token) {
+        Animatable(((SystemClock.elapsedRealtime() - finish.beganAt).toFloat() / TodoUiLimits.FINISH_HOLD_MS).coerceIn(0f, 1f))
+    }
+    LaunchedEffect(finish.token) {
+        val remaining = (TodoUiLimits.FINISH_HOLD_MS - (SystemClock.elapsedRealtime() - finish.beganAt)).coerceAtLeast(0L)
+        progress.animateTo(1f, tween(remaining.toInt()))
+    }
+    return progress.value
+}
+
+@Composable
+private fun TodoFinishNote(progress: Float) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 10.dp, vertical = 6.dp)
+        .semantics { liveRegion = LiveRegionMode.Polite }, verticalAlignment = Alignment.CenterVertically) {
+        Canvas(Modifier.size(34.dp)) {
+            val pulse = kotlin.math.sin(progress * Math.PI).toFloat()
+            drawCircle(AccentSoft, radius = size.minDimension / 2)
+            drawCircle(Accent.copy(alpha = 0.10f * pulse), radius = size.minDimension * (0.5f + 0.12f * pulse))
+            val drawn = (progress / 0.65f).coerceIn(0f, 1f)
+            val a = Offset(size.width * 0.25f, size.height * 0.51f)
+            val b = Offset(size.width * 0.43f, size.height * 0.69f)
+            val c = Offset(size.width * 0.77f, size.height * 0.32f)
+            fun segment(from: Offset, to: Offset, fraction: Float) = from + (to - from) * fraction
+            drawLine(AccentDark, a, segment(a, b, (drawn * 3).coerceIn(0f, 1f)), 2.dp.toPx(), StrokeCap.Round)
+            if (drawn > 1f / 3) drawLine(AccentDark, b, segment(b, c, ((drawn - 1f / 3) * 1.5f).coerceIn(0f, 1f)), 2.dp.toPx(), StrokeCap.Round)
+        }
+        Column(Modifier.weight(1f).padding(start = 10.dp)) {
+            Text("又走完一件事", color = AccentDark, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text("已收进完成记录，随时可以回看", color = Muted, fontSize = 11.sp)
+        }
     }
 }
 
-/** 分类与「重要」用小方标签，发酵状态用纯文字，和原型一致。 */
 @Composable
-private fun TodoMetaRow(todo: Todo, groupKey: String, age: TodoAge) {
+private fun TodoCheckbox(done: Boolean, title: String, enabled: Boolean, readOnly: Boolean, round: Boolean = false, onToggle: () -> Unit) {
+    val interaction = if (readOnly) Modifier.semantics { contentDescription = "${if (done) "已完成" else "已放下"}：$title" }
+        else Modifier.toggleable(value = done, enabled = enabled, role = Role.Checkbox, onValueChange = { onToggle() })
+            .semantics { contentDescription = "完成待办：$title" }
+    Box(Modifier.size(48.dp).then(interaction), contentAlignment = Alignment.Center) { TodoCheckMark(done, round) }
+}
+
+@Composable
+private fun TodoCheckMark(done: Boolean, round: Boolean = false) {
+    val shape = if (round) CircleShape else RoundedCornerShape(6.dp)
+    Box(Modifier.size(if (round) 18.dp else 20.dp).clip(shape).background(if (done) AccentSoft else Color.Transparent)
+        .border(1.5.dp, if (done) Accent else Muted, shape), contentAlignment = Alignment.Center) {
+        if (done) Icon(Icons.Outlined.Check, null, tint = AccentDark, modifier = Modifier.size(if (round) 12.dp else 14.dp))
+    }
+}
+
+@Composable
+private fun TodoStepCheckMark(done: Boolean, reduceMotion: Boolean) {
+    val scale = remember { Animatable(1f) }
+    var previous by remember { mutableStateOf(done) }
+    LaunchedEffect(done, reduceMotion) {
+        val pulse = !previous && done && !reduceMotion
+        previous = done
+        scale.snapTo(1f)
+        if (pulse) {
+            scale.animateTo(TodoUiLimits.STEP_PULSE_SCALE, tween(TodoUiLimits.STEP_PULSE_MS))
+            scale.animateTo(1f, tween(TodoUiLimits.STEP_PULSE_MS))
+        }
+    }
+    Box(Modifier.graphicsLayer { scaleX = scale.value; scaleY = scale.value }) { TodoCheckMark(done) }
+}
+
+@Composable
+private fun TodoMetaRow(todo: Todo, groupKey: String, age: TodoAge, now: Long) {
     val tags = todoMetaTags(todo, groupKey)
-    val state = todoAgeLabel(todo, age)
-    if (tags.isEmpty() && state == null) return
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        tags.forEach { (text, important) ->
-            Text(text, fontSize = 11.sp, color = if (important) AccentDark else Muted,
-                modifier = Modifier.clip(RoundedCornerShape(4.dp))
-                    .background(if (important) AccentSoft else SoftSurface)
-                    .padding(horizontal = 5.dp, vertical = 2.dp))
+    val parts = mutableListOf<String>()
+    todoAgeLabel(todo, age)?.let(parts::add)
+    if (todo.done && !todo.archived) {
+        parts += TodoHistory.completedDate(todo, now)?.let { "$it 完成" } ?: "完成时间未记录"
+        if (todo.steps.isNotEmpty()) parts += "${todo.steps.size} 个小步已走完"
+    }
+    if (tags.isNotEmpty() || parts.isNotEmpty()) Text(buildAnnotatedString {
+        tags.forEachIndexed { index, (label, important) ->
+            if (index > 0) append(" · ")
+            withStyle(SpanStyle(color = if (important) AccentDark else Muted,
+                background = if (todo.done) Color.Transparent else if (important) AccentSoft else SoftSurface)) { append(label) }
         }
-        state?.let { Text(it, fontSize = 11.sp, color = Muted) }
+        if (tags.isNotEmpty() && parts.isNotEmpty()) append(" · ")
+        append(parts.joinToString(" · "))
+    }, fontSize = 11.sp, color = Muted, modifier = Modifier.padding(top = 3.dp))
+}
+
+@Composable
+private fun AgeActionPill(label: String, tint: Color, enabled: Boolean, onClick: () -> Unit) {
+    TextButton(enabled = enabled, onClick = onClick, modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 6.dp)) {
+        Text(label, fontSize = 11.sp, color = tint, modifier = Modifier.border(1.dp, Line, CircleShape).padding(horizontal = 11.dp, vertical = 5.dp))
     }
 }
 
+/** 小路只展示；展开入口与每个步骤均使用整行触控区域。 */
 @Composable
-private fun AgeActionPill(label: String, tint: Color, onClick: () -> Unit) {
-    Box(
-        Modifier.clip(CircleShape).clickable(onClick = onClick).border(1.dp, Line, CircleShape)
-            .padding(horizontal = 11.dp, vertical = 5.dp),
-        contentAlignment = Alignment.Center
-    ) { Text(label, fontSize = 11.sp, color = tint) }
-}
-
-/** M：一条横向的小路，走过的点是实心的。点一个点就把那一步标为走过或退回。 */
-@Composable
-private fun StepPath(todo: Todo, progress: TodoProgress, onToggleStep: (TodoStep) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            todo.steps.forEachIndexed { index, step ->
-                if (index > 0) {
-                    HorizontalDivider(Modifier.width(18.dp), thickness = 2.dp, color = if (step.done) Accent else Color(0xFFE3DDD8))
-                }
-                // 圆点本体保留可点面积，外观用小圆画，不撑成大色块。
-                Box(
-                    Modifier.size(28.dp).clip(CircleShape)
-                        .clickable(onClickLabel = if (step.done) "退回这一步：${step.title}" else "走过这一步：${step.title}") { onToggleStep(step) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(Modifier.size(11.dp).background(if (step.done) Accent else Color.White, CircleShape)
-                        .border(1.5.dp, if (step.done) Accent else Color(0xFFCFC7C1), CircleShape))
+private fun StepPath(todo: Todo, expanded: Boolean, enabled: Boolean, onExpand: () -> Unit, onToggleStep: (TodoStep) -> Unit, finishGlow: Float = 0f, reduceMotion: Boolean = false) {
+    val progress = TodoAging.progress(todo)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp)) {
+        Column(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled, onClick = onExpand).semantics { stateDescription = if (expanded) "小步已展开" else "小步已收起" }
+            .padding(horizontal = 5.dp, vertical = 7.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("小步 ${progress.walked} / ${progress.total}", color = AccentDark, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                Text(if (expanded) "收起小步" else "展开小步", color = Muted, fontSize = 11.sp)
+            }
+            val next = TodoAging.nextStep(todo)
+            Text(if (next == null) "每一步都走完了" else "下一步 · ${next.title}", color = Muted, fontSize = 12.sp)
+            Row(Modifier.fillMaxWidth().padding(vertical = 5.dp).clearAndSetSemantics {}, verticalAlignment = Alignment.CenterVertically) {
+                todo.steps.forEachIndexed { index, step ->
+                    if (index > 0) Box(Modifier.weight(1f).height(2.dp).background(if (step.done && todo.steps[index - 1].done) Accent else Line))
+                    Canvas(Modifier.size(11.dp)) {
+                        val radius = size.minDimension / 2
+                        if (index == todo.steps.lastIndex && finishGlow > 0f) {
+                            drawCircle(Accent.copy(alpha = 0.18f * finishGlow), radius = radius + 5.dp.toPx() * finishGlow)
+                        }
+                        drawCircle(if (step.done) Accent else Color(0xFFBCBCBC), radius)
+                        if (!step.done) drawCircle(Color.White, (radius - 1.5.dp.toPx()).coerceAtLeast(0f))
+                    }
                 }
             }
         }
-        val next = TodoAging.nextStep(todo)
-        Caption(if (next == null) "${progress.total} 步都走完了" else "下一步 · ${next.title}")
+        if (expanded) {
+            HorizontalDivider(color = Line)
+            todo.steps.forEach { step ->
+                key(step.id) {
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(9.dp))
+                        .toggleable(value = step.done, enabled = enabled && !todo.done && !todo.archived, role = Role.Checkbox,
+                            onValueChange = { onToggleStep(step) }).padding(horizontal = 8.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        TodoStepCheckMark(step.done, reduceMotion)
+                        Text(step.title, fontSize = 14.sp, color = if (step.done) Muted else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f).padding(start = 10.dp))
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -777,8 +1001,7 @@ internal fun StatisticsScreen(
 }
 
 private fun todoFilterName(filter: TodoFilter): String = when (filter) {
-    TodoFilter.ALL -> "全部"
-    TodoFilter.PENDING -> "进行中"
+    TodoFilter.PENDING -> "待完成"
     TodoFilter.DONE -> "已完成"
     TodoFilter.ARCHIVED -> "放下的"
 }
@@ -792,8 +1015,7 @@ private fun emptyTodoTitle(filter: TodoFilter): String = when (filter) {
 private fun emptyTodoDetail(filter: TodoFilter): String = when (filter) {
     TodoFilter.DONE -> "慢慢来，走一步算一步。"
     TodoFilter.ARCHIVED -> "放下不是删除，是承认它这阵子不重要。"
-    TodoFilter.PENDING -> "这里空空的，给今天留一点自由。"
-    TodoFilter.ALL -> "记下一件想做的事，也可以拆成小步，按自己的节奏完成。"
+    TodoFilter.PENDING -> "记下一件想做的事，也可以把它拆成几个小步。"
 }
 
 private fun periodName(period: Period): String = when (period) {

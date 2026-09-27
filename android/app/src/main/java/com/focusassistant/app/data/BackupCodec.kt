@@ -92,11 +92,15 @@ internal object JsonCodec {
     fun readStep(value: JSONObject) = TodoStep(value.string("id"), value.string("title"), value.boolean("done"))
     fun todo(value: Todo): JSONObject = JSONObject().put("id", value.id).put("title", value.title).put("category", value.category).put("important", value.important).put("done", value.done)
         .put("createdAt", value.createdAt).put("steps", JSONArray(value.steps.map(::step))).put("archived", value.archived)
-    /** 旧备份没有发酵与小步字段，按「今天放进来、没有小步、未放下」读入，不臆造历史。 */
+        .put("completedAt", nullable(value.completedAt))
+    /** 旧备份缺失的日期读为空、小步读为空列表、放下状态读为否，不臆造历史。 */
     fun readTodo(value: JSONObject) = Todo(value.string("id"), value.string("title"), value.string("category"), value.boolean("important"), value.boolean("done"),
         if (value.has("createdAt")) value.string("createdAt") else "",
         if (value.has("steps")) value.objects("steps", Validation.MAX_STEPS).map(::readStep) else emptyList(),
-        if (value.has("archived")) value.boolean("archived") else false)
+        if (value.has("archived")) value.boolean("archived") else false,
+        if (!value.has("completedAt") || value.isNull("completedAt")) null else value.long("completedAt").also {
+            require(it in 0..Validation.MAX_TIMESTAMP_MS) { "完成日期无效" }
+        })
     fun segment(value: TimeSegment): JSONObject = JSONObject().put("startedAt", value.startedAt).put("endedAt", value.endedAt)
     fun readSegment(value: JSONObject) = TimeSegment(value.long("startedAt"), value.long("endedAt"))
     fun session(value: FocusSession): JSONObject = JSONObject().put("id", value.id).put("projectId", value.projectId).put("projectTitle", value.projectTitle).put("category", value.category)

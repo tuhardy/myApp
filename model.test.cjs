@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { Timer, LIMITS, MODES, USAGE, CATEGORIES, initialTasks, taskSummary, groupTasks, validateTask, validateSteps, taskAge, taskProgress, nextStep, daysBetween, formatTime } = require("./model.js");
 const { localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv } = require("./model.js");
+const { completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks } = require("./model.js");
 const { execFileSync } = require("node:child_process");
 const { initialFocusItems, validateFocusItem, focusHourDistribution, validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary } = require("./model.js");
 
@@ -279,6 +280,322 @@ test("M：走过的小步即进度，没有小步只有两种状态", () => {
   assert.equal(nextStep({ steps: [] }), null);
 });
 
+test("完成父项会走完所有小步，保留其他字段且不修改输入", () => {
+  const now = new Date(2026, 2, 20, 12);
+  const task = Object.freeze({ id: "task", title: "事项", done: false, important: true,
+    steps: Object.freeze([Object.freeze({ id: "a", done: true }), Object.freeze({ id: "b", done: false })]) });
+  const completed = completeTask(task, now);
+  assert.notEqual(completed, task);
+  assert.notEqual(completed.steps, task.steps);
+  assert.deepEqual(completed, { ...task, done: true, completedAt: now.toISOString(), steps: [{ id: "a", done: true }, { id: "b", done: true }] });
+  assert.equal(task.steps[1].done, false);
+  assert.equal(now.getTime(), new Date(2026, 2, 20, 12).getTime());
+  assert.deepEqual(completeTask({ id: "plain" }, now), { id: "plain", done: true, completedAt: now.toISOString(), steps: [] });
+  assert.throws(() => completeTask(task, new Date(NaN)));
+});
+
+test("重复完成保留原始完成时间，旧未知时间不补写历史", () => {
+  const later = new Date(2026, 2, 21);
+  for (const completedAt of [undefined, null, "bad", "2026-03-19T12:00:00.000Z"]) {
+    const task = Object.freeze({ done: true, completedAt, steps: Object.freeze([]) });
+    const result = completeTask(task, later);
+    assert.notEqual(result, task);
+    assert.equal(result.completedAt, completedAt);
+    assert.equal(result.done, true);
+  }
+  assert.equal(completeTask({ done: true }).completedAt, undefined);
+});
+
+test("小步更新自动完成父项或清空完成时间，已完成父项必须显式重开", () => {
+  const now = new Date(2026, 2, 20, 12);
+  const task = Object.freeze({ id: "task", done: false, completedAt: "stale",
+    steps: Object.freeze([Object.freeze({ id: "a", done: true }), Object.freeze({ id: "b", done: false })]) });
+  const partial = setTaskStep(task, "a", false, now);
+  assert.deepEqual(partial.steps.map(step => step.done), [false, false]);
+  assert.equal(partial.done, false);
+  assert.equal(partial.completedAt, null);
+  const completed = setTaskStep(task, "b", true, now);
+  assert.equal(completed.done, true);
+  assert.equal(completed.completedAt, now.toISOString());
+  assert.deepEqual(task.steps.map(step => step.done), [true, false]);
+  assert.throws(() => setTaskStep(completed, "a", false, now), /重新打开/);
+  assert.throws(() => setTaskStep(completed, "a", true, now), /重新打开/);
+  assert.throws(() => setTaskStep(task, "missing", true, now), /小步/);
+  assert.throws(() => setTaskStep({ done: false }, "missing", true, now), /小步/);
+  assert.throws(() => setTaskStep(task, "b", true, new Date(NaN)));
+});
+
+test("重开有小步的完成项必须选有效重做步骤，其余进度与输入保持不变", () => {
+  const task = Object.freeze({ id: "task", done: true, completedAt: "2026-03-19T12:00:00.000Z",
+    steps: Object.freeze([Object.freeze({ id: "a", done: true }), Object.freeze({ id: "b", done: true })]) });
+  assert.throws(() => reopenTask(task), /小步/);
+  assert.throws(() => reopenTask(task, ["missing"]), /小步/);
+  const reopened = reopenTask(task, ["missing", "b", "b"]);
+  assert.deepEqual(reopened, { ...task, done: false, completedAt: null, steps: [{ id: "a", done: true }, { id: "b", done: false }] });
+  assert.notEqual(reopened, task);
+  assert.notEqual(reopened.steps[0], task.steps[0]);
+  assert.deepEqual(task.steps.map(step => step.done), [true, true]);
+  assert.equal(task.done, true);
+  assert.deepEqual(reopenTask({ id: "plain", done: true }), { id: "plain", done: false, completedAt: null, steps: [] });
+  assert.deepEqual(reopenTask(reopened), reopened);
+  assert.throws(() => reopenTask({ done: true, steps: [{ id: "only", done: true }] }), /小步/);
+  const recompleted = setTaskStep(reopened, "b", true, new Date(2026, 2, 22));
+  assert.equal(recompleted.completedAt, new Date(2026, 2, 22).toISOString());
+});
+
+test("完成分组按本地今天昨天及月份倒序，未知时间置后且过滤待办与放下项", () => {
+  const today = new Date(2026, 2, 20, 12);
+  const make = (id, date, extra = {}) => Object.freeze({ id, done: true, completedAt: date.toISOString(), ...extra });
+  const tasks = Object.freeze([
+    make("old", new Date(2025, 11, 31, 23)),
+    Object.freeze({ id: "unknown", done: true }),
+    make("early", new Date(2026, 2, 20, 1)),
+    make("month", new Date(2026, 2, 18, 12)),
+    make("yesterday", new Date(2026, 2, 19, 23)),
+    make("latest", today),
+    make("tie", today),
+    make("pending", today, { done: false }),
+    make("archived", today, { archived: true }),
+    make("older-month", new Date(2026, 1, 28, 12)),
+    make("earlier-month", new Date(2026, 2, 1, 12)),
+  ]);
+  const snapshot = JSON.stringify(tasks);
+  const groups = groupCompletedTasks(tasks, today);
+  assert.deepEqual(groups.map(({ key, label }) => ({ key, label })), [
+    { key: "today", label: "今天" }, { key: "yesterday", label: "昨天" },
+    { key: "2026-03", label: "2026年3月" }, { key: "2026-02", label: "2026年2月" },
+    { key: "2025-12", label: "2025年12月" }, { key: "unknown", label: "完成时间未记录" },
+  ]);
+  assert.deepEqual(groups.map(group => group.tasks.map(task => task.id)), [["latest", "tie", "early"], ["yesterday"], ["month", "earlier-month"], ["older-month"], ["old"], ["unknown"]]);
+  assert.equal(JSON.stringify(tasks), snapshot);
+  assert.equal(today.getTime(), new Date(2026, 2, 20, 12).getTime());
+  assert.deepEqual(groupCompletedTasks([], today), []);
+  assert.deepEqual(groupCompletedTasks(null), []);
+  assert.throws(() => groupCompletedTasks([], new Date(NaN)));
+});
+
+test("无效与未来完成时间全部归未知，不将缺失日期当作纪元或修正非法日历日期", () => {
+  const today = new Date(2026, 2, 20, 12);
+  const values = [undefined, null, "", "bad", 0, false, "2026-02-30T12:00:00Z", "2026-13-01T12:00:00Z", new Date(today.getTime() + 1).toISOString(), new Date(2026, 2, 21).toISOString()];
+  const tasks = Object.freeze(values.map((completedAt, id) => Object.freeze({ id, done: true, completedAt })));
+  assert.deepEqual(groupCompletedTasks(tasks, today), [{ key: "unknown", label: "完成时间未记录", tasks }]);
+});
+
+test("完成日期分组跨本地午夜、月份、年份和夏令时", () => {
+  const script = `
+    const assert = require("node:assert/strict");
+    const { groupCompletedTasks } = require("./model.js");
+    for (const [year, month, day] of [[2024, 2, 11], [2024, 10, 4], [2025, 0, 1], [2024, 2, 1]]) {
+      const now = new Date(year, month, day, 0, 1);
+      const yesterday = new Date(year, month, day - 1, 0, 1);
+      const groups = groupCompletedTasks([{ done: true, completedAt: yesterday.toISOString() }, { done: true, completedAt: now.toISOString() }], now);
+      assert.deepEqual(groups.map(group => group.key), ["today", "yesterday"]);
+    }
+    const now = new Date("2024-03-01T02:00:00Z");
+    const groups = groupCompletedTasks([{ done: true, completedAt: "2024-02-29T20:00:00Z" }], now);
+    assert.equal(groups[0].key, process.env.EXPECTED_GROUP);
+  `;
+  for (const [TZ, EXPECTED_GROUP] of [["America/New_York", "today"], ["Asia/Shanghai", "today"], ["UTC", "yesterday"]]) {
+    execFileSync(process.execPath, ["-e", script], { cwd: __dirname, env: { ...process.env, TZ, EXPECTED_GROUP } });
+  }
+});
+
+test("completedTaskDate 只校验严格完成时间，不限制完成或归档状态", () => {
+  const now = new Date(2026, 2, 20, 12);
+  const task = Object.freeze({ done: false, archived: true, completedAt: now.toISOString() });
+  const date = completedTaskDate(task, now);
+  assert.ok(date instanceof Date);
+  assert.equal(date.getTime(), now.getTime());
+  assert.notEqual(date, now);
+  date.setFullYear(2000);
+  assert.equal(completedTaskDate(task, now).getTime(), now.getTime());
+  assert.equal(completedTaskDate({ completedAt: "2024-02-29T12:30:00+08:00" }, now).toISOString(), "2024-02-29T04:30:00.000Z");
+  assert.ok(completedTaskDate({ completedAt: "2000-01-01T00:00:00Z" }) instanceof Date);
+  for (const completedAt of [undefined, null, "", "bad", 0, false, now, "2026-02-30T12:00:00Z", "2025-02-29T12:00:00Z", "2026-13-01T12:00:00Z", "2026-03-20", "2026-03-20T12:00:00", "2026-03-20T24:00:00Z", "2026-03-20T12:00:00+25:00", new Date(now.getTime() + 1).toISOString()]) {
+    assert.equal(completedTaskDate({ completedAt }, now), null);
+  }
+  assert.equal(completedTaskDate(null, now), null);
+  assert.equal(completedTaskDate(undefined, now), null);
+  assert.throws(() => completedTaskDate(task, new Date(NaN)), /日期/);
+});
+
+test("selectCompletedTasks 默认当月按日分隔，历史元数据独立且输入不变", () => {
+  const now = new Date(2026, 2, 20, 12);
+  const make = (id, date, extra = {}) => Object.freeze({ id, done: true, completedAt: date.toISOString(), ...extra });
+  const tasks = Object.freeze([
+    make("old", new Date(2025, 11, 31, 23)),
+    Object.freeze({ id: "unknown", done: true }),
+    make("early", new Date(2026, 2, 20, 1)),
+    make("month", new Date(2026, 2, 18, 12)),
+    make("yesterday", new Date(2026, 2, 19, 23)),
+    make("latest", now),
+    make("tie", now),
+    make("pending", now, { done: false }),
+    make("archived", now, { archived: true }),
+    make("older-month", new Date(2026, 1, 28, 12)),
+    make("earlier-month", new Date(2026, 2, 1, 12)),
+    null,
+  ]);
+  const snapshot = JSON.stringify(tasks);
+  const result = selectCompletedTasks(tasks, { now });
+  assert.deepEqual(result.groups.map(({ key, label }) => ({ key, label })), [
+    { key: "2026-03-20", label: "今天" }, { key: "2026-03-19", label: "昨天" },
+    { key: "2026-03-18", label: "3月18日" }, { key: "2026-03-01", label: "3月1日" },
+  ]);
+  assert.deepEqual(result.groups.map(group => group.tasks.map(task => task.id)), [["latest", "tie", "early"], ["yesterday"], ["month"], ["earlier-month"]]);
+  assert.equal(result.total, 6);
+  assert.equal(result.shown, 6);
+  assert.deepEqual(result.months, [{ key: "2026-03", count: 6 }, { key: "2026-02", count: 1 }, { key: "2025-12", count: 1 }]);
+  assert.equal(result.undatedCount, 1);
+  assert.equal(result.latestMonth, "2026-03");
+  assert.equal(result.groups[0].tasks[0], tasks[5]);
+  const options = Object.freeze({ month: "2025-12", now });
+  assert.deepEqual(selectCompletedTasks(tasks, options).groups.map(group => group.tasks.map(task => task.id)), [["old"]]);
+  assert.equal(JSON.stringify(tasks), snapshot);
+  assert.equal(now.getTime(), new Date(2026, 2, 20, 12).getTime());
+});
+
+test("selectCompletedTasks 跨多天整体加载20和40条，同日跨页合并且不遗漏", () => {
+  const now = new Date(2026, 2, 31, 12);
+  const tasks = Object.freeze(Array.from({ length: 55 }, (_, id) => Object.freeze({
+    id, done: true, title: "匹配", completedAt: new Date(2026, 2, 30 - Math.floor(id / 15), 12, 59 - id % 15).toISOString(),
+  })).reverse());
+  for (const query of ["", " 匹配 "]) {
+    const first = selectCompletedTasks(tasks, { now, query });
+    const second = selectCompletedTasks(tasks, { now, query, limit: 40 });
+    const all = selectCompletedTasks(tasks, { now, query, limit: 100000 });
+    assert.equal(first.total, 55);
+    assert.equal(first.shown, 20);
+    assert.deepEqual(first.groups.map(group => group.tasks.length), [15, 5]);
+    assert.equal(second.total, 55);
+    assert.equal(second.shown, 40);
+    assert.deepEqual(second.groups.map(group => group.tasks.length), [15, 15, 10]);
+    assert.equal(new Set(second.groups.map(group => group.key)).size, second.groups.length);
+    assert.deepEqual(first.groups.flatMap(group => group.tasks.map(task => task.id)), Array.from({ length: 20 }, (_, id) => id));
+    assert.deepEqual(second.groups.flatMap(group => group.tasks.map(task => task.id)), Array.from({ length: 40 }, (_, id) => id));
+    assert.deepEqual(all.groups.flatMap(group => group.tasks.map(task => task.id)), Array.from({ length: 55 }, (_, id) => id));
+    assert.deepEqual(first.months, [{ key: "2026-03", count: 55 }]);
+    assert.deepEqual(second.months, first.months);
+  }
+});
+
+test("selectCompletedTasks 全历史搜索标题分类小步，忽略月份和未知入口且过滤后分页", () => {
+  const now = new Date(2026, 2, 20, 12);
+  const tasks = [
+    { id: "title", done: true, title: "Needle", completedAt: new Date(2026, 2, 18, 12).toISOString() },
+    { id: "category", done: true, category: "NEEDLE", completedAt: new Date(2025, 11, 31, 12).toISOString() },
+    { id: "step", done: true, steps: [{ title: "a needle step" }], completedAt: new Date(2024, 11, 31, 12).toISOString() },
+    { id: "unknown", done: true, title: "needle" },
+    { id: "other", done: true, title: "different", completedAt: now.toISOString() },
+    { id: "pending", done: false, title: "needle", completedAt: now.toISOString() },
+    { id: "archived", done: true, archived: true, title: "needle", completedAt: now.toISOString() },
+  ];
+  const result = selectCompletedTasks(tasks, { now, query: "  nEeDlE  ", month: "2020-01", undated: true, limit: 3 });
+  assert.equal(result.total, 4);
+  assert.equal(result.shown, 3);
+  assert.deepEqual(result.groups.map(group => group.label), ["2026年3月18日", "2025年12月31日", "2024年12月31日"]);
+  assert.deepEqual(result.groups.flatMap(group => group.tasks.map(task => task.id)), ["title", "category", "step"]);
+  const all = selectCompletedTasks(tasks, { now, query: "needle", limit: 40 });
+  assert.equal(all.groups.at(-1).key, "unknown");
+  assert.equal(all.groups.at(-1).tasks[0].id, "unknown");
+  const blank = selectCompletedTasks(tasks, { now, query: " \t ", month: "2025-12" });
+  assert.deepEqual(blank.groups.flatMap(group => group.tasks.map(task => task.id)), ["category"]);
+  for (const options of [{ month: "2020-01" }, { undated: true }, { query: "missing", limit: 1 }]) {
+    const selection = selectCompletedTasks(tasks, { now, ...options });
+    assert.deepEqual(selection.months, [{ key: "2026-03", count: 2 }, { key: "2025-12", count: 1 }, { key: "2024-12", count: 1 }]);
+    assert.equal(selection.undatedCount, 1);
+    assert.equal(selection.latestMonth, "2026-03");
+  }
+});
+
+test("selectCompletedTasks 未知入口包含缺失非法未来时间，搜索未知顺序稳定", () => {
+  const now = new Date(2026, 2, 20, 12);
+  const values = [undefined, null, "", "bad", 0, false, "2026-02-30T12:00:00Z", new Date(now.getTime() + 1).toISOString()];
+  const unknown = values.map((completedAt, id) => ({ id, done: true, title: "match", completedAt }));
+  const dated = { id: "dated", done: true, title: "match", completedAt: now.toISOString() };
+  const tasks = [...unknown, dated];
+  const result = selectCompletedTasks(tasks, { now, undated: true });
+  assert.deepEqual(result.groups, [{ key: "unknown", label: "完成时间未记录", tasks: unknown }]);
+  assert.equal(result.total, unknown.length);
+  assert.equal(result.undatedCount, unknown.length);
+  const search = selectCompletedTasks(tasks, { now, query: "match" });
+  assert.deepEqual(search.groups.flatMap(group => group.tasks), [dated, ...unknown]);
+  assert.deepEqual(selectCompletedTasks(tasks, { now }).groups.flatMap(group => group.tasks), [dated]);
+});
+
+test("selectCompletedTasks 空月份不回退，最近月份只取有日期历史且允许1900年前", () => {
+  const now = new Date(2026, 2, 20, 12);
+  const task = { done: true, completedAt: new Date(2025, 11, 1, 12).toISOString() };
+  const empty = selectCompletedTasks([task], { now, month: "2026-02" });
+  assert.deepEqual(empty, { groups: [], total: 0, shown: 0, months: [{ key: "2025-12", count: 1 }], undatedCount: 0, latestMonth: "2025-12" });
+  assert.equal(selectCompletedTasks([task], { now }).total, 0);
+  assert.deepEqual(selectCompletedTasks(null, { now }), { groups: [], total: 0, shown: 0, months: [], undatedCount: 0, latestMonth: null });
+  assert.equal(selectCompletedTasks([{ done: true }], { now }).latestMonth, null);
+  const historic = { done: true, completedAt: new Date(1899, 11, 1, 12).toISOString() };
+  assert.equal(selectCompletedTasks([historic], { now, month: "1899-12" }).total, 1);
+  assert.equal(selectCompletedTasks([], { now, month: "0001-01" }).total, 0);
+  assert.equal(selectCompletedTasks([]).shown, 0);
+});
+
+test("selectCompletedTasks 拒绝非法或未来月份及非正整数limit", () => {
+  const now = new Date(2026, 2, 20, 12);
+  for (const month of ["", null, 202603, "2026-3", "2026-00", "2026-13", "2026-03-01", " 2026-03", "2026-04", "2027-01", "99999-01"]) {
+    assert.throws(() => selectCompletedTasks([], { now, month }), /月份/);
+  }
+  for (const limit of [0, -1, 1.5, Infinity, NaN, "20", null]) {
+    assert.throws(() => selectCompletedTasks([], { now, limit }), /正整数/);
+  }
+  assert.throws(() => selectCompletedTasks([], { now: new Date(NaN) }), /日期/);
+});
+
+test("selectCompletedTasks 跨本地月界年界和夏令时均按日历日期", () => {
+  const script = `
+    const assert = require("node:assert/strict");
+    const { selectCompletedTasks, localDateKey } = require("./model.js");
+    for (const [year, month, day] of [[2024, 2, 11], [2024, 10, 4], [2025, 0, 1], [2024, 2, 1]]) {
+      const now = new Date(year, month, day, 0, 1);
+      const yesterday = new Date(year, month, day - 1, 0, 1);
+      const tasks = [yesterday, now].map((date, id) => ({ id, done: true, title: "match", completedAt: date.toISOString() }));
+      const search = selectCompletedTasks(tasks, { now, query: "match" });
+      assert.deepEqual(search.groups.map(group => group.key), [localDateKey(now), localDateKey(yesterday)]);
+      assert.deepEqual(search.groups.map(group => group.label), ["今天", "昨天"]);
+      const current = selectCompletedTasks(tasks, { now });
+      assert.equal(current.total, now.getMonth() === yesterday.getMonth() ? 2 : 1);
+      const previous = selectCompletedTasks(tasks, { now, month: localDateKey(yesterday).slice(0, 7) });
+      assert.equal(previous.total, now.getMonth() === yesterday.getMonth() ? 2 : 1);
+    }
+    const now = new Date("2024-03-01T02:00:00Z");
+    const tasks = [{ done: true, completedAt: "2024-02-29T20:00:00Z" }];
+    const result = selectCompletedTasks(tasks, { now, query: "", month: process.env.EXPECTED_MONTH });
+    assert.equal(result.total, 1);
+    assert.equal(result.groups[0].key, process.env.EXPECTED_DAY);
+    assert.equal(result.latestMonth, process.env.EXPECTED_MONTH);
+    if (process.env.TZ === "America/New_York") {
+      const overlap = ["2024-11-03T01:30:00-04:00", "2024-11-03T01:30:00-05:00"].map((completedAt, id) => ({ id, done: true, completedAt }));
+      const repeatedHour = selectCompletedTasks(overlap, { now: new Date(2024, 10, 4) });
+      assert.equal(repeatedHour.groups.length, 1);
+      assert.deepEqual(repeatedHour.groups[0].tasks.map(task => task.id), [1, 0]);
+    }
+  `;
+  for (const [TZ, EXPECTED_MONTH, EXPECTED_DAY] of [["America/New_York", "2024-02", "2024-02-29"], ["Asia/Shanghai", "2024-03", "2024-03-01"], ["UTC", "2024-02", "2024-02-29"]]) {
+    execFileSync(process.execPath, ["-e", script], { cwd: __dirname, env: { ...process.env, TZ, EXPECTED_MONTH, EXPECTED_DAY } });
+  }
+});
+
+test("示例完成时间合理且维持四项，未完成时间显式为空", () => {
+  const now = new Date(2026, 0, 1, 0, 1);
+  const tasks = initialTasks(now);
+  assert.equal(tasks.length, 4);
+  for (const task of tasks) {
+    if (!task.done) assert.equal(task.completedAt, null);
+    else {
+      assert.ok(Date.parse(task.completedAt) <= now.getTime());
+      assert.ok(daysBetween(task.createdAt, localDateKey(new Date(task.completedAt))) >= 0);
+    }
+  }
+  assert.deepEqual(groupCompletedTasks(tasks, now).map(group => group.key), ["yesterday"]);
+});
+
 test("待办不再建模预估时长或专注标题关联", () => {
   assert.equal(Object.hasOwn(require("./model.js"), "stepFocusTitle"), false);
   assert.equal(Object.hasOwn(LIMITS, "maxEstimatedSessions"), false);
@@ -372,7 +689,7 @@ test("新增纯接口同时通过 CommonJS 和浏览器 FocusModel 导出", () =
   assert.equal(Object.isFrozen(browser.FocusModel), true);
   assert.equal(Object.hasOwn(browser.FocusModel, "stepFocusTitle"), false);
   assert.equal(Object.hasOwn(common, "stepFocusTitle"), false);
-  for (const name of ["localDateKey", "periodRange", "initialFocusRecords", "selectFocusRecords", "focusSummary", "focusTrend", "focusBreakdown", "monthActivity", "exportFocusCsv", "initialFocusItems", "validateFocusItem", "focusHourDistribution", "validateProgress", "initialProgressEntries", "latestProjectProgress", "allTimeFocusSummary"]) {
+  for (const name of ["localDateKey", "periodRange", "initialFocusRecords", "selectFocusRecords", "focusSummary", "focusTrend", "focusBreakdown", "monthActivity", "exportFocusCsv", "initialFocusItems", "validateFocusItem", "focusHourDistribution", "validateProgress", "initialProgressEntries", "latestProjectProgress", "allTimeFocusSummary", "completeTask", "setTaskStep", "reopenTask", "groupCompletedTasks"]) {
     assert.equal(typeof browser.FocusModel[name], "function");
     assert.equal(typeof common[name], "function");
   }

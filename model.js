@@ -55,17 +55,17 @@
     const dayBefore = offsetDays => localDateKey(addDays(now, -offsetDays));
     return [
       { id: "sample-reading", title: "阅读《原子习惯》", category: "个人成长", important: false, done: false,
-        createdAt: dayBefore(2), steps: [] },
+        createdAt: dayBefore(2), completedAt: null, steps: [] },
       { id: "sample-planning", title: "梳理个人 APP 的想法", category: "工作", important: true, done: false,
-        createdAt: dayBefore(9), steps: [
+        createdAt: dayBefore(9), completedAt: null, steps: [
           { id: "step-plan-1", title: "写下想解决的问题", done: true },
           { id: "step-plan-2", title: "画三张草图", done: true },
           { id: "step-plan-3", title: "选一个先做", done: false },
         ] },
       { id: "sample-walk", title: "傍晚出去走一走", category: "生活", important: false, done: false,
-        createdAt: dayBefore(0), steps: [] },
+        createdAt: dayBefore(0), completedAt: null, steps: [] },
       { id: "sample-desk", title: "整理书桌，清空杂念", category: "生活", important: false, done: true,
-        createdAt: dayBefore(4), steps: [] },
+        createdAt: dayBefore(4), completedAt: addDays(now, -1).toISOString(), steps: [] },
     ];
   }
 
@@ -193,6 +193,116 @@
       bucket.tasks.sort((left, right) => Number(Boolean(left.done)) - Number(Boolean(right.done)));
     });
     return buckets.filter(bucket => bucket.tasks.length > 0);
+  }
+
+  function completeTask(task, now = new Date()) {
+    if (!task.done) requireDate(now);
+    const steps = (Array.isArray(task.steps) ? task.steps : []).map(step => ({ ...step, done: true }));
+    return { ...task, done: true, completedAt: task.done ? task.completedAt : now.toISOString(), steps };
+  }
+
+  function setTaskStep(task, stepId, done, now = new Date()) {
+    if (task.done) throw new Error("请先重新打开已完成的事项。");
+    const list = Array.isArray(task.steps) ? task.steps : [];
+    if (!list.some(step => step.id === stepId)) throw new Error("请选择有效的小步。");
+    const steps = list.map(step => ({ ...step, done: step.id === stepId ? Boolean(done) : step.done }));
+    const completed = steps.every(step => step.done);
+    if (completed) requireDate(now);
+    return { ...task, steps, done: completed, completedAt: completed ? now.toISOString() : null };
+  }
+
+  function reopenTask(task, redoStepIds = []) {
+    const list = Array.isArray(task.steps) ? task.steps : [];
+    const redo = new Set(Array.isArray(redoStepIds) ? redoStepIds : []);
+    if (task.done && list.length && !list.some(step => redo.has(step.id))) {
+      throw new Error("请至少选择一个需要重做的小步。");
+    }
+    const steps = list.map(step => ({ ...step, done: redo.has(step.id) ? false : step.done }));
+    return { ...task, done: false, completedAt: null, steps };
+  }
+
+  function completionDate(value) {
+    if (typeof value !== "string") return null;
+    const parts = /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+    if (!parts) return null;
+    const calendar = new Date(0);
+    calendar.setUTCFullYear(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+    if (calendar.getUTCFullYear() !== Number(parts[1]) || calendar.getUTCMonth() + 1 !== Number(parts[2]) || calendar.getUTCDate() !== Number(parts[3])) return null;
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date : null;
+  }
+
+  function groupCompletedTasks(tasks, today = new Date()) {
+    const todayKey = localDateKey(today);
+    const yesterdayKey = localDateKey(addDays(today, -1));
+    const list = (Array.isArray(tasks) ? tasks : []).filter(task => task?.done && !task.archived).map(task => {
+      const date = completionDate(task.completedAt);
+      return { task, date: date && date <= today ? date : null };
+    });
+    list.sort((left, right) => (right.date?.getTime() ?? -Infinity) - (left.date?.getTime() ?? -Infinity));
+    const groups = new Map();
+    for (const { task, date } of list) {
+      const day = date ? localDateKey(date) : null;
+      const key = !day ? "unknown" : day === todayKey ? "today" : day === yesterdayKey ? "yesterday" : day.slice(0, 7);
+      const label = key === "unknown" ? "完成时间未记录" : key === "today" ? "今天" : key === "yesterday" ? "昨天" : `${date.getFullYear()}年${date.getMonth() + 1}月`;
+      if (!groups.has(key)) groups.set(key, { key, label, tasks: [] });
+      groups.get(key).tasks.push(task);
+    }
+    return Array.from(groups.values());
+  }
+
+  function completedTaskDate(task, now = new Date()) {
+    requireDate(now);
+    const date = completionDate(task?.completedAt);
+    return date && date <= now ? date : null;
+  }
+
+  const COMPLETED_PAGE_SIZE = 20;
+
+  function selectCompletedTasks(tasks, { month, query = "", undated = false, limit = COMPLETED_PAGE_SIZE, now = new Date() } = {}) {
+    const todayKey = localDateKey(now);
+    const currentMonth = todayKey.slice(0, 7);
+    const selectedMonth = month === undefined ? currentMonth : month;
+    if (typeof selectedMonth !== "string" || !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(selectedMonth) || selectedMonth > currentMonth) {
+      throw new Error("请选择有效且不晚于当月的月份。");
+    }
+    if (!Number.isInteger(limit) || limit <= 0) throw new Error("加载条数必须为正整数。");
+    const search = String(query ?? "").trim().toLowerCase();
+    const list = (Array.isArray(tasks) ? tasks : []).filter(task => task?.done && !task.archived).map(task => {
+      const date = completedTaskDate(task, now);
+      return { task, date, day: date ? localDateKey(date) : null };
+    });
+    const monthCounts = new Map();
+    let undatedCount = 0;
+    for (const { day } of list) {
+      if (!day) undatedCount += 1;
+      else {
+        const key = day.slice(0, 7);
+        monthCounts.set(key, (monthCounts.get(key) || 0) + 1);
+      }
+    }
+    const months = Array.from(monthCounts, ([key, count]) => ({ key, count })).sort((left, right) => right.key.localeCompare(left.key));
+    const filtered = list.filter(({ task, day }) => {
+      if (search) {
+        const titles = (Array.isArray(task.steps) ? task.steps : []).map(step => step?.title);
+        return [task.title, task.category, ...titles].some(value => String(value ?? "").toLowerCase().includes(search));
+      }
+      return undated ? !day : day?.slice(0, 7) === selectedMonth;
+    });
+    filtered.sort((left, right) => (right.date?.getTime() ?? -Infinity) - (left.date?.getTime() ?? -Infinity));
+    const loaded = filtered.slice(0, limit);
+    const yesterdayKey = localDateKey(addDays(now, -1));
+    const groups = new Map();
+    for (const { task, date, day } of loaded) {
+      const key = day || "unknown";
+      if (!groups.has(key)) {
+        const label = !date ? "完成时间未记录" : day === todayKey ? "今天" : day === yesterdayKey ? "昨天"
+          : `${search ? `${date.getFullYear()}年` : ""}${date.getMonth() + 1}月${date.getDate()}日`;
+        groups.set(key, { key, label, tasks: [] });
+      }
+      groups.get(key).tasks.push(task);
+    }
+    return { groups: Array.from(groups.values()), total: filtered.length, shown: loaded.length, months, undatedCount, latestMonth: months[0]?.key ?? null };
   }
 
   function taskSummary(tasks) {
@@ -606,6 +716,7 @@
     LIMITS, MODES, CATEGORIES, USAGE, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, daysBetween, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
     validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary,
+    completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks,
   });
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.FocusModel = api;

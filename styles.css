@@ -16,6 +16,8 @@
   --orange: var(--accent-dark);
   --radius: 20px;
   --touch-target: 44px;
+  --todo-finish-hold: 680ms;
+  --todo-finish-collapse: 240ms;
   font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
   font-synthesis: none;
   -webkit-font-smoothing: antialiased;
@@ -195,78 +197,198 @@ h3 { font-size: 13px; font-weight: 600; margin: 0; }
 .home-indicator { height: 17px; flex-shrink: 0; background: var(--white); position: relative; }
 .home-indicator::after { content: ""; width: 95px; height: 3px; background: #333333; border-radius: 3px; position: absolute; bottom: 5px; left: calc(50% - 47.5px); }
 .preview-footnote { font-size: 11px; text-align: center; color: var(--muted); line-height: 1.9; margin: 18px 0 0; }
-.daily-card { padding: 20px 17px 17px; border-radius: var(--radius); background: var(--surface); position: relative; }
-.daily-copy { padding-right: 70px; }
-.daily-copy .eyebrow { font-size: 11px; letter-spacing: 1.4px; color: var(--muted); }
-.daily-copy h3 { font-size: 14px; margin: 10px 0; }
-.daily-copy p { margin: 0; font-size: 11px; color: var(--muted); }
-.completion-badge { position: absolute; right: 17px; top: 33px; font-size: 29px; font-weight: 350; color: var(--accent-dark); }
-.completion-badge span { font-size: 11px; margin-left: 2px; }
-.completion-track { margin-top: 18px; height: 4px; background: #dedede; border-radius: 3px; overflow: hidden; }
-.completion-track > div { height: 100%; background: var(--accent); transition: width .2s; }
-.task-tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin-top: 24px; }
-.task-tabs button { position: relative; padding: 0 0 12px; font-size: 12px; color: var(--muted); }
-.task-tabs button.selected { font-weight: 600; color: var(--green-dark); }
-.task-tabs button.selected::after { content: ""; position: absolute; height: 2px; background: var(--green); bottom: -1px; left: 0; right: 0; }
-.task-tabs button span { font-size: 11px; background: #ededed; padding: 1px 5px; border-radius: 4px; margin-left: 3px; }
-.task-list { display: flex; flex-direction: column; gap: 18px; }
-/* 重要的事跨分类自成一组排在最前，其余按分类分开。 */
-.task-group { display: flex; flex-direction: column; gap: 8px; }
-.task-group-list { display: flex; flex-direction: column; gap: 10px; }
+/* 待办：标题旁指南、三页签计数；历史记录按月查看、按日期分组。 */
+#page-tasks { padding-top: 14px; padding-bottom: 28px; min-width: 0; }
+#page-tasks .todo-page-header { margin-bottom: 8px; }
+.todo-title-group { display: flex; align-items: center; gap: 10px; min-width: 0; }
+#tasks-heading { font-size: 25px; white-space: nowrap; }
+#task-help { min-height: var(--touch-target); padding: 0 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+#task-help:hover { color: var(--accent-dark); }
+.task-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; border-bottom: 1px solid var(--line); }
+.task-tabs button { position: relative; min-width: 0; padding: 10px 2px; font-size: 12px; color: var(--muted); }
+.task-tabs button.selected, .task-tabs button[aria-pressed="true"] { font-weight: 600; color: var(--accent-dark); }
+.task-tabs button[aria-pressed="true"]::after { content: ""; position: absolute; height: 2px; background: var(--accent); bottom: -1px; left: 10px; right: 10px; border-radius: 2px; }
+.task-tabs button span { display: inline-block; font-size: 11px; padding: 0 3px; font-variant-numeric: tabular-nums; }
+#task-search-wrap { display: block; margin-top: 14px; }
+#task-search { width: 100%; min-width: 0; min-height: 44px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: var(--surface); color: var(--ink); font-size: 14px; }
+#page-tasks .todo-list-heading { margin: 18px 0 12px; }
+.task-list { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.task-group { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.task-group-list { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .task-group-heading { display: flex; align-items: center; gap: 7px; padding-left: 2px; }
-.task-group-label { font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: .04em; }
-.task-group-count { font-size: 11px; color: var(--muted); opacity: .7; font-variant-numeric: tabular-nums; }
+.task-group-label { font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: .04em; overflow-wrap: anywhere; }
+.task-group-count { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .task-group.important .task-group-label { color: var(--accent-dark); }
 .task-group.important .task-group-label::before { content: "▲"; font-size: 8px; margin-right: 5px; vertical-align: 1px; }
-.task-card { display: flex; align-items: flex-start; gap: 6px; padding: 12px 8px; border: 1px solid var(--line); background: var(--white); border-radius: 15px; transition: opacity .25s, border-color .25s; }
-.task-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 9px; }
-/* L：躺得越久越淡，像一杯放凉的茶。已完成与已放下不参与发酵。 */
-.task-card.age-resting { opacity: .72; border-color: #efefef; }
-.task-card.age-stale { opacity: .48; border-color: #f3f3f3; background: #fcfbfa; }
-.task-card.age-stale .task-title { font-weight: 450; }
-.task-card.archived { opacity: .5; border-style: dashed; }
+#task-history-controls { margin: 12px 0 16px; min-width: 0; }
+#task-month-nav { display: grid; grid-template-columns: var(--touch-target) minmax(0, 1fr) var(--touch-target) auto; align-items: center; gap: 3px; }
+#task-month-nav .icon-button { border: 0; border-radius: 10px; }
+#task-month-picker { display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 0; padding: 8px 2px; border-radius: 10px; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+#task-month-label { min-width: 0; overflow-wrap: anywhere; }
+#task-month-picker .icon { width: 13px; height: 13px; color: var(--muted); transform: rotate(90deg); }
+#task-month-current { padding: 8px 5px; border-radius: 10px; color: var(--accent-dark); font-size: 11px; white-space: nowrap; }
+#task-month-nav button:hover:not(:disabled) { background: var(--accent-soft); }
+#task-history-summary { margin: 10px 2px 0; color: var(--muted); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+#task-undated, #task-known-history { padding: 6px 2px; color: var(--accent-dark); font-size: 12px; text-decoration: underline; text-underline-offset: 4px; }
+#task-undated:hover, #task-known-history:hover { color: var(--ink); }
+.history-heading { display: flex; width: 100%; align-items: center; gap: 8px; padding: 7px 2px; text-align: left; }
+.history-heading .task-group-label { color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0; }
+.history-heading .task-group-count { margin-left: auto; }
+.history-list { gap: 15px; }
+.history-list .task-group { gap: 0; }
+.history-list .task-group-list { gap: 2px; }
+.history-list .task-card.done { padding: 8px 2px; gap: 4px; border-color: transparent; border-bottom-color: var(--line); border-radius: 0; background: var(--white); }
+.history-list .task-swipe { border-radius: 0; }
+.history-list .task-title { font-size: 14px; line-height: 1.6; }
+.history-list .task-meta { margin-top: 3px; gap: 3px 8px; }
+.history-list .task-tag { padding: 0; background: none; }
+.history-list .task-tag.important { color: var(--accent-dark); }
+.history-list .task-checkbox::before { width: 18px; height: 18px; border-radius: 50%; }
+.history-list .task-checkbox .icon { width: 12px; height: 12px; }
+#task-history-footer { margin-top: 16px; text-align: center; }
+#task-history-more { width: 100%; min-height: 48px; color: var(--accent-dark); font-size: 12px; border: 1px solid var(--line); border-radius: 12px; }
+#task-history-more:hover, .history-latest:hover { background: var(--accent-soft); }
+#task-history-count { margin: 10px 0 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.history-latest { margin-top: 16px; padding: 10px 14px; border: 1px solid #e8c4b5; border-radius: 11px; color: var(--accent-dark); font-size: 12px; }
+#modal .task-month-form { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+#modal .task-month-form label { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; }
+#modal select[name="historyYear"] { flex: 1; min-width: 0; min-height: var(--touch-target); padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--white); font-variant-numeric: tabular-nums; }
+#modal .month-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+#modal .month-choice { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-width: var(--touch-target); min-height: 64px; padding: 8px 4px; border: 1px solid var(--line); border-radius: 11px; background: var(--white); }
+#modal .month-choice:hover:not(:disabled) { background: var(--accent-soft); }
+#modal .month-choice[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-dark); }
+#modal .month-name { font-size: 14px; font-weight: 550; }
+#modal .month-count { min-height: 16px; font-size: 11px; color: var(--accent-dark); font-variant-numeric: tabular-nums; }
+#modal .month-choice:disabled { background: var(--surface); color: var(--muted); border-style: dashed; }
+#modal .month-choice:disabled .month-count { color: var(--muted); }
+#modal .month-picker-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+#modal .month-picker-actions button { min-height: var(--touch-target); padding: 8px 12px; border-radius: 10px; color: var(--accent-dark); font-size: 13px; }
+#modal .month-picker-actions button:hover { background: var(--accent-soft); }
+/* 删除层在卡片下面，横向位移只发生在裁切容器内部。 */
+.task-swipe { position: relative; isolation: isolate; min-width: 0; overflow: hidden; border-radius: 15px; touch-action: pan-y; }
+.task-swipe button { touch-action: pan-y; }
+.task-delete { position: absolute; inset: 0 0 0 auto; width: 88px; min-width: 88px; padding: 8px; background: var(--accent-dark); color: var(--white); font-size: 13px; border-radius: 0 15px 15px 0; pointer-events: none; visibility: hidden; }
+.task-swipe.swipe-open .task-delete { pointer-events: auto; visibility: visible; }
+.task-swipe:has(.swiping) .task-delete { visibility: visible; }
+.task-delete:focus-visible { outline-offset: -5px; outline-color: var(--white); }
+.task-card { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; width: 100%; padding: 10px 8px; border: 1px solid #e8c4b5; background: var(--white); border-radius: 15px; transform: translateX(var(--swipe-x, 0px)); transition: transform .22s ease, border-color .2s, background .2s; touch-action: pan-y; user-select: none; }
+.task-card.swiping { transition: none; user-select: none; }
+.task-main { display: flex; align-items: flex-start; gap: 4px; min-width: 0; }
+.task-body { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; min-height: 44px; }
+/* 发酵只减淡边框与底色，不降低正文和操作按钮的对比度。 */
+.task-card.age-resting { border-color: var(--line); background: #fdfdfd; }
+.task-card.age-stale { border-color: #ededed; background: #fafafa; }
+.task-card.archived { border-color: var(--line); border-style: dashed; }
 .task-age { font-size: 11px; color: var(--muted); }
-.age-actions { display: flex; gap: 8px; }
-.age-action { font-size: 11px; padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--green-dark); background: var(--white); }
-.age-action:hover { background: var(--mint); }
+.age-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 6px; }
+.age-action { font-size: 11px; padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--accent-dark); background: var(--white); }
+.age-action:hover { background: var(--accent-soft); }
 .age-action.quiet { color: var(--muted); }
-/* M：一条横向的小路，走过的点是实心的。 */
-.step-path { display: flex; flex-direction: column; gap: 6px; }
-.step-track { display: flex; align-items: center; gap: 0; flex-wrap: wrap; }
-/* 圆点画在 ::before 上，按钮本体保持可点面积；连线用负外边距钻到按钮留白下面。 */
-.step-dot { position: relative; z-index: 1; flex: 0 0 26px; width: 26px; height: 32px; min-width: 0; min-height: 0; padding: 0; display: grid; place-items: center; }
-.step-dot::before { content: ""; width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid #cfc7c1; background: var(--white); transition: background .18s, border-color .18s; }
-.step-dot.walked::before { background: var(--accent); border-color: var(--accent); }
-.step-dot:hover::before { border-color: var(--accent); }
-.step-link { flex: 0 0 33px; width: 33px; height: 2px; margin: 0 -7px; background: #e3ddd8; }
-.step-link.walked { background: var(--accent); }
-.step-caption { margin: 0; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
-.step-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
-.step-editor-title { margin: 0; font-size: 12px; color: var(--muted); }
-.step-editor-list { display: flex; flex-direction: column; gap: 6px; }
-.step-editor-row { display: flex; gap: 6px; align-items: center; }
-.step-editor-row input { flex: 1; min-width: 0; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px; font-family: inherit; }
-.step-remove { flex: 0 0 32px; width: 32px; height: 32px; border-radius: 9px; color: var(--muted); font-size: 16px; }
-.step-remove:hover { background: var(--surface); }
-.add-step { align-self: flex-start; font-size: 12px; padding: 8px 14px; border: 1px dashed #c9c9c9; border-radius: 12px; color: var(--muted); }
-.add-step:disabled { opacity: .55; }
 .task-checkbox { flex: 0 0 var(--touch-target); width: var(--touch-target); height: var(--touch-target); display: grid; place-items: center; position: relative; border-radius: 10px; padding: 0; }
 .task-checkbox::before { content: ""; position: absolute; width: 21px; height: 21px; border: 1.5px solid var(--muted); border-radius: 7px; }
 .task-checkbox .icon { position: relative; width: 14px; height: 14px; }
-.task-card.done .task-checkbox { color: var(--accent-dark); }
-.task-card.done .task-checkbox::before { background: var(--mint); border-color: var(--muted); }
-.task-card.done .task-title { text-decoration: line-through; color: var(--muted); }
+.task-card.done .task-checkbox, .task-check-static { color: var(--accent-dark); }
+.task-card.done .task-checkbox::before, .task-check-static::before { background: var(--accent-soft); border-color: var(--accent); }
+.task-check-static { cursor: default; }
+.task-card.done { border-color: var(--line); }
+.task-card.done .task-title { color: var(--ink); font-weight: 500; }
 .task-info { min-width: 0; flex: 1; padding: 0; text-align: left; }
-.task-title { font-size: 13px; font-weight: 550; overflow-wrap: anywhere; line-height: 1.6; }
-.task-meta { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.task-title { display: block; font-size: 15px; font-weight: 550; overflow-wrap: anywhere; line-height: 1.6; }
+.task-meta { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.task-menu { flex: 0 0 44px; padding: 0; border-radius: 10px; color: var(--muted); font-size: 22px; }
+.task-menu:hover { background: var(--surface); }
 .task-tag { background: var(--surface); color: var(--muted); padding: 2px 5px; border-radius: 4px; }
-.task-tag.important { color: var(--orange); background: var(--mint); }
-.add-task-inline { margin-top: 13px; display: flex; justify-content: center; align-items: center; gap: 7px; border: 1px dashed #c9c9c9; border-radius: 14px; width: 100%; padding: 15px; font-size: 12px; color: var(--muted); }
+.task-tag.important { color: var(--accent-dark); background: var(--accent-soft); }
+/* 小路仅为装饰；展开后的整行步骤才是可交互的复选框。 */
+.step-path { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 0 6px; }
+.step-expand { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; width: 100%; min-width: 0; padding: 7px 5px; text-align: left; border-radius: 10px; }
+.step-expand:hover { background: var(--surface); }
+.step-caption { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.step-expand .step-caption { order: 3; flex-basis: 100%; }
+.step-toggle-label, .history-arrow { font-size: 11px; color: var(--muted); }
+.step-toggle-label { margin-left: auto; }
+.step-count { font-size: 11px; color: var(--accent-dark); font-variant-numeric: tabular-nums; }
+.step-track { display: flex; flex: 0 0 100%; width: 100%; min-width: 0; align-items: center; padding: 5px 1px; pointer-events: none; }
+.step-dot { flex: 0 0 11px; width: 11px; height: 11px; display: grid; place-items: center; }
+.step-dot::before { content: ""; width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid #bcbcbc; background: var(--white); transition: background .18s, border-color .18s; }
+.step-dot.walked::before { background: var(--accent); border-color: var(--accent); }
+.step-link { flex: 1 1 0; min-width: 2px; height: 2px; background: var(--line); transition: background .18s; }
+.step-link.walked { background: var(--accent); }
+.step-list { display: flex; flex-direction: column; gap: 2px; padding-top: 5px; border-top: 1px solid var(--line); }
+.step-row { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 48px; padding: 10px 8px; border-radius: 9px; text-align: left; }
+.step-row:hover { background: var(--surface); }
+.step-check { flex: 0 0 19px; width: 19px; height: 19px; border: 1.5px solid var(--muted); border-radius: 6px; display: grid; place-items: center; color: var(--accent-dark); font-size: 12px; }
+.step-row.walked .step-check, .step-row[aria-checked="true"] .step-check { background: var(--accent-soft); border-color: var(--accent); }
+.step-row.walked .step-check:empty::after, .step-row[aria-checked="true"] .step-check:empty::after { content: "✓"; }
+.step-label { min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+.step-row.walked .step-label { color: var(--muted); }
+.task-finish-note { display: flex; align-items: center; gap: 10px; margin: 0; padding: 8px 10px; color: var(--accent-dark); pointer-events: none; }
+.task-finish-mark { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; border: 1px solid #e8c4b5; border-radius: 50%; background: var(--accent-soft); }
+.task-finish-mark .icon { width: 21px; height: 21px; stroke-width: 2; stroke-dasharray: 32; stroke-dashoffset: 0; }
+.task-finish-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.task-finish-copy strong { font-size: 13px; font-weight: 600; }
+.task-finish-copy small { color: var(--muted); font-size: 11px; }
+.task-card.celebrating { min-height: var(--finish-height); border-color: var(--accent); background: #fffaf6; animation: todo-finish-glow var(--todo-finish-hold) ease-out both; }
+.task-card.celebrating .task-finish-mark { animation: todo-finish-mark var(--todo-finish-hold) ease-out both; }
+.task-card.celebrating .task-finish-mark .icon { animation: todo-finish-check var(--todo-finish-hold) ease-out both; }
+.task-card.celebrating .step-dot:last-child::before { background: var(--accent); border-color: var(--accent); animation: todo-finish var(--todo-finish-hold) ease-out both; }
+.task-card.celebrating, .task-card.celebrating .task-finish-mark, .task-card.celebrating .task-finish-mark .icon, .task-card.celebrating .step-dot:last-child::before { animation-delay: var(--todo-finish-delay, 0ms); }
+.task-swipe.finishing { height: var(--finish-height, auto); opacity: 1; pointer-events: none; transition: height var(--todo-finish-collapse) ease-in-out, opacity var(--todo-finish-collapse) ease-in; }
+.task-swipe.finishing-out { height: 0; opacity: 0; }
+#done-count.pulse { border-radius: 6px; animation: todo-count-pulse var(--todo-finish-hold) ease-out; }
+@keyframes todo-finish { 45% { box-shadow: 0 0 0 6px #f5c4ac66; transform: scale(1.2); } 100% { box-shadow: 0 0 0 3px var(--accent-soft); transform: scale(1); } }
+@keyframes todo-finish-glow { 0% { box-shadow: inset 0 0 0 1px #f5c4ac; } 45% { box-shadow: inset 0 0 24px #f5c4ac55; } 100% { box-shadow: inset 0 0 12px #f5c4ac22; } }
+@keyframes todo-finish-mark { 0% { transform: scale(.8); } 45% { transform: scale(1.1); } 70%, 100% { transform: scale(1); } }
+@keyframes todo-finish-check { 0%, 12% { stroke-dashoffset: 32; } 65%, 100% { stroke-dashoffset: 0; } }
+@keyframes todo-count-pulse { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.18); color: var(--accent-dark); background: var(--accent-soft); } }
+.step-dot.just-walked::before, .step-row.just-walked .step-check { animation: todo-step .32s ease-out; }
+@keyframes todo-step { 40% { transform: scale(1.22); box-shadow: 0 0 0 5px var(--accent-soft); } }
+.task-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.task-detail-steps { margin: 12px 0; padding-left: 20px; font-size: 14px; line-height: 2; overflow-wrap: anywhere; }
+.redo-step-row { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 10px 8px; font-size: 14px; overflow-wrap: anywhere; cursor: pointer; }
+.redo-step-row input { flex: 0 0 20px; width: 20px; height: 20px; accent-color: var(--accent); }
+.add-task-inline { margin-top: 14px; display: flex; justify-content: center; align-items: center; gap: 7px; border: 1px dashed #c9c9c9; border-radius: 14px; width: 100%; min-height: 48px; padding: 12px; font-size: 12px; color: var(--accent-dark); }
 .add-task-inline .icon { width: 16px; height: 16px; }
-.tip-card { background: var(--surface); padding: 16px; display: flex; gap: 11px; border-radius: 15px; margin-top: 25px; }
-.tip-card > .icon { color: var(--muted); width: 19px; }
-.tip-card strong { font-size: 12px; font-weight: 550; }
-.tip-card p { color: var(--muted); font-size: 11px; line-height: 1.8; margin: 6px 0 0; }
+#page-tasks .empty-state strong { display: block; color: var(--ink); font-size: 14px; font-weight: 550; }
+#page-tasks .empty-state p { margin: 8px 0 0; }
+/* 独立撤销条不替换通用 toast，也不随待办列表滚动。 */
+#task-undo { position: relative; z-index: 5; flex: 0 0 auto; display: flex; align-items: center; gap: 4px 8px; margin: 8px 12px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 14px; background: var(--white); box-shadow: 0 5px 24px #29292914; }
+#task-undo-message { flex: 1; min-width: 0; font-size: 12px; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+#undo-task, #dismiss-task-undo { flex-shrink: 0; }
+#undo-task { color: var(--accent-dark); font-weight: 600; font-size: 12px; padding: 8px; }
+#dismiss-task-undo { color: var(--muted); font-size: 11px; padding: 8px; }
+/* 底部编辑面板：可视视口由 JS 提供，未提供时跟随动态视口。 */
+#todo-sheet { position: fixed; inset: auto; top: calc(var(--todo-viewport-top, 0px) + var(--todo-viewport-height, 100dvh)); left: 50%; transform: translate(-50%, -100%); width: min(480px, 100%); height: min(680px, var(--todo-viewport-height, 100dvh)); max-width: 100%; max-height: var(--todo-viewport-height, 100dvh); margin: 0; padding: 0; overflow: hidden; border-radius: 22px 22px 0 0; border-bottom: 0; }
+#todo-sheet[open] { display: flex; flex-direction: column; }
+#todo-form { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.todo-sheet-heading { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--white); }
+#todo-sheet-title { flex: 1; min-width: 0; margin: 0; font-size: 17px; text-align: center; letter-spacing: 0; }
+#close-todo-sheet, #save-todo-sheet { flex-shrink: 0; padding: 8px 12px; font-size: 13px; border-radius: 10px; }
+#close-todo-sheet { color: var(--muted); }
+#save-todo-sheet { background: var(--accent); color: var(--white); }
+#save-todo-sheet:hover { background: var(--accent-dark); }
+#todo-sheet-body { flex: 1; min-height: 0; min-width: 0; padding: 4px 20px 20px; overflow-y: auto; overscroll-behavior: contain; scroll-padding-block: 16px; }
+.todo-draft-note { flex-shrink: 0; margin: 0; padding: 9px 16px max(9px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; text-align: center; background: var(--white); }
+#todo-sheet .field { margin: 14px 0; }
+#todo-sheet .todo-title-field input, #todo-sheet .todo-title-field textarea { font-size: 17px; }
+.todo-category-choices { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 14px; }
+.category-choice { flex: 1 1 70px; padding: 8px; font-size: 12px; border: 1px solid var(--line); border-radius: 11px; }
+.category-choice.selected, .category-choice[aria-pressed="true"] { color: var(--accent-dark); border-color: var(--accent); background: var(--accent-soft); }
+.todo-important { display: flex; align-items: center; gap: 10px; min-height: 48px; font-size: 13px; cursor: pointer; }
+.todo-important input { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); }
+#todo-sheet .step-editor { margin-top: 16px; border-top: 1px solid var(--line); }
+#todo-sheet .step-editor summary { min-height: 48px; padding: 14px 0; color: var(--muted); font-size: 13px; cursor: pointer; }
+#todo-sheet .step-editor summary:focus-visible { outline: 3px solid var(--accent-dark); outline-offset: 2px; }
+#todo-sheet .step-editor-list { display: flex; flex-direction: column; gap: 8px; }
+#todo-sheet .step-editor-row { display: flex; gap: 6px; align-items: center; min-width: 0; }
+#todo-sheet .step-editor-row input { flex: 1; min-width: 0; width: 100%; min-height: 48px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 14px; color: var(--ink); background: var(--white); }
+#todo-sheet .step-remove { flex: 0 0 44px; width: 44px; min-height: 48px; padding: 0; border-radius: 9px; color: var(--muted); font-size: 14px; }
+#todo-sheet .step-remove:hover { background: var(--surface); }
+#todo-sheet .add-step { margin-top: 10px; min-height: 48px; font-size: 12px; padding: 8px 14px; border: 1px dashed #c9c9c9; border-radius: 12px; color: var(--accent-dark); }
+.todo-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.todo-editor-actions button { min-height: 48px; max-width: 100%; overflow-wrap: anywhere; }
+@media (max-width: 360px) { #todo-sheet-body { padding-left: 14px; padding-right: 14px; } .todo-sheet-heading { padding-inline: 8px; } .task-tabs button { font-size: 11px; } }
+@media (max-height: 420px) { #todo-sheet { border-radius: 12px 12px 0 0; } .todo-sheet-heading { padding-block: 3px; } .todo-draft-note { padding-top: 5px; padding-bottom: max(5px, env(safe-area-inset-bottom)); } }
 .empty-state { text-align: center; font-size: 12px; padding: 35px 16px; color: var(--muted); line-height: 1.8; }
 .permission-note { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 5px; padding: 10px 8px; background: var(--surface); border-radius: 10px; }
 .permission-note .icon { width: 14px; height: 14px; }
@@ -346,6 +468,14 @@ dialog h2 { font-size: 22px; margin-bottom: 17px; }
 .modal-copy li { margin-bottom: 8px; }
 .modal-copy strong { color: var(--green-dark); font-weight: 600; }
 .modal-notice { background: var(--surface); border-radius: 12px; padding: 12px; font-size: 11px; line-height: 1.8; margin-bottom: 15px; color: var(--muted); }
+#modal.todo-guide-sheet { position: fixed; inset: auto 0 0; margin: 0 auto; width: min(440px, 100%); padding: 22px 20px max(20px, env(safe-area-inset-bottom)); border-radius: 22px 22px 0 0; background: var(--white); }
+.todo-guide-sheet .modal-header { position: absolute; top: 8px; right: 10px; margin: 0; }
+.todo-guide-sheet .modal-header .eyebrow { display: none; }
+.todo-guide-sheet #modal-title { padding-right: var(--touch-target); margin-bottom: 18px; font-size: 21px; }
+.todo-guide-content section { margin-bottom: 14px; }
+.todo-guide-content h3 { margin: 0 0 4px; color: var(--accent-dark); font-size: 13px; font-weight: 600; }
+.todo-guide-content p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.todo-guide-content > button { width: 100%; margin-top: 4px; }
 .field { display: block; font-size: 12px; color: var(--muted); margin: 15px 0; min-width: 0; }
 .field input, .field select, .field textarea { display: block; width: 100%; min-height: var(--touch-target); margin-top: 8px; padding: 12px; border-radius: 11px; border: 1px solid #d9d9d9; background: white; color: var(--ink); min-width: 0; }
 .progress-form { min-width: 0; }
@@ -460,5 +590,5 @@ dialog h2 { font-size: 22px; margin-bottom: 17px; }
   .bottom-nav button > span { height: 31px; }
   .toast { bottom: 90px; }
 }
-@media (max-width: 360px) { .page { padding-left: 17px; padding-right: 17px; } .daily-copy h3 { font-size: 13px; } .completion-badge { right: 12px; font-size: 24px; } .task-tabs { gap: 14px; } .form-row { grid-template-columns: 1fr; } }
+@media (max-width: 360px) { .page { padding-left: 17px; padding-right: 17px; } .form-row { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

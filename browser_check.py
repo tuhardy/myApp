@@ -21,6 +21,17 @@ CSV_HEADERS = ["日期", "分类", "开始时间", "结束时间", "时长（分
 PROJECT_TITLES = ("Spring Boot 实战", "个人 APP 开发", "算法与数据结构")
 ALLTIME_IDS = ("alltime-duration", "alltime-calendar-average", "alltime-active-average")
 MIN_TOUCH_TARGET = 44
+MAX_TASK_STEPS = 8
+TASK_SWIPE_WIDTH = 88
+TASK_TOUCH_DRAG = 48
+TOUCH_MOVE_STEPS = 12
+TASK_FINISH_HOLD_MS = 680
+TASK_FINISH_COLLAPSE_MS = 240
+TASK_FINISH_MS = TASK_FINISH_HOLD_MS + TASK_FINISH_COLLAPSE_MS
+TASK_FINISH_UNDO_MS = 500
+TASK_FINISH_STAGGER_MS = 100
+TASK_HISTORY_PAGE_SIZE = 20
+LANDSCAPE_VIEWPORT = {"width": 667, "height": 375}
 
 
 def assert_hour_distribution(page):
@@ -126,7 +137,7 @@ def skip_progress(page, return_to_timer=True, method="button"):
 def create_project(page, title, mode="倒计时", minutes=1, category="个人成长"):
     home(page)
     page.locator("#add-focus-item").click()
-    page.locator('input[name="title"]').fill(title)
+    page.locator('#modal input[name="title"]').fill(title)
     page.locator('select[name="category"]').select_option(category)
     page.locator('select[name="timerMode"]').select_option(mode)
     page.locator('input[name="durationMinutes"]').fill(str(minutes))
@@ -152,18 +163,18 @@ def check_independent_countup(browser, errors):
     title = "独立专注" * 20
     page.set_viewport_size({"width": MOBILE_WIDTHS[0], "height": MOBILE_HEIGHT})
     page.locator("#add-focus-item").click()
-    page.locator('input[name="title"]').fill("   ")
+    page.locator('#modal input[name="title"]').fill("   ")
     page.get_by_role("button", name="添加项目", exact=True).click()
     expect(page.locator("#modal [role='alert']")).to_contain_text("专注项名称")
-    page.locator('input[name="title"]').fill(title)
+    page.locator('#modal input[name="title"]').fill(title)
     page.locator('select[name="category"]').select_option("工作")
     page.locator('select[name="timerMode"]').select_option("正计时")
     page.locator('input[name="durationMinutes"]').fill("1")
-    expect(page.locator('input[name="title"]')).to_have_attribute("maxlength", "80")
+    expect(page.locator('#modal input[name="title"]')).to_have_attribute("maxlength", "80")
     assert page.locator("#modal").evaluate("el => el.scrollWidth <= el.clientWidth")
     page.screenshot(path=str(SCREENSHOT_DIRECTORY / "mobile-focus-item-editor.png"))
     page.get_by_role("button", name="添加项目", exact=True).click()
-    expect(page.locator("#all-count")).to_have_text("4")
+    assert_task_counts(page, pending=3, done=1)
     expect(page.locator("#page-focus")).to_be_visible()
     choose_focus_item(page, title)
     expect(page.locator("#focus-item-name")).to_have_text(title)
@@ -212,7 +223,7 @@ def check_independent_countup(browser, errors):
     expect(page.locator("#focus-sessions")).to_have_text("5")
     skip_progress(page)
     page.locator("#timer-settings").click()
-    page.locator('input[name="title"]').fill("修改后的专注项")
+    page.locator('#modal input[name="title"]').fill("修改后的专注项")
     page.locator('select[name="category"]').select_option("生活")
     page.locator('select[name="timerMode"]').select_option("倒计时")
     page.locator('input[name="durationMinutes"]').fill("7")
@@ -230,7 +241,7 @@ def check_independent_countup(browser, errors):
     page.get_by_role("button", name="确认删除", exact=True).click()
     expect(page.locator("#focus-item-name")).to_have_text(PROJECT_TITLES[0])
     expect(page.locator("#page-focus")).to_be_visible()
-    expect(page.locator("#all-count")).to_have_text("4")
+    assert_task_counts(page, pending=3, done=1)
     expect(page.get_by_role("button", name="进入项目：修改后的专注项", exact=True)).to_have_count(0)
     page.locator("#open-statistics").click()
     page.locator("#statistics-source").select_option("session")
@@ -274,6 +285,43 @@ def check_independent_countup(browser, errors):
     print("PASS: independent items, 80-character mobile dialogs, countup targets, early/paused finish, immutable history and four-period CSV/JSON.", flush=True)
 
 
+def assert_task_counts(page, pending, done, archived=0):
+    for name, count in (("pending", pending), ("done", done), ("archived", archived)):
+        expect(page.locator(f"#{name}-count")).to_have_text(str(count))
+    expect(page.locator("#task-summary")).to_have_count(0)
+    expect(page.locator(".task-tabs button")).to_have_count(3)
+
+
+def task_card(page, title):
+    return page.locator("article.task-card").filter(has=page.locator(".task-title", has_text=re.compile(f"^{re.escape(title)}$")))
+
+
+def create_task(page, title, category="个人成长", steps=()):
+    page.locator("#add-task").click()
+    expect(page.locator("#todo-sheet")).to_be_visible()
+    expect(page.locator("#modal")).not_to_be_visible()
+    page.locator('#todo-form input[name="title"]').fill(title)
+    page.locator("#todo-form button.category-choice").filter(has_text=category).click()
+    if steps:
+        page.locator("#todo-form .step-editor summary").click()
+        for step in steps:
+            page.locator("#todo-form .add-step").click()
+            page.locator("#todo-form .step-editor-row input").last.fill(step)
+    page.locator("#save-todo-sheet").click()
+    expect(page.locator("#todo-sheet")).not_to_be_visible()
+    return task_card(page, title)
+
+
+def reopen_task(page, title, redo_indices=()):
+    task_card(page, title).locator(".task-info").click()
+    page.locator("#modal").get_by_role("button", name="重新打开", exact=True).click()
+    for index in redo_indices:
+        page.locator('#modal label input[type="checkbox"]').nth(index).check()
+    page.locator("#modal").get_by_role("button", name="确认重新打开", exact=True).click()
+    expect(page.locator("#modal")).not_to_be_visible()
+    expect(page.locator('[data-filter="pending"]')).to_have_attribute("aria-pressed", "true")
+
+
 def group_labels(page):
     return page.locator(".task-group-label").all_inner_texts()
 
@@ -293,15 +341,15 @@ def check_task_grouping(browser, errors):
     assert group_labels(page) == ["重要", "个人成长", "生活"], group_labels(page)
     assert group_titles(page, "重要") == ["梳理个人 APP 的想法"]
     assert group_titles(page, "个人成长") == ["阅读《原子习惯》"]
-    # 已完成的「整理书桌」沉到本组末尾。
-    assert group_titles(page, "生活") == ["傍晚出去走一走", "整理书桌，清空杂念"]
+    # 已完成的「整理书桌」仅在完成记录页出现。
+    assert group_titles(page, "生活") == ["傍晚出去走一走"]
+    assert_task_counts(page, pending=3, done=1)
+    expect(page.locator('[data-filter="pending"]')).to_have_attribute("aria-pressed", "true")
+    expect(page.locator('[data-filter="all"], #all-count')).to_have_count(0)
     expect(page.locator(".task-group").first.locator(".task-group-count")).to_have_text("1")
 
     # 新增一件工作的事，工作组出现在生活组之前；组标题已说明分类，卡片不再重复标签。
-    page.locator("#add-task").click()
-    page.locator('input[name="title"]').fill("写周报")
-    page.locator('select[name="category"]').select_option("工作")
-    page.get_by_role("button", name="添加待办", exact=True).click()
+    create_task(page, "写周报", category="工作")
     assert group_labels(page) == ["重要", "个人成长", "工作", "生活"], group_labels(page)
     assert group_titles(page, "工作") == ["写周报"]
     added = page.locator(".task-card").filter(has_text="写周报")
@@ -309,24 +357,24 @@ def check_task_grouping(browser, errors):
 
     # 标为重要后移入置顶组，并显示原分类标签；取消重要则回到分类组。
     added.locator(".task-info").click()
-    page.locator('select[name="priority"]').select_option("重要")
-    page.get_by_role("button", name="保存修改", exact=True).click()
+    page.locator('#todo-form input[name="important"]').check()
+    page.locator("#save-todo-sheet").click()
     assert group_titles(page, "重要") == ["梳理个人 APP 的想法", "写周报"]
     assert group_labels(page) == ["重要", "个人成长", "生活"], group_labels(page)
     expect(page.locator(".task-card").filter(has_text="写周报").locator(".task-tag")).to_have_text("工作")
     page.locator(".task-card").filter(has_text="写周报").locator(".task-info").click()
-    page.locator('select[name="priority"]').select_option("普通")
-    page.get_by_role("button", name="保存修改", exact=True).click()
+    page.locator('#todo-form input[name="important"]').uncheck()
+    page.locator("#save-todo-sheet").click()
     assert group_titles(page, "工作") == ["写周报"]
 
-    # 筛选与分组叠加：只看已完成时只剩生活组，放下的事不留在分类组里。
+    # 完成记录按时间分组，放下的事不留在待完成分类组里。
     page.locator('[data-filter="done"]').click()
-    assert group_labels(page) == ["生活"], group_labels(page)
-    assert group_titles(page, "生活") == ["整理书桌，清空杂念"]
+    assert group_labels(page) == ["昨天"], group_labels(page)
+    assert group_titles(page, "昨天") == ["整理书桌，清空杂念"]
     page.locator('[data-filter="archived"]').click()
     expect(page.locator(".empty-state")).to_be_visible()
     assert group_labels(page) == []
-    page.locator('[data-filter="all"]').click()
+    page.locator('[data-filter="pending"]').click()
     assert group_labels(page) == ["重要", "个人成长", "工作", "生活"], group_labels(page)
 
     # 窄屏下分组不撑破手机宽度。
@@ -335,6 +383,78 @@ def check_task_grouping(browser, errors):
     page.screenshot(path=str(SCREENSHOT_DIRECTORY / "mobile-task-groups.png"))
     page.close()
     print("PASS: important tasks pinned on top, work and life shown as separate groups.", flush=True)
+
+
+def check_task_guide(browser, errors):
+    page = fresh_timer_page(browser, errors)
+    page.locator('.bottom-nav [data-page="tasks"]').click()
+    modal = page.locator("#modal")
+    guide = page.get_by_role("button", name="使用指南", exact=True)
+    sections = [
+        ("拆成小步", "点进度展开，每一步整行都能勾选。"),
+        ("删除与撤销", "左滑后点删除，可在底部撤销；关闭撤销提示后失效。"),
+        ("回看与重做", "已完成按月查看，搜索覆盖全部时间；重做请到详情中「重新打开」。"),
+        ("暂时放下", "放下不是删除，需要时可以找回。"),
+    ]
+    for width in MOBILE_WIDTHS:
+        page.set_viewport_size({"width": width, "height": MOBILE_HEIGHT})
+        header_positions = []
+        for tab in ("pending", "done", "archived"):
+            page.locator(f'[data-filter="{tab}"]').click()
+            assert_task_counts(page, pending=3, done=1)
+            header = page.locator(".todo-page-header").bounding_box()
+            title = page.locator("#tasks-heading").bounding_box()
+            help_box = guide.bounding_box()
+            add = page.locator("#add-task").bounding_box()
+            tabs = page.locator(".task-tabs").bounding_box()
+            header_positions.append((title["x"], title["y"], tabs["y"]))
+            assert title["x"] == header["x"]
+            assert title["x"] + title["width"] <= help_box["x"]
+            assert help_box["x"] + help_box["width"] < add["x"]
+            assert abs(add["x"] + add["width"] - header["x"] - header["width"]) <= 1
+            assert help_box["height"] >= MIN_TOUCH_TARGET and help_box["width"] >= MIN_TOUCH_TARGET
+            assert guide.evaluate("el => getComputedStyle(el).borderTopWidth === '0px'")
+            expect(page.locator(".todo-page-header > button")).to_have_count(1)
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            assert page.locator("#phone-content").evaluate("el => el.scrollWidth <= el.clientWidth")
+        assert header_positions.count(header_positions[0]) == len(header_positions)
+        guide.click()
+        expect(page.get_by_role("dialog", name="待办怎么用", exact=True)).to_be_visible()
+        expect(modal).to_have_class("todo-guide-sheet")
+        expect(modal.locator(".modal-header .eyebrow")).not_to_be_visible()
+        expect(modal.locator(".todo-guide-content section")).to_have_count(len(sections))
+        expect(modal.locator(".todo-guide-content h3")).to_have_text([title for title, _ in sections])
+        expect(modal.locator(".todo-guide-content p")).to_have_text([text for _, text in sections])
+        for technical_text in ("每次20条", "进程", "数据库", "草稿"):
+            expect(modal).not_to_contain_text(technical_text)
+        expect(modal.locator("#modal-content button")).to_have_count(1)
+        expect(page.locator("#close-modal")).to_be_focused()
+        assert modal.evaluate("el => el.scrollHeight <= el.clientHeight && el.scrollWidth <= el.clientWidth")
+        box = modal.bounding_box()
+        assert abs(box["y"] + box["height"] - MOBILE_HEIGHT) <= 1
+        modal.get_by_role("button", name="知道了", exact=True).click()
+        expect(modal).not_to_be_visible()
+        expect(guide).to_be_focused()
+        page.locator('[data-filter="done"]').click()
+        page.locator("#task-month-picker").click()
+        expect(modal).not_to_have_class(re.compile("todo-guide-sheet"))
+        expect(modal.locator(".modal-header .eyebrow")).to_be_visible()
+        expect(page.locator("#modal-title")).to_have_text("翻到哪一月？")
+        page.locator("#close-modal").click()
+    page.set_viewport_size(LANDSCAPE_VIEWPORT)
+    guide.click()
+    assert modal.evaluate("el => el.scrollHeight > el.clientHeight && el.scrollWidth <= el.clientWidth && el.scrollTop === 0")
+    expect(page.locator("#close-modal")).to_be_focused()
+    modal.get_by_role("button", name="知道了", exact=True).click()
+    guide.click()
+    page.keyboard.press("Escape")
+    expect(modal).not_to_be_visible()
+    expect(guide).to_be_focused()
+    guide.click()
+    page.locator("#close-modal").click()
+    expect(modal).not_to_be_visible()
+    page.close()
+    print("PASS: stable counted tabs without summary; left text guide/right add at 320px; concise four-section bottom sheet, short-screen scrolling, focus return and modal variant reset.", flush=True)
 
 
 def check_task_focus_independence(browser, errors):
@@ -346,22 +466,30 @@ def check_task_focus_independence(browser, errors):
     page.locator('.bottom-nav [data-page="tasks"]').click()
     assert_no_task_focus_ui(page)
     task = page.locator(".task-card").filter(has_text="梳理个人 APP 的想法")
-    steps = task.locator(".step-dot")
+    task.locator(".step-expand").click()
+    steps = task.locator("button.step-row")
     expect(steps).to_have_count(3)
-    assert steps.evaluate_all("buttons => buttons.map(button => button.getAttribute('aria-pressed'))") == ["true", "true", "false"]
+    assert steps.evaluate_all("rows => rows.map(row => row.getAttribute('aria-checked'))") == ["true", "true", "false"]
     steps.last.click()
-    expect(task.locator(".task-checkbox")).to_have_attribute("aria-pressed", "true")
-    expect(task.locator(".step-caption")).to_have_text("3 步都走完了")
-    steps.first.click()
-    expect(task.locator(".task-checkbox")).to_have_attribute("aria-pressed", "false")
+    expect(task).to_have_count(0)
+    assert_task_counts(page, pending=2, done=2)
+    page.locator('[data-filter="done"]').click()
+    expect(task.locator("span.task-check-static")).to_be_visible()
+    reopen_task(page, "梳理个人 APP 的想法", redo_indices=(0,))
+    expect(steps.first).to_have_attribute("aria-checked", "false")
     task.locator(".task-checkbox").click()
-    assert steps.evaluate_all("buttons => buttons.every(button => button.getAttribute('aria-pressed') === 'true')")
-    steps.last.click()
-    expect(task.locator(".task-checkbox")).to_have_attribute("aria-pressed", "false")
+    page.locator('[data-filter="done"]').click()
     task.locator(".task-info").click()
-    page.locator('input[name="title"]').fill("独立待办改名")
-    page.get_by_role("button", name="保存修改", exact=True).click()
-    expect(page.locator("#modal")).not_to_be_visible()
+    expect(page.locator(".task-detail-steps li")).to_have_text([
+        "已走过 · 写下想解决的问题", "已走过 · 画三张草图", "已走过 · 选一个先做",
+    ])
+    page.locator("#close-modal").click()
+    reopen_task(page, "梳理个人 APP 的想法", redo_indices=(2,))
+    expect(steps.last).to_have_attribute("aria-checked", "false")
+    task.locator(".task-info").click()
+    page.locator('#todo-form input[name="title"]').fill("独立待办改名")
+    page.locator("#save-todo-sheet").click()
+    expect(page.locator("#todo-sheet")).not_to_be_visible()
     expect(page.locator("#page-tasks")).to_be_visible()
     expect(page.locator("#focus-item-name")).to_have_text(PROJECT_TITLES[1])
     expect(page.locator("#timer-time")).to_have_text("00:05")
@@ -373,11 +501,12 @@ def check_task_focus_independence(browser, errors):
     page.locator('.bottom-nav [data-page="tasks"]').click()
     task = page.locator(".task-card").filter(has_text="独立待办改名")
     expect(task.locator(".task-checkbox")).to_have_attribute("aria-pressed", "false")
-    expect(task.locator(".step-dot").last).to_have_attribute("aria-pressed", "false")
-    task.locator(".task-info").click()
-    page.get_by_role("button", name="删除", exact=True).click()
-    page.get_by_role("button", name="确认删除", exact=True).click()
-    expect(page.locator("#all-count")).to_have_text("3")
+    expect(task.locator(".step-row").last).to_have_attribute("aria-checked", "false")
+    task.locator(".task-menu").click()
+    page.locator("#modal").get_by_role("button", name="删除待办", exact=True).click()
+    expect(page.locator("#modal")).not_to_be_visible()
+    expect(page.locator("#task-undo")).to_be_visible()
+    assert_task_counts(page, pending=2, done=1)
     page.clock.fast_forward(5_000)
     choose_focus_item(page, PROJECT_TITLES[1])
     expect(page.locator("#timer-time")).to_have_text("00:10")
@@ -385,7 +514,7 @@ def check_task_focus_independence(browser, errors):
     expect(page.locator("#focus-sessions")).to_have_text("4")
     skip_progress(page, return_to_timer=False)
     page.locator('.bottom-nav [data-page="tasks"]').click()
-    expect(page.locator("#task-summary")).to_have_text("已完成 1 / 3 件")
+    assert_task_counts(page, pending=2, done=1)
     assert_no_task_focus_ui(page)
     open_statistics(page)
     page.locator("#statistics-source").select_option("session")
@@ -396,6 +525,793 @@ def check_task_focus_independence(browser, errors):
     assert record["durationSeconds"] == 10 and record["timerMode"] == "countup" and record["targetMinutes"] == 50
     page.close()
     print("PASS: no task-focus UI, step/parent completion and rollback, task edits/deletion preserve running/paused focus, focus completion leaves todos unchanged.", flush=True)
+
+
+def assert_sheet_save_reachable(page):
+    expect(page.locator("#save-todo-sheet")).to_be_visible()
+    assert page.locator("#todo-sheet").evaluate("el => el.scrollWidth <= el.clientWidth")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert page.locator("#save-todo-sheet").evaluate("""el => {
+        const rect = el.getBoundingClientRect();
+        const viewport = window.visualViewport;
+        const top = viewport?.offsetTop || 0;
+        const height = viewport?.height || innerHeight;
+        const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        return rect.top >= top && rect.bottom <= top + height && rect.left >= 0 && rect.right <= innerWidth
+            && rect.height >= 44 && (hit === el || el.contains(hit));
+    }""")
+
+
+def check_task_sheet_and_steps(browser, errors):
+    page = fresh_timer_page(browser, errors)
+    page.locator('.bottom-nav [data-page="tasks"]').click()
+    page.locator("#add-task").click()
+    expect(page.locator("#todo-sheet")).to_be_visible()
+    expect(page.locator("#save-todo-sheet")).to_have_text("添加待办")
+    expect(page.locator("#modal")).not_to_be_visible()
+    assert not page.locator("#todo-form .step-editor").evaluate("el => el.open")
+    expect(page.locator("#todo-form .add-step")).not_to_be_visible()
+    title = "八步长标题回归" + "长" * 73
+    unsafe_step = '<img src=x onerror="window.stepXss=1">'
+    step_titles = [f"第{index + 1}步" + "长" * 37 for index in range(MAX_TASK_STEPS - 1)] + [unsafe_step]
+    page.locator('#todo-form input[name="title"]').fill(title)
+    expect(page.locator('#todo-form input[name="title"]')).to_have_attribute("maxlength", "80")
+    page.locator("#todo-form .category-choice").filter(has_text="工作").click()
+    page.locator('#todo-form input[name="important"]').check()
+    page.locator("#todo-form .step-editor summary").click()
+    for step_title in step_titles:
+        page.locator("#todo-form .add-step").click()
+        field = page.locator("#todo-form .step-editor-row input").last
+        expect(field).to_be_focused()
+        expect(field).to_have_attribute("maxlength", "40")
+        field.fill(step_title)
+    expect(page.locator("#todo-form .add-step")).to_be_disabled()
+    page.locator("#todo-form .step-remove").last.click()
+    expect(page.locator("#todo-form .step-editor-row")).to_have_count(MAX_TASK_STEPS - 1)
+    expect(page.locator("#todo-form .add-step")).to_be_enabled()
+    page.locator("#todo-form .add-step").click()
+    page.locator("#save-todo-sheet").click()
+    expect(page.locator('#todo-sheet [role="alert"]')).to_contain_text("小步名称")
+    expect(page.locator("#todo-sheet")).to_be_visible()
+    expect(page.locator("#todo-form .step-editor-row")).to_have_count(MAX_TASK_STEPS)
+    page.locator("#todo-form .step-editor-row input").last.fill(unsafe_step)
+    expect(page.locator('#todo-sheet [role="alert"]')).not_to_be_visible()
+    page.locator("#todo-form .step-editor-row input").last.press("Enter")
+    expect(page.locator("#todo-sheet")).to_be_visible()
+    expect(page.locator("#todo-form .step-editor-row")).to_have_count(MAX_TASK_STEPS)
+    page.locator("#close-todo-sheet").click()
+    assert_task_counts(page, pending=3, done=1)
+    expect(task_card(page, title)).to_have_count(0)
+
+    reading = task_card(page, "阅读《原子习惯》")
+    reading.locator(".task-info").click()
+    expect(page.locator('#todo-form input[name="title"]')).to_have_value("阅读《原子习惯》")
+    expect(page.locator("#todo-form .step-editor-row")).to_have_count(0)
+    expect(page.locator('#todo-form input[name="important"]')).not_to_be_checked()
+    page.locator('#todo-form input[name="title"]').fill("取消后保留的阅读草稿")
+    page.keyboard.press("Escape")
+    expect(reading).to_have_count(1)
+    planning = task_card(page, "梳理个人 APP 的想法")
+    planning.locator(".task-info").click()
+    expect(page.locator('#todo-form input[name="title"]')).to_have_value("梳理个人 APP 的想法")
+    page.locator("#todo-form .step-editor-row input").first.fill("取消后保留的小步草稿")
+    page.mouse.click(4, 4)
+    expect(page.locator("#todo-sheet")).not_to_be_visible()
+    planning.locator(".step-expand").click()
+    expect(planning.locator(".step-row").first).to_have_attribute("aria-label", "写下想解决的问题")
+    reading.locator(".task-info").click()
+    expect(page.locator('#todo-form input[name="title"]')).to_have_value("取消后保留的阅读草稿")
+    page.locator("#save-todo-sheet").click()
+    expect(task_card(page, "取消后保留的阅读草稿")).to_have_count(1)
+    planning.locator(".task-info").click()
+    expect(page.locator("#todo-form .step-editor-row input").first).to_have_value("取消后保留的小步草稿")
+    page.locator("#save-todo-sheet").click()
+    expect(planning.locator(".step-row").first).to_have_attribute("aria-checked", "true")
+
+    page.locator("#add-task").click()
+    expect(page.locator('#todo-form input[name="title"]')).to_have_value(title)
+    expect(page.locator('#todo-form input[name="important"]')).to_be_checked()
+    expect(page.locator("#todo-form .category-choice").filter(has_text="工作")).to_have_attribute("aria-pressed", "true")
+    assert page.locator("#todo-form .step-editor-row input").evaluate_all("inputs => inputs.map(input => input.value)") == step_titles
+    for viewport in ({"width": 320, "height": MOBILE_HEIGHT}, LANDSCAPE_VIEWPORT, {"width": 320, "height": 360}):
+        page.set_viewport_size(viewport)
+        page.locator("#todo-form .step-editor-row input").last.focus()
+        page.locator("#todo-form .step-editor-row input").last.scroll_into_view_if_needed()
+        assert_sheet_save_reachable(page)
+        page.screenshot(path=str(SCREENSHOT_DIRECTORY / f"todo-sheet-{viewport['width']}x{viewport['height']}.png"))
+    page.locator("#save-todo-sheet").click()
+    expect(page.locator("#todo-sheet")).not_to_be_visible()
+    assert_task_counts(page, pending=4, done=1)
+    page.set_viewport_size(DESKTOP_VIEWPORT)
+    task = task_card(page, title)
+    expect(task.locator(".step-expand")).to_have_attribute("aria-expanded", "false")
+    expect(task.locator(".step-list")).not_to_be_visible()
+    expect(task.locator("span.step-dot")).to_have_count(MAX_TASK_STEPS)
+    expect(task.locator("button.step-dot")).to_have_count(0)
+    task.locator(".step-expand").click()
+    rows = task.locator('div.step-list button.step-row[role="checkbox"]')
+    expect(rows).to_have_count(MAX_TASK_STEPS)
+    expect(rows.locator(".step-label")).to_have_text(step_titles)
+    assert page.evaluate("window.stepXss === undefined")
+    expect(task.locator("img")).to_have_count(0)
+    for index in range(MAX_TASK_STEPS):
+        row = rows.nth(index)
+        expect(row).to_have_attribute("aria-checked", "false")
+        box = row.bounding_box()
+        assert box and box["height"] >= MIN_TOUCH_TARGET and box["width"] > MIN_TOUCH_TARGET * 2, box
+        row.click(position={"x": box["width"] - 8, "y": box["height"] / 2})
+        if index < MAX_TASK_STEPS - 1:
+            expect(rows.nth(index)).to_have_attribute("aria-checked", "true")
+            expect(task.locator(".step-count")).to_have_text(f"小步 {index + 1} / {MAX_TASK_STEPS}")
+            expect(page.locator("#todo-sheet")).not_to_be_visible()
+        if index == 0:
+            rows.first.focus()
+            page.keyboard.press("Space")
+            expect(rows.first).to_have_attribute("aria-checked", "false")
+            expect(task.locator(".step-count")).to_have_text(f"小步 0 / {MAX_TASK_STEPS}")
+            page.keyboard.press("Enter")
+            expect(rows.first).to_have_attribute("aria-checked", "true")
+    expect(task).to_have_count(0)
+    expect(page.locator(".celebrating")).to_have_count(0)
+    assert_task_counts(page, pending=3, done=2)
+    page.locator('[data-filter="done"]').click()
+    static_check = task.locator("span.task-check-static")
+    expect(static_check).to_be_visible()
+    static_check.click()
+    expect(task).to_have_count(1)
+    assert_task_counts(page, pending=3, done=2)
+    expect(task.locator("button.task-checkbox, .step-row")).to_have_count(0)
+    completion_label = task.locator(".task-age").inner_text()
+    task.locator(".task-info").click()
+    expect(page.locator(".task-detail-steps li")).to_have_count(MAX_TASK_STEPS)
+    expect(page.locator(".task-detail-steps li").last).to_have_text(f"已走过 · {unsafe_step}")
+    expect(page.locator("#modal img")).to_have_count(0)
+    page.locator("#modal").get_by_role("button", name="编辑待办", exact=True).click()
+    expect(page.locator("#todo-form .add-step, #todo-form .step-remove")).to_have_count(0)
+    expect(page.locator("#todo-form .step-editor-row input")).to_have_count(MAX_TASK_STEPS)
+    page.locator("#todo-form .step-editor-row input").first.fill("完成后只改名")
+    page.locator("#save-todo-sheet").click()
+    expect(task.locator("span.task-check-static")).to_be_visible()
+    expect(task.locator(".task-age")).to_have_text(completion_label)
+    task.locator(".task-info").click()
+    page.locator("#modal").get_by_role("button", name="重新打开", exact=True).click()
+    expect(page.locator('#modal label input[type="checkbox"]')).to_have_count(MAX_TASK_STEPS)
+    page.locator("#modal").get_by_role("button", name="确认重新打开", exact=True).click()
+    expect(page.locator('#modal [role="alert"]')).to_be_visible()
+    assert_task_counts(page, pending=3, done=2)
+    page.locator("#modal").get_by_role("button", name="取消", exact=True).click()
+    page.locator("#close-modal").click()
+    expect(task.locator("span.task-check-static")).to_be_visible()
+    reopen_task(page, title, redo_indices=(0, MAX_TASK_STEPS - 1))
+    assert rows.evaluate_all("els => els.map(el => el.getAttribute('aria-checked'))") == ["false"] + ["true"] * (MAX_TASK_STEPS - 2) + ["false"]
+    expect(task.locator(".step-count")).to_have_text(f"小步 {MAX_TASK_STEPS - 2} / {MAX_TASK_STEPS}")
+    assert_task_counts(page, pending=4, done=1)
+    expect(page.locator("#focus-sessions")).to_have_text("3")
+    page.locator("#add-task").click()
+    expect(page.locator('#todo-form input[name="title"]')).to_have_value("")
+    expect(page.locator("#todo-form .step-editor-row")).to_have_count(0)
+    page.locator("#close-todo-sheet").click()
+    page.reload()
+    page.locator('.bottom-nav [data-page="tasks"]').click()
+    assert_task_counts(page, pending=3, done=1)
+    page.locator("#add-task").click()
+    expect(page.locator('#todo-form input[name="title"]')).to_have_value("")
+    page.close()
+    print("PASS: independent sheet, isolated cancel/Escape/backdrop drafts, eight-step limit/full-row clicks, safe step text, completed read-only edit/partial reopen, 320px/landscape save reachability and refresh reset.", flush=True)
+
+
+def drag_task(page, title, dx, dy=0):
+    card = task_card(page, title)
+    card.scroll_into_view_if_needed()
+    box = card.bounding_box()
+    assert box, title
+    start_x = box["x"] + box["width"] / 2
+    start_y = box["y"] + 5
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    page.mouse.move(start_x + dx, start_y + dy, steps=12)
+    page.mouse.up()
+
+
+def check_task_swipe_undo(browser, errors):
+    page = fresh_timer_page(browser, errors)
+    page.set_viewport_size({"width": 320, "height": MOBILE_HEIGHT})
+    page.locator('.bottom-nav [data-page="tasks"]').click()
+    first_title, second_title = "阅读《原子习惯》", "傍晚出去走一走"
+    first = page.locator('.task-swipe[data-task-id="sample-reading"]')
+    second = page.locator('.task-swipe[data-task-id="sample-walk"]')
+    original_order = page.locator(".task-swipe").evaluate_all("els => els.map(el => el.dataset.taskId)")
+    assert first.locator(".task-delete").evaluate("el => el.inert")
+    drag_task(page, first_title, 0, MIN_TOUCH_TARGET)
+    expect(page.locator(".swipe-open")).to_have_count(0)
+    expect(page.locator("#todo-sheet")).not_to_be_visible()
+    drag_task(page, first_title, -TASK_SWIPE_WIDTH)
+    expect(first).to_have_class(re.compile(r"\bswipe-open\b"))
+    expect(first.locator(".task-delete")).to_have_attribute("aria-hidden", "false")
+    assert not first.locator(".task-delete").evaluate("el => el.inert")
+    assert first.locator(".task-delete").bounding_box()["width"] == TASK_SWIPE_WIDTH
+    assert first.locator(".task-card").evaluate("el => new DOMMatrix(getComputedStyle(el).transform).m41") == -TASK_SWIPE_WIDTH
+    assert_task_counts(page, pending=3, done=1)
+    expect(page.locator("#todo-sheet:visible, #modal:visible")).to_have_count(0)
+    drag_task(page, first_title, TASK_SWIPE_WIDTH)
+    expect(page.locator(".swipe-open")).to_have_count(0)
+    assert_task_counts(page, pending=3, done=1)
+    drag_task(page, first_title, -TASK_SWIPE_WIDTH)
+    drag_task(page, second_title, -TASK_SWIPE_WIDTH)
+    expect(page.locator(".swipe-open")).to_have_count(1)
+    expect(second).to_have_class(re.compile(r"\bswipe-open\b"))
+    assert first.locator(".task-delete").evaluate("el => el.inert")
+    second.locator(".task-delete").focus()
+    page.keyboard.press("Escape")
+    expect(page.locator(".swipe-open")).to_have_count(0)
+    expect(second.locator(".task-info")).to_be_focused()
+    first.locator(".task-info").focus()
+    page.keyboard.press("ArrowLeft")
+    expect(first.locator(".task-delete")).to_be_focused()
+    page.keyboard.press("ArrowRight")
+    expect(page.locator(".swipe-open")).to_have_count(0)
+    drag_task(page, first_title, -TASK_SWIPE_WIDTH)
+    first.locator(".task-delete").click()
+    expect(first).to_have_count(0)
+    expect(page.locator("#modal")).not_to_be_visible()
+    expect(page.locator("#task-undo")).to_be_visible()
+    expect(page.locator("#undo-task")).to_be_focused()
+    assert_task_counts(page, pending=2, done=1)
+    second.locator(".task-info").focus()
+    page.keyboard.press("ArrowLeft")
+    page.keyboard.press("Enter")
+    expect(second).to_have_count(0)
+    assert_task_counts(page, pending=1, done=1)
+    expect(page.locator("#task-undo-message")).to_contain_text("2 次")
+    page.locator("#undo-task").click()
+    expect(second).to_have_count(1)
+    expect(first).to_have_count(0)
+    assert_task_counts(page, pending=2, done=1)
+    page.locator("#undo-task").click()
+    expect(first).to_have_count(1)
+    expect(page.locator("#task-undo")).not_to_be_visible()
+    assert page.locator(".task-swipe").evaluate_all("els => els.map(el => el.dataset.taskId)") == original_order
+    first.locator(".task-menu").click()
+    page.locator("#modal").get_by_role("button", name="删除待办", exact=True).click()
+    expect(first).to_have_count(0)
+    page.locator("#dismiss-task-undo").click()
+    expect(page.locator("#task-undo")).not_to_be_visible()
+    second.locator(".task-menu").click()
+    page.locator("#modal").get_by_role("button", name="删除待办", exact=True).click()
+    page.locator("#undo-task").click()
+    expect(second).to_have_count(1)
+    expect(first).to_have_count(0)
+    expect(page.locator("#task-undo")).not_to_be_visible()
+    planning = task_card(page, "梳理个人 APP 的想法")
+    planning.get_by_role("button", name="放下「梳理个人 APP 的想法」", exact=True).click()
+    assert_task_counts(page, pending=1, done=1, archived=1)
+    page.locator('[data-filter="archived"]').click()
+    expect(page.locator("#task-summary")).to_have_count(0)
+    expect(planning.locator("span.task-check-static")).to_be_visible()
+    planning.locator(".task-info").click()
+    page.locator("#modal").get_by_role("button", name="找回", exact=True).click()
+    assert_task_counts(page, pending=2, done=1)
+    expect(planning.locator(".task-age")).to_have_text("今天放进来的")
+    expect(page.locator('[data-filter="pending"]')).to_have_attribute("aria-pressed", "true")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.close()
+    print("PASS: real mouse pointer swipe, vertical rejection, left/right non-destructive reveal, one-open policy, keyboard delete/Escape, immediate delete, multi-undo/order, dismiss clears stack, archive/restore.", flush=True)
+
+
+def check_task_touch_delete(browser, errors):
+    context = browser.new_context(viewport={"width": 390, "height": MOBILE_HEIGHT},
+                                  is_mobile=True, has_touch=True, reduced_motion="reduce", timezone_id="Asia/Shanghai")
+    page = context.new_page()
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    cdp = context.new_cdp_session(page)
+
+    def touch_drag(x, y, dx=0, dy=0, cancel=False):
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y, "id": 1}]})
+        if dx or dy:
+            for index in range(1, TOUCH_MOVE_STEPS + 1):
+                cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [
+                    {"x": x + dx * index / TOUCH_MOVE_STEPS, "y": y + dy * index / TOUCH_MOVE_STEPS, "id": 1},
+                ]})
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchCancel" if cancel else "touchEnd", "touchPoints": []})
+
+    try:
+        page.goto(BASE_URL)
+        page.locator('.bottom-nav [data-page="tasks"]').tap()
+        assert_task_counts(page, pending=3, done=1)
+        first = page.locator('.task-swipe[data-task-id="sample-planning"]')
+        other_checks = page.locator('.task-swipe:not([data-task-id="sample-planning"]) .task-checkbox')
+        expect(other_checks).to_have_count(2)
+        first.locator(".step-expand").tap()
+        expect(first.locator(".step-expand")).to_have_attribute("aria-expanded", "true")
+        expected_steps = ["true", "true", "false"]
+        assert first.locator(".step-row").evaluate_all("rows => rows.map(row => row.getAttribute('aria-checked'))") == expected_steps
+        page.screenshot(path=str(SCREENSHOT_DIRECTORY / "todo-touch-expanded.png"))
+        box = first.locator(".task-card").bounding_box()
+        assert box
+        touch_drag(box["x"] + box["width"] * 0.8, box["y"] + 20, dx=-TASK_SWIPE_WIDTH * 1.25)
+        expect(first).to_have_class(re.compile(r"\bswipe-open\b"))
+        assert_task_counts(page, pending=3, done=1)
+        first.locator(".task-delete").tap()
+        expect(first).to_have_count(0)
+        assert_task_counts(page, pending=2, done=1)
+        expect(page.locator("#modal:visible, #todo-sheet:visible")).to_have_count(0)
+        assert other_checks.evaluate_all("els => els.map(el => el.getAttribute('aria-pressed'))") == ["false", "false"]
+        page.locator("#undo-task").tap()
+        expect(first).to_have_count(1)
+        assert_task_counts(page, pending=3, done=1)
+        expect(page.locator("#task-undo")).not_to_be_visible()
+        assert first.locator(".step-row").evaluate_all("rows => rows.map(row => row.getAttribute('aria-checked'))") == expected_steps
+
+        first.locator(".task-card").scroll_into_view_if_needed()
+        box = first.locator(".task-card").bounding_box()
+        assert box
+        touch_drag(box["x"] + box["width"] * 0.8, box["y"] + 20, dx=-TASK_SWIPE_WIDTH * 1.25)
+        expect(first).to_have_class(re.compile(r"\bswipe-open\b"))
+        expect(page.locator(".swipe-open")).to_have_count(1)
+        assert first.locator(".task-delete").bounding_box()["width"] == TASK_SWIPE_WIDTH
+        page.screenshot(path=str(SCREENSHOT_DIRECTORY / "todo-touch-swipe.png"))
+        for dy, cancel in ((TASK_TOUCH_DRAG, False), (-TASK_TOUCH_DRAG, False), (0, True)):
+            remove = first.locator(".task-delete")
+            remove.scroll_into_view_if_needed()
+            box = remove.bounding_box()
+            assert box
+            touch_drag(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, dy=dy, cancel=cancel)
+            expect(first).to_have_count(1)
+            assert_task_counts(page, pending=3, done=1)
+            expect(page.locator("#task-undo")).not_to_be_visible()
+            expect(first).to_have_class(re.compile(r"\bswipe-open\b"))
+        assert other_checks.evaluate_all("els => els.map(el => el.getAttribute('aria-pressed'))") == ["false", "false"]
+        assert first.locator(".step-row").evaluate_all("rows => rows.map(row => row.getAttribute('aria-checked'))") == expected_steps
+        page.locator("#add-task").tap()
+        expect(page.locator("#todo-sheet")).to_be_visible()
+        expect(page.locator('#todo-form input[name="title"]')).to_have_value("")
+        assert not page.locator("#todo-form .step-editor").evaluate("el => el.open")
+        assert_sheet_save_reachable(page)
+        page.screenshot(path=str(SCREENSHOT_DIRECTORY / "todo-touch-editor-initial.png"))
+    finally:
+        context.close()
+    print("PASS: mobile CDP touch swipe immediately followed by delete tap, undo, vertical/cancel rejection and unchanged neighboring cards/steps.", flush=True)
+
+
+def check_task_history(browser, errors):
+    page = browser.new_page(viewport=DESKTOP_VIEWPORT, reduced_motion="reduce", timezone_id="Asia/Shanghai")
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.clock.install(time=datetime(2026, 9, 26, 8, 59, 39, tzinfo=timezone.utc))
+    page.clock.pause_at(datetime(2026, 9, 26, 8, 59, 40, tzinfo=timezone.utc))
+    dated_count = TASK_HISTORY_PAGE_SIZE + 3
+    older_day_count = 15
+    # UTC September 25 at 16:00 belongs to local September 26, not yesterday.
+    tasks = [{"id": f"history-{index}", "title": f"完成记录 {index:02d}",
+              "category": "工作" if index % 2 == 0 else "生活", "important": False,
+              "done": True, "archived": False, "createdAt": "2026-08-01",
+              "completedAt": f"2026-09-24T08:00:{index:02d}Z" if index < older_day_count else f"2026-09-25T16:00:{index:02d}Z",
+              "steps": [{"id": f"history-step-{index}", "title": f"回查小步 {index:02d}", "done": True}]}
+             for index in range(dated_count)]
+    unknown_titles = ["缺少完成时间", "非法完成时间", "未来完成时间"]
+    for key, title, completed_at in (("yesterday", "昨天完成", "2026-09-25T15:59:59Z"),
+                                      ("boundary", "月界完成", "2026-08-31T16:00:00Z"),
+                                      ("month", "上月完成", "2026-08-18T08:00:00Z"),
+                                      ("year", "去年完成", "2025-12-18T08:00:00Z"),
+                                      ("unknown", unknown_titles[0], None),
+                                      ("invalid", unknown_titles[1], "not-a-date"),
+                                      ("future", unknown_titles[2], "2026-10-01T00:00:00Z")):
+        tasks.append({"id": key, "title": title, "category": "个人成长", "important": True,
+                      "done": True, "archived": False, "createdAt": "2026-08-01",
+                      "completedAt": completed_at, "steps": []})
+    # A legacy record really omits completedAt instead of receiving a made-up date.
+    tasks[next(index for index, task in enumerate(tasks) if task["id"] == "unknown")].pop("completedAt")
+    tasks.extend([
+        {"id": "pending-fixture", "title": "工作中的待办", "category": "工作", "important": False,
+         "done": False, "archived": False, "createdAt": "2026-09-26", "completedAt": None, "steps": []},
+        {"id": "archived-fixture", "title": "放下的完成记录", "category": "工作", "important": False,
+         "done": True, "archived": True, "createdAt": "2026-09-26", "completedAt": "2026-09-26T08:00:00Z", "steps": []},
+    ])
+    month_count = dated_count + 2
+    done_count = month_count + 2 + len(unknown_titles)
+    month_titles = ([f"完成记录 {index:02d}" for index in reversed(range(older_day_count, dated_count))]
+                    + ["昨天完成"] + [f"完成记录 {index:02d}" for index in reversed(range(older_day_count))]
+                    + ["月界完成"])
+
+    def seed_history(route):
+        response = route.fetch()
+        prefix = '"use strict";\nwindow.FocusModel = {...window.FocusModel, initialTasks: () => ' + json.dumps(tasks, ensure_ascii=False) + '};\n'
+        route.fulfill(response=response, body=prefix + response.text())
+
+    def assert_page(shown, total):
+        expect(page.locator("#task-list .task-card")).to_have_count(shown)
+        expect(page.locator("#task-history-count")).to_have_text(f"已显示 {shown} / {total} 件")
+        expect(page.locator("#task-list .history-more")).to_have_count(0)
+        if shown < total:
+            expect(page.locator("#task-history-more")).to_be_visible()
+        else:
+            expect(page.locator("#task-history-more")).not_to_be_visible()
+
+    def assert_static_headings():
+        assert page.locator(".history-heading").evaluate_all("""headings => headings.every(el =>
+            el.tagName === 'DIV' && !el.hasAttribute('aria-expanded') && !el.hasAttribute('aria-controls') &&
+            !el.hasAttribute('tabindex') && el.getAttribute('role') !== 'button' && !el.querySelector('button'))""")
+        expect(page.locator("#task-list .step-expand, #task-list button.step-row, #task-list button.task-checkbox")).to_have_count(0)
+
+    def set_position():
+        position = page.locator("#phone-content").evaluate("""el => {
+            el.scrollTop = Math.min(500, (el.scrollHeight - el.clientHeight) / 2);
+            el.dispatchEvent(new Event('scroll'));
+            return el.scrollTop;
+        }""")
+        assert position > 0
+        return position
+
+    def assert_position(position):
+        page.wait_for_function("position => Math.abs(document.getElementById('phone-content').scrollTop - position) <= 1", arg=position)
+
+    def search_without_scrolling(query):
+        # Isolate application scroll restoration from Playwright's input auto-scroll.
+        page.locator("#task-search").evaluate("""(el, query) => {
+            el.value = query; el.dispatchEvent(new Event('input', {bubbles: true}));
+        }""", query)
+
+    page.route("**/app.js", seed_history)
+    page.goto(BASE_URL)
+    page.locator('.bottom-nav [data-page="tasks"]').click()
+    assert_task_counts(page, pending=1, done=done_count, archived=1)
+    page.locator('[data-filter="done"]').click()
+    expect(page.locator("#task-month-label")).to_have_text("2026 年 9 月")
+    expect(page.locator("#task-month-next")).to_be_disabled()
+    expect(page.locator("#task-month-current")).not_to_be_visible()
+    expect(page.locator("#task-history-summary")).to_have_text(f"2026年9月 · 完成 {month_count} 件")
+    assert_page(TASK_HISTORY_PAGE_SIZE, month_count)
+    expect(page.locator("#task-list .task-title")).to_have_text(month_titles[:TASK_HISTORY_PAGE_SIZE])
+    assert group_labels(page) == ["今天", "昨天", "9月24日"]
+    assert_static_headings()
+    before = page.locator("#task-list .task-title").all_inner_texts()
+    page.locator(".history-heading").first.click()
+    assert page.locator("#task-list .task-title").all_inner_texts() == before
+    expect(page.locator(".task-group-list[hidden]")).to_have_count(0)
+    page.screenshot(path=str(SCREENSHOT_DIRECTORY / "todo-history-month.png"))
+    page.locator("#task-history-more").click()
+    assert_page(month_count, month_count)
+    expect(page.locator("#task-list .task-title")).to_have_text(month_titles)
+    expect(page.locator("#task-history-summary")).to_have_text(f"2026年9月 · 完成 {month_count} 件")
+    assert_task_counts(page, pending=1, done=done_count, archived=1)
+    assert group_labels(page) == ["今天", "昨天", "9月24日", "9月1日"]
+    # The second page extends the existing September 24 separator, never duplicates it.
+    expect(page.locator("#todo-group-2026-09-24")).to_have_count(1)
+    expect(page.locator("#todo-group-2026-09-24 .task-card")).to_have_count(older_day_count)
+    expect(task_card(page, "月界完成").locator(".task-age")).to_have_text("2026-09-01 完成")
+
+    position = set_position()
+    visible_info = page.locator("#task-list .task-info").evaluate_all("""els => {
+        const box = document.getElementById('phone-content').getBoundingClientRect();
+        return els.findIndex(el => { const r = el.getBoundingClientRect(); return r.top >= box.top && r.bottom <= box.bottom; });
+    }""")
+    assert visible_info >= 0
+    page.locator("#task-list .task-info").nth(visible_info).click()
+    assert_position(position)
+    page.locator("#close-modal").click()
+    assert_position(position)
+    # Offscreen tab activation must not introduce automation's own scroll-to-click.
+    page.locator('[data-filter="pending"]').evaluate("el => el.click()")
+    page.locator('[data-filter="done"]').evaluate("el => el.click()")
+    assert_page(month_count, month_count)
+    assert_position(position)
+    page.locator('.bottom-nav [data-page="focus"]').click()
+    page.locator('.bottom-nav [data-page="tasks"]').click()
+    assert_page(month_count, month_count)
+    assert_position(position)
+
+    search_without_scrolling("上月完成")
+    expect(page.locator("#task-month-nav")).not_to_be_visible()
+    expect(page.locator("#task-history-summary")).to_contain_text("全部时间")
+    expect(page.locator("#task-list .task-title")).to_have_text(["上月完成"])
+    search_without_scrolling("")
+    expect(page.locator("#task-month-label")).to_have_text("2026 年 9 月")
+    assert_page(month_count, month_count)
+    assert_position(position)
+
+    page.locator("#task-month-prev").click()
+    expect(page.locator("#task-month-label")).to_have_text("2026 年 8 月")
+    expect(page.locator("#task-history-summary")).to_have_text("2026年8月 · 完成 1 件")
+    assert_task_counts(page, pending=1, done=done_count, archived=1)
+    expect(page.locator("#task-month-next")).to_be_enabled()
+    expect(page.locator("#task-list .task-title")).to_have_text(["上月完成"])
+    page.locator("#task-month-next").click()
+    assert_page(month_count, month_count)
+    page.locator("#task-month-picker").click()
+    expect(page.locator('#modal select[name="historyYear"]')).to_have_value("2026")
+    expect(page.locator('#modal button.month-choice')).to_have_count(12)
+    for month in ("2026-10", "2026-11", "2026-12"):
+        expect(page.locator(f'#modal button.month-choice[data-month="{month}"]')).to_be_disabled()
+    page.screenshot(path=str(SCREENSHOT_DIRECTORY / "todo-history-month-picker.png"))
+    page.locator('#modal select[name="historyYear"]').select_option("2025")
+    page.locator('#modal button.month-choice[data-month="2025-12"]').click()
+    expect(page.locator("#modal")).not_to_be_visible()
+    expect(page.locator("#task-month-label")).to_have_text("2025 年 12 月")
+    expect(page.locator("#task-list .task-title")).to_have_text(["去年完成"])
+    page.locator("#task-month-current").click()
+    expect(page.locator("#task-month-label")).to_have_text("2026 年 9 月")
+    expect(page.locator("#task-month-next")).to_be_disabled()
+    assert_page(month_count, month_count)
+    page.locator("#task-month-prev").click()
+    page.locator("#task-month-prev").click()
+    expect(page.locator("#task-month-label")).to_have_text("2026 年 7 月")
+    expect(page.locator("#task-history-summary")).to_have_text("2026年7月 · 完成 0 件")
+    assert_task_counts(page, pending=1, done=done_count, archived=1)
+    expect(page.locator("#task-list .empty-state")).to_contain_text("这一月，还没有完成记录")
+    expect(page.locator("#task-history-footer")).not_to_be_visible()
+    page.locator("button.history-latest").click()
+    expect(page.locator("#task-month-label")).to_have_text("2026 年 9 月")
+
+    page.locator("#task-undated").click()
+    expect(page.locator("#task-month-nav")).not_to_be_visible()
+    expect(page.locator("#task-list .task-title")).to_have_text(unknown_titles)
+    assert group_labels(page) == ["完成时间未记录"]
+    for title in unknown_titles:
+        unknown = task_card(page, title)
+        expect(unknown.locator(".task-age")).to_have_text("完成时间未记录")
+        unknown.locator(".task-info").click()
+        expect(page.locator("#modal .task-detail")).to_contain_text("这条历史没有记录完成时间")
+        expect(page.locator("#modal .task-detail")).not_to_contain_text("完成于")
+        page.locator("#close-modal").click()
+    page.locator("#task-known-history").click()
+    expect(page.locator("#task-month-label")).to_have_text("2026 年 9 月")
+    assert_page(month_count, month_count)
+
+    for keyword, expected_titles in (("完成记录 00", ["完成记录 00"]),
+                                     ("回查小步 02", ["完成记录 02"]),
+                                     ("工作", [f"完成记录 {index:02d}" for index in reversed(range(dated_count)) if index % 2 == 0]),
+                                     ("去年完成", ["去年完成"]),
+                                     ("完成时间", unknown_titles),
+                                     ("不存在的完成记录", [])):
+        page.locator("#task-search").fill(keyword)
+        expect(page.locator("#task-list .task-title")).to_have_text(expected_titles)
+        expect(page.locator("#task-month-nav")).not_to_be_visible()
+        expect(page.locator("#task-history-summary")).to_have_text(f"全部时间 · 找到 {len(expected_titles)} 件")
+        assert_static_headings()
+        if not expected_titles:
+            expect(page.locator("#task-list .empty-state")).to_contain_text("没有找到这件事")
+        assert_task_counts(page, pending=1, done=done_count, archived=1)
+
+    page.locator("#task-search").fill("")
+    page.locator("#task-month-prev").click()
+    page.locator("#task-search").fill("完成")
+    assert_page(TASK_HISTORY_PAGE_SIZE, done_count)
+    page.screenshot(path=str(SCREENSHOT_DIRECTORY / "todo-history-all-time-search.png"))
+    page.locator("#task-history-more").click()
+    assert_page(done_count, done_count)
+    expect(page.locator("#task-list .task-title")).to_have_text(month_titles + ["上月完成", "去年完成"] + unknown_titles)
+    assert group_labels(page) == ["今天", "昨天", "2026年9月24日", "2026年9月1日", "2026年8月18日", "2025年12月18日", "完成时间未记录"]
+    deleted = task_card(page, "完成记录 00")
+    deleted.locator(".task-menu").click()
+    page.locator("#modal").get_by_role("button", name="删除待办", exact=True).click()
+    expect(deleted).to_have_count(0)
+    expect(page.locator("#task-search")).to_have_value("完成")
+    expect(page.locator("#task-month-label")).to_have_text("2026 年 8 月")
+    assert_page(done_count - 1, done_count - 1)
+    assert_task_counts(page, pending=1, done=done_count - 1, archived=1)
+    page.locator("#undo-task").click()
+    expect(deleted.locator("span.task-check-static")).to_have_count(1)
+    expect(page.locator("#task-search")).to_have_value("完成")
+    expect(page.locator("#task-month-nav")).not_to_be_visible()
+    expect(page.locator("#task-month-label")).to_have_text("2026 年 8 月")
+    assert_page(done_count, done_count)
+    assert_task_counts(page, pending=1, done=done_count, archived=1)
+    search_without_scrolling("")
+    expect(page.locator("#task-month-label")).to_have_text("2026 年 8 月")
+    expect(page.locator("#task-list .task-title")).to_have_text(["上月完成"])
+    page.locator("#task-month-current").click()
+    assert_page(month_count, month_count)
+    deleted.locator(".task-menu").click()
+    page.locator("#modal").get_by_role("button", name="删除待办", exact=True).click()
+    assert_page(month_count - 1, month_count - 1)
+    page.locator("#undo-task").click()
+    expect(page.locator("#task-search")).to_have_value("")
+    expect(page.locator("#task-month-label")).to_have_text("2026 年 9 月")
+    assert_page(month_count, month_count)
+    search_without_scrolling("回查小步")
+    page.locator("#task-history-more").click()
+    assert_page(dated_count, dated_count)
+    position = set_position()
+    visible_info = page.locator("#task-list .task-info").evaluate_all("""els => {
+        const box = document.getElementById('phone-content').getBoundingClientRect();
+        return els.findIndex(el => { const r = el.getBoundingClientRect(); return r.top >= box.top && r.bottom <= box.bottom; });
+    }""")
+    page.locator("#task-list .task-info").nth(visible_info).click()
+    page.locator("#modal").get_by_role("button", name="重新打开", exact=True).click()
+    page.locator('#modal label input[type="checkbox"]').first.check()
+    page.locator("#modal").get_by_role("button", name="确认重新打开", exact=True).click()
+    expect(page.locator('[data-filter="pending"]')).to_have_attribute("aria-pressed", "true")
+    page.locator("#undo-task").click()
+    expect(page.locator("#task-search")).to_have_value("回查小步")
+    expect(page.locator("#task-month-nav")).not_to_be_visible()
+    assert_page(dated_count, dated_count)
+    assert_position(position)
+    page.close()
+    print("PASS: local-date monthly history, global 20-item pagination, static day separators, picker/future guard, empty/unknown history, all-time search, scroll/view restoration and deletion/reopen undo.", flush=True)
+
+
+def check_task_completion_motion(browser, errors):
+    page = fresh_timer_page(browser, errors)
+    page.emulate_media(reduced_motion="no-preference")
+    page.locator('.bottom-nav [data-page="tasks"]').click()
+    # Observe the real model result without replacing completion behavior or reaching into app state.
+    page.evaluate("""() => {
+        const model = window.FocusModel;
+        const observe = method => (...args) => {
+            const result = model[method](...args);
+            window.__lastCompletedTask = JSON.parse(JSON.stringify(result));
+            return result;
+        };
+        window.FocusModel = {...model, completeTask: observe('completeTask'), setTaskStep: observe('setTaskStep')};
+    }""")
+    planning = page.locator('.task-swipe[data-task-id="sample-planning"]')
+    # During feedback .task-title is deliberately replaced, so use stable task IDs.
+    task = planning.locator(".task-card")
+
+    def assert_committed():
+        result = page.evaluate("() => ({task: window.__lastCompletedTask, now: new Date().toISOString()})")
+        assert result["task"]["done"] is True
+        assert result["task"]["completedAt"] == result["now"], result
+        assert all(step["done"] for step in result["task"]["steps"])
+        expect(page.locator("#task-undo-message")).to_have_attribute("role", "status")
+        expect(page.locator("#task-undo-message")).to_contain_text("已完成")
+        expect(page.locator("#task-undo-message")).to_contain_text(result["task"]["title"])
+        return result["task"]
+
+    def assert_feedback(wrapper):
+        expect(wrapper).to_have_class(re.compile(r"\bfinishing\b"))
+        expect(wrapper).not_to_have_class(re.compile(r"\bfinishing-out\b"))
+        card = wrapper.locator(".task-card")
+        expect(card).to_have_class(re.compile(r"\bcelebrating\b"))
+        note = card.locator('div.task-finish-note[role="status"]')
+        expect(note).to_be_visible()
+        expect(note.locator(".task-finish-mark svg.icon")).to_have_count(1)
+        expect(note.locator("strong")).to_have_text("又走完一件事")
+        expect(note.locator("small")).to_contain_text("已收进完成记录")
+        assert wrapper.evaluate("el => el.inert") and card.evaluate("el => el.inert")
+        animation = note.locator(".task-finish-mark svg.icon").evaluate("el => getComputedStyle(el).animationName")
+        assert "todo-finish-check" in animation, animation
+        assert wrapper.evaluate("el => getComputedStyle(el).transitionProperty.split(',').map(value => value.trim()).includes('height')")
+        assert float(wrapper.evaluate("el => el.style.getPropertyValue('--finish-height')").removesuffix("px")) > 0
+
+    task.locator(".step-expand").click()
+    task.locator(".step-row").last.click()
+    assert_task_counts(page, pending=2, done=2)
+    committed = assert_committed()
+    assert_feedback(planning)
+    assert page.evaluate("() => getComputedStyle(document.documentElement).getPropertyValue('--todo-finish-hold').trim()") == f"{TASK_FINISH_HOLD_MS}ms"
+    assert page.evaluate("() => getComputedStyle(document.documentElement).getPropertyValue('--todo-finish-collapse').trim()") == f"{TASK_FINISH_COLLAPSE_MS}ms"
+    # Fake timers do not guarantee interpolated CSS frames; verify the collapse rule, not pixels.
+    assert page.evaluate("""() => [...document.styleSheets].flatMap(sheet => [...sheet.cssRules]).some(rule =>
+        rule.selectorText === '.task-swipe.finishing-out' && rule.style.height === '0px')""")
+    page.locator('[data-filter="done"]').click()
+    expect(task.locator("span.task-check-static")).to_be_visible()
+    expect(planning).not_to_have_class(re.compile(r"\bfinishing\b"))
+    expect(task).not_to_have_class(re.compile(r"\bcelebrating\b"))
+    expect(task.locator(".task-finish-note, .step-path, .step-expand, button.step-row, button.task-checkbox")).to_have_count(0)
+    expect(task.locator(".task-age")).to_have_text("2026-09-26 完成")
+    task.locator(".task-info").click()
+    expect(page.locator("#modal .task-detail")).to_contain_text("完成于")
+    expect(page.locator("#modal .task-detail-steps li")).to_have_count(len(committed["steps"]))
+    expect(page.locator("#modal .task-detail-steps button")).to_have_count(0)
+    page.locator("#close-modal").click()
+    page.locator('[data-filter="pending"]').click()
+    assert_feedback(planning)
+    # run_for paints the feedback screenshot; account for that time at the exact boundaries below.
+    page.clock.run_for(TASK_FINISH_STAGGER_MS)
+    page.screenshot(path=str(SCREENSHOT_DIRECTORY / "todo-completion-feedback.png"))
+    page.clock.fast_forward(TASK_FINISH_HOLD_MS - TASK_FINISH_STAGGER_MS - 1)
+    assert_feedback(planning)
+    page.clock.fast_forward(1)
+    expect(planning).to_have_class(re.compile(r"\bfinishing-out\b"))
+    page.clock.fast_forward(TASK_FINISH_COLLAPSE_MS - 1)
+    expect(planning).to_have_count(1)
+    page.clock.fast_forward(1)
+    expect(planning).to_have_count(0)
+    page.locator("#undo-task").click()
+    assert_task_counts(page, pending=3, done=1)
+    expect(task.locator(".step-row").last).to_have_attribute("aria-checked", "false")
+
+    # Complete -> undo at 500ms -> complete again. Neither old hold nor old exit may affect the new run.
+    task.locator(".task-checkbox").click()
+    assert_committed()
+    page.clock.fast_forward(TASK_FINISH_UNDO_MS)
+    page.locator("#undo-task").click()
+    expect(planning).not_to_have_class(re.compile(r"\bfinishing\b"))
+    expect(task.locator(".step-row").last).to_have_attribute("aria-checked", "false")
+    task.locator(".task-checkbox").click()
+    assert_committed()
+    page.clock.fast_forward(TASK_FINISH_HOLD_MS - TASK_FINISH_UNDO_MS)
+    assert_feedback(planning)
+    page.clock.fast_forward(TASK_FINISH_COLLAPSE_MS)
+    assert_feedback(planning)  # The original 920ms deadline has now passed.
+    page.clock.fast_forward(TASK_FINISH_UNDO_MS - TASK_FINISH_COLLAPSE_MS - 1)
+    assert_feedback(planning)
+    page.clock.fast_forward(1)
+    expect(planning).to_have_class(re.compile(r"\bfinishing-out\b"))
+    page.clock.fast_forward(TASK_FINISH_COLLAPSE_MS - 1)
+    expect(planning).to_have_count(1)
+    page.clock.fast_forward(1)
+    expect(planning).to_have_count(0)
+    page.locator("#undo-task").click()
+    assert_task_counts(page, pending=3, done=1)
+
+    plain_wrappers = []
+    for title in ("无小步反馈甲", "无小步反馈乙"):
+        card = create_task(page, title)
+        task_id = card.evaluate("el => el.closest('.task-swipe').dataset.taskId")
+        plain_wrappers.append(page.locator(f'.task-swipe[data-task-id="{task_id}"]'))
+    first, second = plain_wrappers
+    first.locator("button.task-checkbox").click()
+    assert_committed()
+    assert_feedback(first)
+    page.clock.fast_forward(TASK_FINISH_STAGGER_MS)
+    second.locator("button.task-checkbox").click()
+    assert_committed()
+    assert_feedback(second)
+    assert_task_counts(page, pending=3, done=3)
+    expect(page.locator(".task-swipe.finishing")).to_have_count(2)
+    page.clock.fast_forward(TASK_FINISH_HOLD_MS - TASK_FINISH_STAGGER_MS)
+    expect(first).to_have_class(re.compile(r"\bfinishing-out\b"))
+    assert_feedback(second)
+    page.clock.fast_forward(TASK_FINISH_STAGGER_MS)
+    expect(second).to_have_class(re.compile(r"\bfinishing-out\b"))
+    page.clock.fast_forward(TASK_FINISH_COLLAPSE_MS - TASK_FINISH_STAGGER_MS)
+    expect(first).to_have_count(0)
+    expect(second).to_have_count(1)
+    page.clock.fast_forward(TASK_FINISH_STAGGER_MS - 1)
+    expect(second).to_have_count(1)
+    page.clock.fast_forward(1)
+    expect(second).to_have_count(0)
+    page.locator("#undo-task").click()
+    page.locator("#undo-task").click()
+    assert_task_counts(page, pending=5, done=1)
+
+    first.locator("button.task-checkbox").click()
+    page.clock.fast_forward(TASK_FINISH_HOLD_MS)
+    expect(first).to_have_class(re.compile(r"\bfinishing-out\b"))
+    first.evaluate("el => { window.__collapsingTask = el; }")
+    second.locator("button.task-checkbox").click()
+    assert first.evaluate("el => el === window.__collapsingTask")
+    expect(first).to_have_class(re.compile(r"\bfinishing-out\b"))
+    page.clock.fast_forward(TASK_FINISH_MS)
+    expect(first).to_have_count(0)
+    expect(second).to_have_count(0)
+    page.locator("#undo-task").click()
+    page.locator("#undo-task").click()
+    assert_task_counts(page, pending=5, done=1)
+
+    # Switching the OS preference while one task collapses and another holds settles both immediately.
+    first.locator("button.task-checkbox").click()
+    page.clock.fast_forward(TASK_FINISH_STAGGER_MS)
+    task.locator(".step-row").last.click()
+    page.clock.fast_forward(TASK_FINISH_HOLD_MS - TASK_FINISH_STAGGER_MS)
+    expect(first).to_have_class(re.compile(r"\bfinishing-out\b"))
+    assert_feedback(planning)
+    page.emulate_media(reduced_motion="reduce")
+    expect(page.locator(".finishing, .finishing-out, .celebrating, .task-finish-note")).to_have_count(0)
+    expect(first).to_have_count(0)
+    expect(planning).to_have_count(0)
+    assert_task_counts(page, pending=3, done=3)
+    page.locator("#undo-task").click()
+    page.locator("#undo-task").click()
+    page.clock.fast_forward(TASK_FINISH_MS)
+    expect(first.locator("button.task-checkbox")).to_have_count(1)
+    expect(task.locator(".step-row").last).to_have_attribute("aria-checked", "false")
+    assert_task_counts(page, pending=5, done=1)
+    first.locator("button.task-checkbox").click()
+    assert_committed()
+    expect(first).to_have_count(0)
+    task.locator(".step-row").last.click()
+    assert_committed()
+    expect(planning).to_have_count(0)
+    expect(page.locator(".finishing, .celebrating, .task-finish-note")).to_have_count(0)
+    assert_task_counts(page, pending=3, done=3)
+    page.locator('[data-filter="done"]').click()
+    expect(first.locator("span.task-check-static")).to_have_count(1)
+    expect(task.locator("span.task-check-static")).to_have_count(1)
+    expect(page.locator("#task-list .step-expand, #task-list button.step-row")).to_have_count(0)
+    page.close()
+    print("PASS: immediate completedAt and live undo status, 680ms feedback + 240ms collapse, compact history during animation, 500ms undo/re-complete isolation, independent tasks and dynamic reduced motion.", flush=True)
 
 
 def check_focus_configuration(browser, errors):
@@ -423,12 +1339,12 @@ def check_focus_configuration(browser, errors):
     title = '=SUM("1",2)'
     home(page)
     page.locator("#add-focus-item").click()
-    page.locator('input[name="title"]').fill(title)
+    page.locator('#modal input[name="title"]').fill(title)
     page.locator('select[name="category"]').select_option("生活")
     page.locator('select[name="timerMode"]').select_option("倒计时")
     page.locator('input[name="durationMinutes"]').fill("2")
     page.get_by_role("button", name="添加项目", exact=True).click()
-    expect(page.locator("#all-count")).to_have_text("4")
+    assert_task_counts(page, pending=3, done=1)
     choose_focus_item(page, title)
     expect(page.locator("#timer-time")).to_have_text("02:00")
     page.locator("#timer-toggle").click()
@@ -522,11 +1438,11 @@ def check_cancelled_settings_drafts(browser, errors):
     page.locator("#timer-toggle").click()
     page.clock.fast_forward(2_000)
     page.locator("#timer-settings").click()
-    page.locator('input[name="title"]').fill("尚未保存的项目名称")
+    page.locator('#modal input[name="title"]').fill("尚未保存的项目名称")
     page.locator('input[name="durationMinutes"]').fill("17")
     page.get_by_role("button", name="保存专注项", exact=True).click()
     page.get_by_role("button", name="取消", exact=True).click()
-    expect(page.locator('input[name="title"]')).to_have_value("尚未保存的项目名称")
+    expect(page.locator('#modal input[name="title"]')).to_have_value("尚未保存的项目名称")
     expect(page.locator('input[name="durationMinutes"]')).to_have_value("17")
     page.keyboard.press("Escape")
     expect(page.locator("#timer-time")).to_have_text("24:58")
@@ -710,14 +1626,16 @@ def check_progress_queue(browser, errors):
     page.locator("#timer-toggle").click()
     page.locator('.bottom-nav [data-page="tasks"]').click()
     page.locator(".task-info").first.click()
-    page.locator('input[name="title"]').fill("尚未保存的任务编辑")
-    modal_title = page.locator("#modal-title").inner_text()
+    page.locator('#todo-form input[name="title"]').fill("尚未保存的任务编辑")
+    sheet_title = page.locator("#todo-sheet-title").inner_text()
     page.clock.fast_forward(ONE_MINUTE_MS)
     expect(page.locator("#focus-sessions")).to_have_text("4")
-    expect(page.locator("#modal-title")).to_have_text(modal_title)
-    expect(page.locator('input[name="title"]')).to_have_value("尚未保存的任务编辑")
+    expect(page.locator("#todo-sheet-title")).to_have_text(sheet_title)
+    expect(page.locator('#todo-form input[name="title"]')).to_have_value("尚未保存的任务编辑")
+    expect(page.locator("#todo-sheet")).to_be_visible()
+    expect(page.locator("#modal")).not_to_be_visible()
     expect(page.locator(".progress-form")).to_have_count(0)
-    page.locator("#close-modal").click()
+    page.locator("#close-todo-sheet").click()
     expect(page.locator(".progress-form")).to_have_attribute("data-record-id", "session-1")
     page.locator('textarea[name="note"]').fill("关闭按钮保留的草稿")
     skip_progress(page, return_to_timer=False, method="close")
@@ -726,6 +1644,11 @@ def check_progress_queue(browser, errors):
     expect(page.locator('textarea[name="note"]')).to_have_value("关闭按钮保留的草稿")
     save_progress(page, "手动进度优先于未来示例", 0)
     expect(card.locator(".project-progress-note")).to_have_text("手动进度优先于未来示例")
+    page.locator('.bottom-nav [data-page="tasks"]').click()
+    page.locator(".task-info").first.click()
+    expect(page.locator('#todo-form input[name="title"]')).to_have_value("尚未保存的任务编辑")
+    page.keyboard.press("Escape")
+    expect(page.locator("#todo-sheet")).not_to_be_visible()
     choose_focus_item(page, PROJECT_TITLES[0])
     page.locator("#timer-toggle").click()
     page.clock.fast_forward(ONE_MINUTE_MS)
@@ -743,8 +1666,23 @@ def check_progress_queue(browser, errors):
     page.evaluate("delete document.hidden; document.dispatchEvent(new Event('visibilitychange'))")
     expect(page.locator(".progress-form")).to_have_attribute("data-record-id", "session-3")
     skip_progress(page, return_to_timer=False)
+    choose_focus_item(page, PROJECT_TITLES[0])
+    page.locator("#timer-toggle").click()
+    page.locator('.bottom-nav [data-page="tasks"]').click()
+    page.locator("#task-help").click()
+    page.clock.fast_forward(ONE_MINUTE_MS)
+    expect(page.locator("#focus-sessions")).to_have_text("7")
+    expect(page.locator("#modal-title")).to_have_text("待办怎么用")
+    expect(page.locator("#modal")).to_have_class("todo-guide-sheet")
+    expect(page.locator(".todo-guide-content section")).to_have_count(4)
+    expect(page.locator(".progress-form")).to_have_count(0)
+    page.get_by_role("button", name="知道了", exact=True).click()
+    expect(page.locator(".progress-form")).to_have_attribute("data-record-id", "session-4")
+    expect(page.locator("#modal")).not_to_have_class(re.compile("todo-guide-sheet"))
+    expect(page.locator("#modal .modal-header .eyebrow")).to_be_visible()
+    skip_progress(page, return_to_timer=False)
     page.close()
-    print("PASS: completion queues behind task editor without replacing typed text; visibility pumps queue; global close/Escape preserve counts and drafts; manual beats future sample progress.", flush=True)
+    print("PASS: completion queues behind task editor and guide without replacing content; visibility pumps queue; global close/Escape preserve counts and drafts; guide variant resets before progress; manual beats future sample progress.", flush=True)
 
 
 def alltime_snapshot(page):
@@ -930,28 +1868,29 @@ def run_checks():
 
         page.locator('.bottom-nav [data-page="tasks"]').click()
         page.locator("#add-task").click()
-        page.locator('input[name="title"]').fill("   ")
-        page.get_by_role("button", name="添加待办", exact=True).click()
-        expect(page.locator("#modal [role='alert']")).to_contain_text("任务名称")
-        expect(page.locator("#modal")).to_be_visible()
+        page.locator('#todo-form input[name="title"]').fill("   ")
+        page.locator("#save-todo-sheet").click()
+        expect(page.locator("#todo-sheet [role='alert']")).to_contain_text("任务名称")
+        expect(page.locator("#todo-sheet")).to_be_visible()
         unsafe_title = '<img src=x onerror="window.injected=true">'
-        page.locator('input[name="title"]').fill(unsafe_title)
-        page.get_by_role("button", name="添加待办", exact=True).click()
-        expect(page.locator("#all-count")).to_have_text("5")
-        added = page.locator(".task-card").filter(has_text=unsafe_title)
+        page.locator('#todo-form input[name="title"]').fill(unsafe_title)
+        page.locator("#save-todo-sheet").click()
+        assert_task_counts(page, pending=4, done=1)
+        added = task_card(page, unsafe_title)
         expect(added).to_have_count(1)
         assert page.evaluate("window.injected === undefined")
         assert added.locator("img").count() == 0
         added.locator(".task-checkbox").click()
-        expect(page.locator("#task-summary")).to_have_text("已完成 2 / 5 件")
+        assert_task_counts(page, pending=3, done=2)
         page.locator('[data-filter="done"]').click()
         expect(page.locator(".task-card")).to_have_count(2)
         added.locator(".task-info").click()
-        page.locator('input[name="title"]').fill("自动测试待办")
-        page.get_by_role("button", name="保存修改", exact=True).click()
-        added = page.locator(".task-card").filter(has_text="自动测试待办")
-        added.locator(".task-checkbox").click()
-        page.locator('[data-filter="all"]').click()
+        page.locator("#modal").get_by_role("button", name="编辑待办", exact=True).click()
+        page.locator('#todo-form input[name="title"]').fill("自动测试待办")
+        page.locator("#save-todo-sheet").click()
+        added = task_card(page, "自动测试待办")
+        expect(added.locator("span.task-check-static")).to_be_visible()
+        reopen_task(page, "自动测试待办")
         expect(added.locator(".task-checkbox")).to_have_attribute("aria-pressed", "false")
         expect(page.locator("#focus-item-name")).to_have_text(PROJECT_TITLES[0])
         expect(page.locator("#focus-sessions")).to_have_text("4")
@@ -964,12 +1903,12 @@ def run_checks():
         skip_progress(page)
         page.locator('.bottom-nav [data-page="tasks"]').click()
         expect(added.locator(".task-checkbox")).to_have_attribute("aria-pressed", "false")
-        expect(page.locator("#task-summary")).to_have_text("已完成 1 / 5 件")
-        added.locator(".task-info").click()
-        page.get_by_role("button", name="删除", exact=True).click()
-        expect(page.get_by_role("button", name="取消", exact=True)).to_be_focused()
-        page.get_by_role("button", name="确认删除", exact=True).click()
-        expect(page.locator("#all-count")).to_have_text("4")
+        assert_task_counts(page, pending=4, done=1)
+        added.locator(".task-menu").click()
+        page.locator("#modal").get_by_role("button", name="删除待办", exact=True).click()
+        expect(page.locator("#modal")).not_to_be_visible()
+        expect(page.locator("#undo-task")).to_be_focused()
+        assert_task_counts(page, pending=3, done=1)
         assert_no_task_focus_ui(page)
 
         page.locator('.bottom-nav [data-page="focus"]').click()
@@ -1036,7 +1975,7 @@ def run_checks():
             expect(page.locator("#modal")).not_to_be_visible()
 
         page.reload()
-        expect(page.locator("#all-count")).to_have_text("4")
+        assert_task_counts(page, pending=3, done=1)
         expect(page.locator("#focus-sessions")).to_have_text("3")
         expect(page.locator("#timer-time")).to_have_text("25:00")
         for width in MOBILE_WIDTHS:
@@ -1067,18 +2006,17 @@ def run_checks():
 
         page.set_viewport_size({"width": 667, "height": 375})
         page.locator('.bottom-nav [data-page="tasks"]').click()
-        page.locator("#add-task").click()
-        page.locator('input[name="title"]').fill("横屏弹窗测试")
-        page.get_by_role("button", name="添加待办", exact=True).click()
-        expect(page.locator("#all-count")).to_have_text("5")
-        expect(page.locator("#modal")).not_to_be_visible()
+        create_task(page, "横屏弹窗测试")
+        assert_task_counts(page, pending=4, done=1)
+        expect(page.locator("#todo-sheet")).not_to_be_visible()
 
         print("PASS: core interactions, CSV/JSON content, filtering, pagination, responsive layouts.", flush=True)
         page.set_viewport_size(DESKTOP_VIEWPORT)
         page.goto(Path(__file__).resolve().with_name("index.html").as_uri())
         expect(page.locator("#timer-time")).to_have_text("25:00")
         page.locator('.bottom-nav [data-page="tasks"]').click()
-        expect(page.locator(".task-card")).to_have_count(4)
+        expect(page.locator(".task-card")).to_have_count(3)
+        assert_task_counts(page, pending=3, done=1)
 
         print("PASS: direct file opening. Starting midnight checks.", flush=True)
         midnight_page = browser.new_page(viewport=DESKTOP_VIEWPORT, reduced_motion="reduce", timezone_id="Asia/Shanghai")
@@ -1152,7 +2090,13 @@ def run_checks():
         skip_progress(boundary_page, return_to_timer=False)
         boundary_page.close()
         check_task_grouping(browser, errors)
+        check_task_guide(browser, errors)
         check_task_focus_independence(browser, errors)
+        check_task_sheet_and_steps(browser, errors)
+        check_task_swipe_undo(browser, errors)
+        check_task_touch_delete(browser, errors)
+        check_task_history(browser, errors)
+        check_task_completion_motion(browser, errors)
         check_focus_configuration(browser, errors)
         check_independent_countup(browser, errors)
         check_project_navigation(browser, errors)

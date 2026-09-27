@@ -9,13 +9,18 @@
     recordPageSize: 20, exportReleaseMs: 60000, weekDays: 7, minYear: 1900, maxYear: 2100,
     heatLevels: 4, chartAxisLabels: 5, fullCircle: 360, jsonIndent: 2 });
   const CATEGORY_COLORS = ["#c44e22", "#e8aa84", "#8b8a98", "#7d97b5"];
+  const TODO_UI = Object.freeze({ swipeWidth: 88, swipeSlop: 10, swipeRatio: 1.25, swipeThreshold: 36,
+    finishHoldMs: 680, finishCollapseMs: 240, historyPage: 20, newDraft: "new" });
   const DURATION_PRESETS = [15, 25, 45, 60];
   const PAGES = ["focus", "timer", "statistics", "tasks", "usage", "profile"];
   const MODE_NAMES = { focus: "专注", short: "短休息", long: "长休息" };
   const TIMING_NAMES = { countdown: "倒计时", countup: "正计时" };
   const timer = new Timer();
   const state = {
-    tasks: initialTasks(), filter: "all", period: "today", goal: UI.initialGoalMinutes,
+    tasks: initialTasks(), filter: "pending", period: "today", goal: UI.initialGoalMinutes,
+    taskDrafts: new Map(), taskEditorId: null, taskEditorReturn: null, taskExpanded: new Set(), taskSearch: "",
+    historyMonth: localDateKey(new Date()).slice(0, 7), historyUndated: false, historyViews: new Map(),
+    finishingTasks: new Map(), taskUndo: [],
     records: initialFocusRecords(), activeFocus: null, overviewDay: "",
     statsPeriod: "day", statsAnchor: new Date(), includeSamples: true, recordLimit: UI.recordPageSize,
     focusItems: initialFocusItems(), selectedFocusItem: "focus-reading", nextFocusItemId: 1,
@@ -55,13 +60,17 @@
     toastTimeout = setTimeout(() => $("toast").classList.remove("visible"), UI.toastMs);
   }
 
-  function showModal(title, content) {
+  function showModal(title, content, variant = "") {
+    $("modal").classList.toggle("todo-guide-sheet", variant === "todo-guide-sheet");
     state.progressDialogRecord = null;
     state.progressReturnHome = false;
     $("modal-title").textContent = title;
     $("modal-content").replaceChildren(content);
     if (!$("modal").open) $("modal").showModal();
-    $("modal-content").querySelector("input, textarea, select, button")?.focus();
+    if (variant === "todo-guide-sheet") {
+      $("close-modal").focus({ preventScroll: true });
+      $("modal").scrollTop = 0;
+    } else $("modal-content").querySelector("input, textarea, select, button")?.focus();
   }
 
   function finishModalClose() {
@@ -101,16 +110,20 @@
 
   function navigate(page, updateHash = true) {
     const safePage = PAGES.includes(page) ? page : "focus";
+    rememberTaskHistoryPosition();
     PAGES.forEach(name => { $(`page-${name}`).hidden = name !== safePage; });
     if (safePage === "statistics") renderStatistics();
     if (safePage === "focus") renderProjectList();
+    if (safePage === "tasks") renderTasks();
+    closeSwipes();
+    showTaskUndo();
     document.querySelectorAll("[data-page]").forEach(button => {
       const active = button.dataset.page === (["statistics", "timer"].includes(safePage) ? "focus" : safePage);
       button.classList.toggle("active", active);
       if (active) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
     });
-    $("phone-content").scrollTop = 0;
+    $("phone-content").scrollTop = safePage === "tasks" && state.filter === "done" ? taskHistoryView().scrollTop : 0;
     if (updateHash && location.hash !== `#${safePage}`) location.hash = safePage;
   }
 
@@ -415,7 +428,7 @@
   }
 
   function pumpProgressPrompts() {
-    if (document.hidden || $("modal").open) return;
+    if (document.hidden || $("modal").open || $("todo-sheet").open) return;
     while (state.pendingProgressPrompts.length) {
       const id = state.pendingProgressPrompts.shift();
       if (!latestRecordProgress(id)) {
@@ -585,149 +598,315 @@
     showModal("休息偏好", form);
   }
 
-  /** 小步编辑：加一步、改名、删一步。用 DOM 节点直接承载，不拼 HTML 字符串。 */
-  function buildStepEditor(draftSteps, onChange) {
-    const wrapper = element("div", "step-editor");
-    wrapper.append(element("p", "step-editor-title", "拆成几小步（可不填）"));
-    const list = element("div", "step-editor-list");
-    const add = element("button", "add-step", "＋ 加一步");
-    add.type = "button";
+  function taskButton(label, className, action) {
+    const button = element("button", className, label);
+    button.type = "button";
+    button.addEventListener("click", action);
+    return button;
+  }
 
+  /** 小步编辑：加一步、改名、删一步。用 DOM 节点直接承载，不拼 HTML 字符串。 */
+  function buildStepEditor(draft, locked, onChange) {
+    const wrapper = element("details", "step-editor");
+    wrapper.open = draft.stepsOpen ?? draft.steps.length > 0;
+    const summary = element("summary", "step-editor-title", "拆成小步 · 可选");
+    const list = element("div", "step-editor-list");
+    const add = taskButton("＋ 加一步", "add-step", () => {
+      if (draft.steps.length >= LIMITS.maxTaskSteps) return;
+      draft.steps.push({ id: `step-new-${state.nextStepId++}`, title: "", done: false });
+      draw();
+      list.lastElementChild?.querySelector("input")?.focus();
+      onChange();
+    });
     const draw = () => {
-      const rows = draftSteps.map((step, index) => {
+      list.replaceChildren(...draft.steps.map((step, index) => {
         const row = element("div", "step-editor-row");
         const input = element("input");
         input.type = "text";
         input.value = step.title;
         input.maxLength = LIMITS.maxTaskStepTitle;
+        input.enterKeyHint = "next";
         input.setAttribute("aria-label", `第 ${index + 1} 步`);
         input.addEventListener("input", () => { step.title = input.value; onChange(); });
-        const remove = element("button", "step-remove", "×");
-        remove.type = "button";
-        remove.setAttribute("aria-label", `删掉第 ${index + 1} 步`);
-        remove.addEventListener("click", () => { draftSteps.splice(index, 1); draw(); onChange(); });
-        row.append(input, remove);
+        input.addEventListener("keydown", event => {
+          if (event.key !== "Enter" || event.isComposing) return;
+          event.preventDefault();
+          const next = row.nextElementSibling?.querySelector("input");
+          if (next) next.focus();
+          else if (!add.disabled && !locked) add.click();
+        });
+        row.append(input);
+        if (!locked) {
+          const remove = taskButton("×", "step-remove", () => {
+            draft.steps.splice(index, 1);
+            draw();
+            (list.children[Math.min(index, list.children.length - 1)]?.querySelector("input") || add).focus();
+            onChange();
+          });
+          remove.setAttribute("aria-label", `删掉第 ${index + 1} 步`);
+          row.append(remove);
+        }
         return row;
-      });
-      list.replaceChildren(...rows);
-      add.disabled = draftSteps.length >= LIMITS.maxTaskSteps;
+      }));
+      add.disabled = draft.steps.length >= LIMITS.maxTaskSteps;
       add.textContent = add.disabled ? `最多 ${LIMITS.maxTaskSteps} 步` : "＋ 加一步";
+      summary.textContent = `拆成小步${draft.steps.length ? ` · ${draft.steps.length} 步` : " · 可选"}`;
     };
-
-    add.addEventListener("click", () => {
-      if (draftSteps.length >= LIMITS.maxTaskSteps) return;
-      draftSteps.push({ id: `step-new-${state.nextStepId++}`, title: "", done: false });
-      draw();
-      list.querySelector(".step-editor-row:last-child input")?.focus();
-      onChange();
-    });
-
+    wrapper.addEventListener("toggle", () => { draft.stepsOpen = wrapper.open; });
     draw();
-    wrapper.append(list, add);
+    wrapper.append(summary, list);
+    if (!locked) wrapper.append(add);
+    else wrapper.append(element("p", "data-note", "已完成的步骤仅可改名。需要重做时，请在详情中选择「重新打开」。"));
     return wrapper;
+  }
+
+  function closeTaskSheet() {
+    $("todo-sheet").close();
+    queueMicrotask(pumpProgressPrompts);
   }
 
   function taskEditor(id) {
     const task = state.tasks.find(item => item.id === id);
-    if (!task && state.tasks.length >= LIMITS.maxTasks) return toast(`演示最多支持 ${LIMITS.maxTasks} 个任务。`);
-    const form = element("form");
+    if (id && !task) return;
+    if (!task && state.tasks.length >= LIMITS.maxTasks) return toast(`演示最多支持 ${LIMITS.maxTasks} 个待办。`);
+    closeSwipes();
+    if ($("modal").open) closeModal();
+    state.taskEditorReturn = document.activeElement;
+    state.taskEditorId = id || TODO_UI.newDraft;
+    // M：小步是可选的。草稿按待办保留在本页内存中，保存后清除，刷新重置。
+    if (!state.taskDrafts.has(state.taskEditorId)) state.taskDrafts.set(state.taskEditorId, {
+      title: task?.title || "", category: task?.category || CATEGORIES[0], important: task?.important || false,
+      steps: (task?.steps || []).map(step => ({ ...step })), stepsOpen: !!task?.steps?.length,
+    });
+    const draft = state.taskDrafts.get(state.taskEditorId);
+    if (task?.done) draft.steps = (task.steps || []).map(step => ({ ...step, title: draft.steps.find(value => value.id === step.id)?.title ?? step.title }));
+    else if (task) draft.steps = draft.steps.map(step => ({ ...step, done: task.steps?.find(value => value.id === step.id)?.done ?? step.done }));
+    const body = $("todo-sheet-body");
+    body.replaceChildren();
+    $("todo-sheet-title").textContent = task ? "编辑待办" : "记下一件事";
+    $("save-todo-sheet").textContent = task ? "保存修改" : "添加待办";
     const validation = element("div", "modal-notice");
     validation.id = "task-validation-error";
     validation.setAttribute("role", "alert");
     validation.hidden = true;
-    form.append(validation);
-    const titleInput = field(form, "想完成什么？", "title", task?.title || "", { maxLength: LIMITS.maxTaskTitle });
+    const onChange = () => { validation.hidden = true; };
+    const titleInput = field(body, "想做什么？", "title", draft.title, { maxLength: LIMITS.maxTaskTitle });
+    titleInput.parentElement.classList.add("todo-title-field");
+    titleInput.placeholder = "从一件具体的小事开始";
     titleInput.setAttribute("aria-describedby", validation.id);
-    form.addEventListener("input", () => { validation.hidden = true; });
-    field(form, "分类", "category", task?.category || CATEGORIES[0], { choices: CATEGORIES });
-    field(form, "优先级", "priority", task?.important ? "重要" : "普通", { choices: ["普通", "重要"] });
-    // M：小步是可选的。草稿只在弹窗生命周期内，取消即丢弃。
-    const draftSteps = (task?.steps || []).map(step => ({ ...step }));
-    form.append(buildStepEditor(draftSteps, () => { validation.hidden = true; }));
-    const actions = element("div", "modal-actions");
-    if (task?.archived) {
-      const restore = element("button", "secondary-button", "找回");
-      restore.type = "button";
-      restore.addEventListener("click", () => {
-        task.archived = false;
-        task.createdAt = FocusModel.localDateKey(new Date());
-        state.filter = "all";
-        closeModal();
-        renderTasks();
-        toast(`「${task.title}」回到清单。`);
+    titleInput.addEventListener("input", () => { draft.title = titleInput.value; onChange(); });
+    const categories = element("div", "todo-category-choices");
+    categories.setAttribute("role", "group");
+    categories.setAttribute("aria-label", "待办分类");
+    CATEGORIES.forEach(category => {
+      const choice = taskButton(category, `category-choice${category === draft.category ? " selected" : ""}`, () => {
+        draft.category = category;
+        [...categories.children].forEach(button => {
+          const selected = button.textContent === category;
+          button.classList.toggle("selected", selected);
+          button.setAttribute("aria-pressed", String(selected));
+        });
       });
-      actions.append(restore);
-    }
+      choice.setAttribute("aria-pressed", String(category === draft.category));
+      categories.append(choice);
+    });
+    const important = element("label", "todo-important");
+    const checkbox = element("input");
+    checkbox.type = "checkbox";
+    checkbox.name = "important";
+    checkbox.checked = draft.important;
+    checkbox.addEventListener("change", () => { draft.important = checkbox.checked; });
+    important.append(checkbox, document.createTextNode("标为重要，放在最前面"));
+    body.append(categories, important, buildStepEditor(draft, !!task?.done, onChange), validation);
     if (task) {
-      const remove = element("button", "secondary-button danger-button", "删除");
-      remove.type = "button";
-      remove.addEventListener("click", () => confirmAction("删除这个待办？", `将从本次演示中移除「${task.title}」。`, () => {
-        state.tasks = state.tasks.filter(item => item.id !== task.id);
-        renderTasks();
-        toast("待办已删除。");
-      }, "确认删除"));
-      actions.append(remove);
+      const actions = element("div", "todo-editor-actions");
+      actions.append(taskButton("删除待办", "text-button danger-button", () => { closeTaskSheet(); deleteTask(task.id); }));
+      body.append(actions);
     }
-    const submit = element("button", "primary-button", task ? "保存修改" : "添加待办");
-    submit.type = "submit";
-    actions.append(submit);
-    form.append(actions);
-    form.addEventListener("submit", event => {
+    $("todo-form").onsubmit = event => {
       event.preventDefault();
-      const data = Object.fromEntries(new FormData(form));
       try {
-        const validated = validateTask({ ...data, important: data.priority === "重要", steps: draftSteps });
-        if (task) {
-          Object.assign(task, validated);
+        const current = state.tasks.find(item => item.id === id);
+        if (id && !current) throw new Error("这件待办已被删除，请关闭面板。");
+        const validated = validateTask(draft);
+        if (current) {
+          const next = { ...current, ...validated };
           // 小步被删光时不该把已完成的事回退成未完成。
-          if (validated.steps.length) task.done = validated.steps.every(step => step.done);
+          if (!current.done && next.steps.length && next.steps.every(step => step.done)) {
+            Object.assign(next, FocusModel.completeTask(next));
+          }
+          state.tasks = state.tasks.map(item => item.id === id ? next : item);
+          state.filter = next.archived ? "archived" : next.done ? "done" : "pending";
         } else {
-          state.tasks.push({ ...validated, id: `new-${state.nextTaskId++}`, done: false,
-            createdAt: FocusModel.localDateKey(new Date()), archived: false });
+          if (state.tasks.length >= LIMITS.maxTasks) throw new Error(`演示最多支持 ${LIMITS.maxTasks} 个待办。`);
+          state.tasks.push({ ...validated, id: `new-${state.nextTaskId++}`, done: false, completedAt: null,
+            createdAt: localDateKey(new Date()), archived: false });
+          state.filter = "pending";
         }
-        state.filter = "all";
-        closeModal();
+        state.taskDrafts.delete(state.taskEditorId);
+        state.taskSearch = "";
+        $("task-search").value = "";
+        closeTaskSheet();
         renderTasks();
-        toast(task ? "待办已更新。" : "小目标已记下，现在就可以开始。");
+        toast(task ? "修改已保存。" : "记下了，从第一步开始。" );
       } catch (error) {
         validation.textContent = error.message;
         validation.hidden = false;
+        validation.scrollIntoView({ block: "nearest" });
       }
+    };
+    syncTaskViewport();
+    $("todo-sheet").showModal();
+    titleInput.focus();
+  }
+
+  function syncTaskViewport() {
+    const viewport = window.visualViewport;
+    $("todo-sheet").style.setProperty("--todo-viewport-height", `${viewport?.height || window.innerHeight}px`);
+    $("todo-sheet").style.setProperty("--todo-viewport-top", `${viewport?.offsetTop || 0}px`);
+  }
+
+  function taskHistoryView() {
+    const key = state.taskSearch ? "search" : state.historyUndated ? "undated" : state.historyMonth;
+    if (!state.historyViews.has(key)) state.historyViews.set(key, { limit: TODO_UI.historyPage, scrollTop: 0 });
+    return state.historyViews.get(key);
+  }
+
+  function rememberTaskHistoryPosition() {
+    if (state.filter === "done" && !$("page-tasks").hidden) taskHistoryView().scrollTop = $("phone-content").scrollTop;
+  }
+
+  function changeTaskHistory(action) {
+    rememberTaskHistoryPosition();
+    action();
+    closeSwipes();
+    renderTasks();
+    $("phone-content").scrollTop = state.filter === "done" ? taskHistoryView().scrollTop : 0;
+  }
+
+  function taskHistorySelection() {
+    return FocusModel.selectCompletedTasks(state.tasks, { month: state.historyMonth, query: state.taskSearch,
+      undated: state.historyUndated, limit: taskHistoryView().limit });
+  }
+
+  function taskMonthLabel(month) {
+    const [year, number] = month.split("-").map(Number);
+    return `${year} 年 ${number} 月`;
+  }
+
+  function setTaskHistoryMonth(month) {
+    const current = localDateKey(new Date()).slice(0, 7);
+    if (month > current || month < `${UI.minYear}-01`) return;
+    changeTaskHistory(() => {
+      state.historyMonth = month;
+      state.historyUndated = false;
+      state.taskSearch = "";
+      $("task-search").value = "";
     });
-    showModal(task ? "编辑这个小目标" : "记下一个小目标", form);
+  }
+
+  function shiftTaskHistoryMonth(offset) {
+    const [year, month] = state.historyMonth.split("-").map(Number);
+    setTaskHistoryMonth(localDateKey(new Date(year, month - 1 + offset, 1)).slice(0, 7));
+  }
+
+  function taskMonthPicker() {
+    const current = new Date();
+    const currentMonth = localDateKey(current).slice(0, 7);
+    const form = element("div", "task-month-form");
+    const years = Array.from({ length: current.getFullYear() - UI.minYear + 1 }, (_, index) => String(current.getFullYear() - index));
+    const year = field(form, "选择年份", "historyYear", state.historyMonth.slice(0, 4), { choices: years });
+    const counts = new Map(taskHistorySelection().months.map(month => [month.key, month.count]));
+    const grid = element("div", "month-grid");
+    const draw = () => {
+      grid.replaceChildren(...Array.from({ length: 12 }, (_, index) => {
+        const key = `${year.value}-${String(index + 1).padStart(2, "0")}`;
+        const button = taskButton("", "month-choice", () => { closeModal(); setTaskHistoryMonth(key); });
+        button.dataset.month = key;
+        button.disabled = key > currentMonth;
+        button.setAttribute("aria-pressed", String(key === state.historyMonth));
+        button.setAttribute("aria-label", `${year.value}年${index + 1}月${button.disabled ? "，尚未到来" : `，完成 ${counts.get(key) || 0} 件`}`);
+        button.append(element("span", "month-name", `${index + 1} 月`), element("small", "month-count", button.disabled ? "—" : counts.has(key) ? `${counts.get(key)} 件` : "暂无记录"));
+        return button;
+      }));
+    };
+    year.addEventListener("change", draw);
+    draw();
+    const actions = element("div", "month-picker-actions");
+    actions.append(taskButton("回到本月", "secondary-button", () => { closeModal(); setTaskHistoryMonth(currentMonth); }));
+    form.append(grid, actions);
+    showModal("翻到哪一月？", form);
+  }
+
+  function renderTaskHistoryControls(result) {
+    const searching = !!state.taskSearch;
+    const currentMonth = localDateKey(new Date()).slice(0, 7);
+    $("task-month-nav").hidden = searching || state.historyUndated;
+    $("task-month-label").textContent = taskMonthLabel(state.historyMonth);
+    $("task-month-prev").disabled = state.historyMonth <= `${UI.minYear}-01`;
+    $("task-month-next").disabled = state.historyMonth >= currentMonth;
+    $("task-month-current").hidden = searching || state.historyUndated || state.historyMonth === currentMonth;
+    const [year, month] = state.historyMonth.split("-").map(Number);
+    $("task-history-summary").textContent = searching ? `全部时间 · 找到 ${result.total} 件`
+      : state.historyUndated ? `完成时间未记录 · ${result.total} 件`
+      : `${year}年${month}月 · 完成 ${result.total} 件`;
+    $("task-undated").hidden = searching || state.historyUndated || !result.undatedCount;
+    $("task-undated").textContent = `时间未记录 · ${result.undatedCount} 件`;
+    $("task-known-history").hidden = searching || !state.historyUndated;
+    $("task-history-footer").hidden = !result.total;
+    $("task-history-more").hidden = result.shown >= result.total;
+    $("task-history-count").textContent = `已显示 ${result.shown} / ${result.total} 件`;
   }
 
   function renderTasks() {
+    const focusKey = document.activeElement?.dataset.taskFocus;
     const summary = taskSummary(activeTasks());
-    $("task-summary").textContent = `已完成 ${summary.done} / ${summary.total} 件`;
-    $("completion-percent").replaceChildren(document.createTextNode(summary.percent), element("span", "", "%"));
-    $("completion-bar").style.width = `${summary.percent}%`;
-    $("all-count").textContent = summary.total;
+    $("pending-count").textContent = summary.total - summary.done;
+    $("done-count").textContent = summary.done;
+    $("archived-count").textContent = state.tasks.filter(task => task.archived).length;
+    $("task-list-heading").textContent = state.filter === "done" ? "走过的路，都算数" : state.filter === "archived" ? "暂时放下，也没关系" : "从眼前的一步开始";
+    $("task-search-wrap").hidden = state.filter !== "done";
+    $("task-history-controls").hidden = state.filter !== "done";
+    $("task-history-footer").hidden = state.filter !== "done";
+    $("task-list-intro").hidden = state.filter === "done";
+    $("task-list").classList.toggle("history-list", state.filter === "done");
     document.querySelectorAll("[data-filter]").forEach(button => {
       const selected = state.filter === button.dataset.filter;
       button.classList.toggle("selected", selected);
       button.setAttribute("aria-pressed", String(selected));
     });
-    const today = FocusModel.localDateKey(new Date());
-    const visible = state.tasks.filter(task => {
-      if (state.filter === "archived") return task.archived;
-      if (task.archived) return false;
-      if (state.filter === "done") return task.done;
-      if (state.filter === "pending") return !task.done;
-      return true;
-    });
-    const groups = FocusModel.groupTasks(visible).map(group => buildTaskGroup(group, today));
-    $("task-list").replaceChildren(...(groups.length ? groups : [element("div", "empty-state", emptyTaskMessage())]));
+    const today = localDateKey(new Date());
+    const history = state.filter === "done" ? taskHistorySelection() : null;
+    const visible = state.tasks.filter(task => state.filter === "archived" ? task.archived : !task.archived && (!task.done || state.finishingTasks.has(task.id)));
+    const groups = history ? history.groups : FocusModel.groupTasks(visible);
+    if (history) renderTaskHistoryControls(history);
+    $("task-list").replaceChildren(...groups.map(group => buildTaskGroup(group, today)));
+    if (!groups.length) {
+      const empty = element("div", "empty-state");
+      empty.append(element("strong", "", state.taskSearch && history ? "没有找到这件事" : state.filter === "pending" ? "给下一步，留一点空间" : history ? state.historyUndated ? "没有时间未记录的事项" : "这一月，还没有完成记录" : "这里暂时是空的"),
+        element("p", "", emptyTaskMessage()));
+      if (history?.latestMonth && !state.taskSearch && !state.historyUndated && history.latestMonth !== state.historyMonth) {
+        empty.append(taskButton("查看最近有记录的月份", "history-latest text-button", () => setTaskHistoryMonth(history.latestMonth)));
+      }
+      $("task-list").append(empty);
+    }
+    $("add-task-inline").hidden = groups.length > 0 || state.filter !== "pending";
+    if (focusKey) {
+      const target = [...$("task-list").querySelectorAll("[data-task-focus]")].find(node => node.dataset.taskFocus === focusKey);
+      (target || document.querySelector(`[data-filter="${state.filter}"]`))?.focus({ preventScroll: true });
+    }
   }
 
-  /** 重要的事自成一组排在最前，其余按分类分开，每组一个小标题。 */
+  /** 重要的事自成一组排在最前，其余按分类分开；已完成的事按日期分隔，不再逐日折叠。 */
   function buildTaskGroup(group, today) {
+    const history = state.filter === "done";
     const section = element("div", `task-group${group.key === "important" ? " important" : ""}`);
     section.setAttribute("role", "group");
-    const heading = element("div", "task-group-heading");
-    heading.append(element("span", "task-group-label", group.label), element("span", "task-group-count", String(group.tasks.length)));
+    const heading = element("div", `task-group-heading${history ? " history-heading" : ""}`);
+    heading.append(element("span", "task-group-label", group.label), element("span", "task-group-count", history ? `${group.tasks.length} 件已展示` : `${group.tasks.length}`));
     const list = element("div", "task-group-list");
     list.setAttribute("role", "list");
+    list.id = `todo-group-${group.key}`;
     list.append(...group.tasks.map(task => buildTaskCard(task, today, group.key)));
     section.append(heading, list);
     section.setAttribute("aria-label", `${group.label}：${group.tasks.length} 件`);
@@ -739,96 +918,409 @@
   }
 
   function emptyTaskMessage() {
-    if (state.filter === "done") return "还没有已完成的任务，慢慢来。";
-    if (state.filter === "archived") return "还没有放下的事。放下不是删除，是承认它这阵子不重要。";
-    return "这里空空的，给今天留一点自由。";
+    if (state.filter === "done") return state.taskSearch ? "搜索范围是全部时间，换个名称、分类或小步关键词试试。" : state.historyUndated ? "有明确完成时间的事都在对应月份里。" : "可以切换月份回看，或搜索全部时间的完成记录。";
+    if (state.filter === "archived") return "放下不是删除，需要时还可以找回。";
+    return "记下一件想做的事，也可以把它拆成几个小步。";
   }
 
   /** L 的发酵状态 + M 的小步路径，都在这张卡片上。 */
   function buildTaskCard(task, today, groupKey = "") {
+    const finishing = state.filter === "pending" ? state.finishingTasks.get(task.id) : null;
+    if (finishing?.node?.isConnected) return finishing.node;
     const age = FocusModel.taskAge(task, today);
     const progress = FocusModel.taskProgress(task);
-    const card = element("div", `task-card${task.done ? " done" : ""}${task.archived ? " archived" : ""} age-${age.stage}`);
-    card.setAttribute("role", "listitem");
-
-    const check = element("button", "task-checkbox");
-    check.setAttribute("aria-label", `${task.done ? "重新打开" : "完成"}任务：${task.title}`);
-    check.setAttribute("aria-pressed", String(task.done));
+    const wrapper = element("div", "task-swipe");
+    wrapper.dataset.taskId = task.id;
+    wrapper.setAttribute("role", "listitem");
+    const remove = taskButton("删除", "task-delete", () => deleteTask(task.id));
+    remove.setAttribute("aria-label", `删除待办：${task.title}`);
+    bindTouchDelete(remove);
+    remove.inert = true;
+    remove.setAttribute("aria-hidden", "true");
+    const card = element("article", `task-card${task.done ? " done" : ""}${task.archived ? " archived" : ""} age-${age.stage}`);
+    const main = element("div", "task-main");
+    const check = task.done || task.archived ? element("span", "task-checkbox task-check-static")
+      : taskButton("", "task-checkbox", () => toggleTaskDone(task));
+    check.setAttribute("aria-label", `${task.done ? "已完成" : task.archived ? "已放下" : "完成待办"}：${task.title}`);
+    if (!task.done && !task.archived) {
+      check.setAttribute("aria-pressed", "false");
+      check.dataset.taskFocus = `complete-${task.id}`;
+    }
     if (task.done) check.append(icon("check"));
-    check.addEventListener("click", () => { toggleTaskDone(task); });
-
-    const info = element("button", "task-info");
-    info.setAttribute("aria-label", `编辑任务：${task.title}`);
+    const info = taskButton("", "task-info", () => task.done || task.archived ? taskDetails(task.id) : taskEditor(task.id));
+    info.setAttribute("aria-label", `${task.done || task.archived ? "查看" : "编辑"}待办：${task.title}`);
+    info.dataset.taskFocus = `info-${task.id}`;
     const meta = element("div", "task-meta");
     // 组标题已经说明了重要或分类，卡片上不再重复同一个标签。
     if (task.important && groupKey !== "important") meta.append(element("span", "task-tag important", "重要"));
     if (groupKey === "important" || groupKey !== `category:${task.category}`) meta.append(element("span", "task-tag", task.category));
     if (!task.done && !task.archived) meta.append(element("span", "task-age", age.label));
     if (task.archived) meta.append(element("span", "task-age", "已放下"));
-    info.append(element("div", "task-title", task.title), meta);
-    info.addEventListener("click", () => taskEditor(task.id));
-
+    if (task.done && !task.archived) {
+      const completed = FocusModel.completedTaskDate(task);
+      meta.append(element("span", "task-age", completed ? `${localDateKey(completed)} 完成` : "完成时间未记录"));
+      if (task.steps?.length) meta.append(element("span", "task-step-summary", `${task.steps.length} 个小步已走完`));
+    }
+    info.append(element("span", "task-title", task.title), meta);
     const body = element("div", "task-body");
     body.append(info);
-    if (progress.total) body.append(buildStepPath(task, progress));
-    if (!task.done && !task.archived && age.stage !== "fresh") body.append(buildAgeActions(task));
-
-    card.append(check, body);
-    return card;
+    const menu = taskButton("···", "task-menu", () => taskDetails(task.id));
+    menu.setAttribute("aria-label", `待办详情：${task.title}`);
+    menu.dataset.taskFocus = `menu-${task.id}`;
+    main.append(check, body, menu);
+    card.append(main);
+    if (progress.total && (!task.done || (state.filter === "pending" && state.finishingTasks.has(task.id))) && !task.archived) card.append(buildStepPath(task, progress));
+    if (!task.done && !task.archived && age.stage !== "fresh") card.append(buildAgeActions(task));
+    if (task.archived) {
+      const actions = element("div", "age-actions");
+      actions.append(taskButton("找回", "age-action", () => restoreTask(task)));
+      card.append(actions);
+    }
+    if (finishing) {
+      finishing.node = wrapper;
+      card.classList.add("celebrating");
+      const note = element("div", "task-finish-note");
+      note.setAttribute("role", "status");
+      const mark = element("span", "task-finish-mark");
+      mark.append(icon("check"));
+      const copy = element("span", "task-finish-copy");
+      copy.append(element("strong", "", "又走完一件事"), element("small", "", "已收进完成记录，随时可以回看"));
+      note.append(mark, copy);
+      main.replaceChildren(note);
+      wrapper.classList.add("finishing");
+      wrapper.style.setProperty("--finish-height", `${finishing.height}px`);
+      wrapper.style.setProperty("--todo-finish-delay", `${-Math.max(0, performance.now() - finishing.startedAt)}ms`);
+      if (finishing.phase === "exit") wrapper.classList.add("finishing-out");
+      wrapper.inert = true;
+      card.inert = true;
+    }
+    wrapper.append(remove, card);
+    attachTaskSwipe(wrapper, card, remove);
+    return wrapper;
   }
 
-  /** M：一条横向的小路，走过的点是实心的。点一个点就把那一步标为走过或退回。 */
+  function setSwipe(wrapper, open) {
+    if (open) closeSwipes(wrapper);
+    wrapper.classList.toggle("swipe-open", open);
+    wrapper.style.setProperty("--swipe-x", `${open ? -TODO_UI.swipeWidth : 0}px`);
+    const button = wrapper.querySelector(".task-delete");
+    button.inert = !open;
+    button.setAttribute("aria-hidden", String(!open));
+  }
+
+  function closeSwipes(except = null) {
+    document.querySelectorAll(".task-swipe.swipe-open").forEach(wrapper => { if (wrapper !== except) setSwipe(wrapper, false); });
+  }
+
+  function bindTouchDelete(button) {
+    let start = null;
+    button.addEventListener("touchstart", event => {
+      start = event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY } : null;
+    }, { passive: true });
+    button.addEventListener("touchmove", event => {
+      const touch = event.touches[0];
+      if (!start || !touch || event.touches.length !== 1) { start = null; return; }
+      if (Math.abs(touch.clientX - start.x) > TODO_UI.swipeSlop || Math.abs(touch.clientY - start.y) > TODO_UI.swipeSlop) start = null;
+    }, { passive: true });
+    button.addEventListener("touchcancel", () => { start = null; });
+    button.addEventListener("touchend", event => {
+      const touch = event.changedTouches[0];
+      const tapped = start && touch && event.touches.length === 0 && Math.abs(touch.clientX - start.x) <= TODO_UI.swipeSlop && Math.abs(touch.clientY - start.y) <= TODO_UI.swipeSlop;
+      start = null;
+      if (!tapped || button.inert) return;
+      event.preventDefault();
+      button.click();
+    }, { passive: false });
+  }
+
+  function attachTaskSwipe(wrapper, card, remove) {
+    let gesture = null;
+    let suppressClick = false;
+    card.addEventListener("pointerdown", event => {
+      if (!event.isPrimary || event.button !== 0 || state.finishingTasks.has(wrapper.dataset.taskId)) return;
+      suppressClick = false;
+      gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, open: wrapper.classList.contains("swipe-open"), locked: false, offset: 0 };
+    });
+    card.addEventListener("pointermove", event => {
+      if (!gesture || gesture.id !== event.pointerId) return;
+      const dx = event.clientX - gesture.x;
+      const dy = event.clientY - gesture.y;
+      if (!gesture.locked) {
+        if (Math.abs(dy) > TODO_UI.swipeSlop && Math.abs(dy) >= Math.abs(dx)) { gesture = null; return; }
+        if (Math.abs(dx) < TODO_UI.swipeSlop || Math.abs(dx) < Math.abs(dy) * TODO_UI.swipeRatio) return;
+        gesture.locked = true;
+        closeSwipes(wrapper);
+        card.setPointerCapture(event.pointerId);
+        card.classList.add("swiping");
+      }
+      event.preventDefault();
+      gesture.offset = Math.max(-TODO_UI.swipeWidth, Math.min(0, (gesture.open ? -TODO_UI.swipeWidth : 0) + dx));
+      wrapper.style.setProperty("--swipe-x", `${gesture.offset}px`);
+    });
+    const end = (event, cancelled) => {
+      if (!gesture || gesture.id !== event.pointerId) return;
+      if (gesture.locked) {
+        suppressClick = true;
+        card.classList.remove("swiping");
+        setSwipe(wrapper, cancelled ? gesture.open : gesture.offset <= -TODO_UI.swipeThreshold);
+        if (card.hasPointerCapture(event.pointerId)) card.releasePointerCapture(event.pointerId);
+      }
+      gesture = null;
+    };
+    card.addEventListener("pointerup", event => end(event, false));
+    card.addEventListener("pointercancel", event => end(event, true));
+    card.addEventListener("click", event => {
+      if (suppressClick || wrapper.classList.contains("swipe-open")) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (!suppressClick) setSwipe(wrapper, false);
+        suppressClick = false;
+      }
+    }, true);
+    card.addEventListener("keydown", event => {
+      if (event.key === "ArrowLeft") { event.preventDefault(); setSwipe(wrapper, true); remove.focus(); }
+    });
+    wrapper.addEventListener("keydown", event => {
+      if (event.key === "Escape" || event.key === "ArrowRight") {
+        if (!wrapper.classList.contains("swipe-open")) return;
+        event.preventDefault();
+        setSwipe(wrapper, false);
+        card.querySelector(".task-info").focus();
+      }
+    });
+  }
+
+  /** M：一条横向的小路，走过的点是实心的。路径只展示进展，展开后整行操作小步。 */
   function buildStepPath(task, progress) {
     const path = element("div", "step-path");
-    path.setAttribute("role", "group");
-    path.setAttribute("aria-label", `${task.title}：${progress.walked} / ${progress.total} 步`);
-    const track = element("div", "step-track");
-    task.steps.forEach((step, index) => {
-      if (index > 0) track.append(element("span", `step-link${step.done ? " walked" : ""}`));
-      const dot = element("button", `step-dot${step.done ? " walked" : ""}`);
-      dot.setAttribute("aria-label", `${step.done ? "已走过" : "还没走"}：${step.title}`);
-      dot.setAttribute("aria-pressed", String(step.done));
-      dot.addEventListener("click", () => toggleStep(task, step));
-      track.append(dot);
+    const expanded = state.taskExpanded.has(task.id);
+    const list = element("div", "step-list");
+    list.id = `todo-steps-${task.id}`;
+    list.hidden = !expanded;
+    const expand = taskButton("", "step-expand", () => {
+      if (state.taskExpanded.has(task.id)) state.taskExpanded.delete(task.id);
+      else state.taskExpanded.add(task.id);
+      renderTasks();
     });
+    expand.setAttribute("aria-expanded", String(expanded));
+    expand.setAttribute("aria-controls", list.id);
+    expand.dataset.taskFocus = `expand-${task.id}`;
     const next = FocusModel.nextStep(task);
-    path.append(track, element("p", "step-caption", next ? `下一步 · ${next.title}` : `${progress.total} 步都走完了`));
+    expand.append(element("span", "step-count", `小步 ${progress.walked} / ${progress.total}`),
+      element("span", "step-caption", next ? `下一步 · ${next.title}` : "每一步都走完了"), element("span", "step-toggle-label", expanded ? "收起" : "展开"));
+    const track = element("div", "step-track");
+    track.setAttribute("aria-hidden", "true");
+    task.steps.forEach((step, index) => {
+      if (index > 0) track.append(element("span", `step-link${step.done && task.steps[index - 1].done ? " walked" : ""}`));
+      track.append(element("span", `step-dot${step.done ? " walked" : ""}`));
+      const row = taskButton("", `step-row${step.done ? " walked" : ""}`, () => toggleStep(task, step));
+      row.setAttribute("role", "checkbox");
+      row.setAttribute("aria-checked", String(step.done));
+      row.setAttribute("aria-label", step.title);
+      row.dataset.taskFocus = `step-${task.id}-${step.id}`;
+      const check = element("span", "step-check", step.done ? "✓" : "");
+      check.setAttribute("aria-hidden", "true");
+      row.append(check, element("span", "step-label", step.title));
+      list.append(row);
+    });
+    path.append(expand, track, list);
     return path;
   }
 
   /** L：躺久了的事给两个出口——续一天，或放下。 */
   function buildAgeActions(task) {
     const row = element("div", "age-actions");
-    const renew = element("button", "age-action", "续一天");
+    const renew = taskButton("续一天", "age-action", () => {
+      changeTask(task, { ...task, createdAt: localDateKey(new Date()) }, "已续到今天");
+    });
     renew.setAttribute("aria-label", `把「${task.title}」重新放到今天`);
-    renew.addEventListener("click", () => {
-      task.createdAt = FocusModel.localDateKey(new Date());
-      renderTasks();
-      toast(`「${task.title}」回到今天。`);
-    });
-    const release = element("button", "age-action quiet", "放下");
+    const release = taskButton("放下", "age-action quiet", () => changeTask(task, { ...task, archived: true }, "已放下"));
     release.setAttribute("aria-label", `放下「${task.title}」`);
-    release.addEventListener("click", () => {
-      task.archived = true;
-      renderTasks();
-      toast(`「${task.title}」已放下，可以在「放下的」里找回。`);
-    });
     row.append(renew, release);
     return row;
   }
 
-  function toggleTaskDone(task) {
-    task.done = !task.done;
-    // 勾掉父任务时把没走完的小步一并算走过，避免进度和状态互相矛盾。
-    if (task.done && Array.isArray(task.steps)) task.steps.forEach(step => { step.done = true; });
+  function showTaskUndo() {
+    const last = state.taskUndo.at(-1);
+    $("task-undo").hidden = !last || $("page-tasks").hidden;
+    $("task-undo-message").textContent = last ? `${last.label} · ${last.task.title}${state.taskUndo.length > 1 ? `（可依次撤销 ${state.taskUndo.length} 次）` : ""}` : "";
+  }
+
+  function cancelTaskFinish(id) {
+    const animation = state.finishingTasks.get(id);
+    if (!animation) return;
+    clearTimeout(animation.holdTimer);
+    clearTimeout(animation.exitTimer);
+    state.finishingTasks.delete(id);
+  }
+
+  function taskHistorySnapshot() {
+    if (state.filter !== "done") return null;
+    return { month: state.historyMonth, undated: state.historyUndated, query: state.taskSearch,
+      limit: taskHistoryView().limit, scrollTop: $("phone-content").scrollTop };
+  }
+
+  function changeTask(task, next, label, celebrate = false, history = taskHistorySnapshot()) {
+    if (!state.tasks.includes(task)) return;
+    const source = [...$("task-list").querySelectorAll(".task-swipe")].find(node => node.dataset.taskId === task.id);
+    const height = source?.getBoundingClientRect().height;
+    cancelTaskFinish(task.id);
+    const index = state.tasks.indexOf(task);
+    state.tasks[index] = next;
+    state.taskUndo.push({ task, next, index, label, filter: task.archived ? "archived" : task.done ? "done" : "pending", history });
+    const motion = celebrate && height && state.filter === "pending" && !$("page-tasks").hidden && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const animation = motion ? { height, startedAt: performance.now(), phase: "hold", holdTimer: null, exitTimer: null } : null;
+    if (animation) state.finishingTasks.set(task.id, animation);
     renderTasks();
+    showTaskUndo();
+    if (!animation) return;
+    $("done-count").classList.remove("pulse");
+    void $("done-count").offsetWidth;
+    $("done-count").classList.add("pulse");
+    animation.holdTimer = setTimeout(() => {
+      if (state.finishingTasks.get(task.id) !== animation) return;
+      animation.phase = "exit";
+      const wrapper = [...$("task-list").querySelectorAll(".task-swipe.finishing")].find(node => node.dataset.taskId === task.id);
+      if (wrapper) { void wrapper.offsetHeight; wrapper.classList.add("finishing-out"); }
+    }, TODO_UI.finishHoldMs);
+    animation.exitTimer = setTimeout(() => {
+      if (state.finishingTasks.get(task.id) !== animation) return;
+      state.finishingTasks.delete(task.id);
+      renderTasks();
+    }, TODO_UI.finishHoldMs + TODO_UI.finishCollapseMs);
+  }
+
+  function deleteTask(id) {
+    const index = state.tasks.findIndex(task => task.id === id);
+    if (index < 0) return;
+    const [task] = state.tasks.splice(index, 1);
+    cancelTaskFinish(id);
+    state.taskUndo.push({ task, next: null, index, label: "已删除", filter: state.filter, history: taskHistorySnapshot() });
+    renderTasks();
+    showTaskUndo();
+    $("undo-task").focus({ preventScroll: true });
+  }
+
+  function undoTaskAction() {
+    const last = state.taskUndo.at(-1);
+    if (!last) return;
+    const current = state.tasks.find(task => task.id === last.task.id);
+    if ((last.next && current !== last.next) || (!last.next && current)) {
+      state.taskUndo.pop();
+      showTaskUndo();
+      return toast("这件事之后已有修改，为避免覆盖，未撤销该操作。");
+    }
+    if (!last.next && state.tasks.length >= LIMITS.maxTasks) return toast("清单已满，腾出一个位置后可撤销删除。");
+    if (last.next) state.tasks = state.tasks.map(task => task.id === last.task.id ? last.task : task);
+    else state.tasks.splice(Math.min(last.index, state.tasks.length), 0, last.task);
+    state.taskUndo.pop();
+    cancelTaskFinish(last.task.id);
+    state.filter = last.filter;
+    if (state.filter === "done") {
+      if (last.history) {
+        state.historyMonth = last.history.month;
+        state.historyUndated = last.history.undated;
+        state.taskSearch = last.history.query;
+        Object.assign(taskHistoryView(), { limit: last.history.limit, scrollTop: last.history.scrollTop });
+      } else {
+        const date = FocusModel.completedTaskDate(last.task);
+        state.taskSearch = "";
+        state.historyUndated = !date;
+        if (date) state.historyMonth = localDateKey(date).slice(0, 7);
+      }
+      $("task-search").value = state.taskSearch;
+    }
+    renderTasks();
+    showTaskUndo();
+    if (state.filter === "done") $("phone-content").scrollTop = taskHistoryView().scrollTop;
+    const wrapper = [...$("task-list").querySelectorAll(".task-swipe")].find(node => node.dataset.taskId === last.task.id);
+    (wrapper?.querySelector(".task-info") || document.querySelector(`[data-filter="${state.filter}"]`)).focus({ preventScroll: true });
+  }
+
+  function toggleTaskDone(task) {
+    if (task.done || task.archived) return;
+    // 勾掉父任务时把没走完的小步一并算走过，避免进度和状态互相矛盾。
+    changeTask(task, FocusModel.completeTask(task), "已完成", true);
   }
 
   function toggleStep(task, step) {
-    step.done = !step.done;
-    // 小步全部走完，父任务随之完成；有任何一步回退，父任务也回到未完成。
-    task.done = task.steps.length > 0 && task.steps.every(item => item.done);
-    renderTasks();
+    if (task.done || task.archived) return;
+    // 小步全部走完，父任务随之完成；已完成的事须显式重新打开后才允许回退。
+    const next = FocusModel.setTaskStep(task, step.id, !step.done);
+    changeTask(task, next, next.done ? "已完成" : step.done ? "已退回一步" : "走过了一步", next.done);
+    if (!step.done && !next.done) {
+      const wrapper = [...$("task-list").querySelectorAll(".task-swipe")].find(node => node.dataset.taskId === task.id);
+      const index = task.steps.findIndex(item => item.id === step.id);
+      wrapper?.querySelectorAll(".step-dot")[index]?.classList.add("just-walked");
+      wrapper?.querySelectorAll(".step-row")[index]?.classList.add("just-walked");
+    }
+  }
+
+  function restoreTask(task) {
+    state.filter = task.done ? "done" : "pending";
+    changeTask(task, { ...task, archived: false, createdAt: localDateKey(new Date()) }, "已找回");
+  }
+
+  function taskDetails(id) {
+    const task = state.tasks.find(item => item.id === id);
+    if (!task) return;
+    closeSwipes();
+    const content = element("div", "task-detail");
+    content.append(element("p", "data-note", `${task.category} · ${task.archived ? "已放下" : task.done ? "已完成" : "待完成"}`));
+    if (task.done) content.append(element("p", "data-note", FocusModel.completedTaskDate(task) ? `完成于 ${localTimestamp(task.completedAt)}` : "这条历史没有记录完成时间。"));
+    if (task.steps?.length) {
+      const steps = element("ul", "task-detail-steps");
+      task.steps.forEach(step => steps.append(element("li", "", `${step.done ? "已走过" : "还没走"} · ${step.title}`)));
+      content.append(steps);
+    }
+    const actions = element("div", "task-detail-actions");
+    actions.append(taskButton("编辑待办", "secondary-button", () => taskEditor(id)));
+    if (task.archived) actions.append(taskButton("找回", "primary-button", () => { closeModal(); restoreTask(task); }));
+    else if (task.done) actions.append(taskButton("重新打开", "secondary-button", () => reopenTaskDialog(task)));
+    else {
+      actions.append(taskButton(task.important ? "取消重要" : "标为重要", "secondary-button", () => { closeModal(); changeTask(task, { ...task, important: !task.important }, "已更新重要标记"); }));
+      actions.append(taskButton("放下", "secondary-button", () => { closeModal(); changeTask(task, { ...task, archived: true }, "已放下"); }));
+    }
+    actions.append(taskButton("删除待办", "secondary-button danger-button", () => { closeModal(); deleteTask(id); }));
+    content.append(actions, element("p", "data-note", "也可以左滑卡片，再点击删除。删除后可在底部撤销；关闭提示或刷新后不再保留撤销记录。"));
+    showModal(task.title, content);
+  }
+
+  function reopenTaskDialog(task) {
+    const form = element("form", "reopen-task-form");
+    const selected = new Set();
+    form.append(element("p", "modal-copy", task.steps?.length ? "选择要重做的小步，其余已走过的进度会保留。" : "确认后，这件事会回到待完成清单。"));
+    (task.steps || []).forEach(step => {
+      const row = element("label", "redo-step-row");
+      const input = element("input");
+      input.type = "checkbox";
+      input.addEventListener("change", () => { if (input.checked) selected.add(step.id); else selected.delete(step.id); });
+      row.append(input, document.createTextNode(step.title));
+      form.append(row);
+    });
+    const error = element("p", "modal-notice");
+    error.setAttribute("role", "alert");
+    error.hidden = true;
+    const actions = element("div", "modal-actions");
+    actions.append(taskButton("取消", "secondary-button", () => taskDetails(task.id)));
+    const confirm = element("button", "primary-button", "确认重新打开");
+    confirm.type = "submit";
+    actions.append(confirm);
+    form.append(error, actions);
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      try {
+        const current = state.tasks.find(item => item.id === task.id);
+        if (!current) throw new Error("这件待办已被删除，无法重新打开。");
+        const next = FocusModel.reopenTask(current, [...selected]);
+        const history = taskHistorySnapshot();
+        closeModal();
+        state.filter = "pending";
+        state.taskExpanded.add(task.id);
+        changeTask(current, next, "已重新打开", false, history);
+      } catch (exception) { error.textContent = exception.message; error.hidden = false; }
+    });
+    showModal("重新打开这件事？", form);
   }
 
   function durationLabel(minutes) {
@@ -1161,6 +1653,15 @@
     showModal("给屏幕时间一点边界", form);
   }
 
+  document.documentElement.style.setProperty("--todo-finish-hold", `${TODO_UI.finishHoldMs}ms`);
+  document.documentElement.style.setProperty("--todo-finish-collapse", `${TODO_UI.finishCollapseMs}ms`);
+  window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", event => {
+    if (!event.matches) return;
+    [...state.finishingTasks.keys()].forEach(cancelTaskFinish);
+    $("done-count").classList.remove("pulse");
+    renderTasks();
+  });
+  $("done-count").addEventListener("animationend", () => $("done-count").classList.remove("pulse"));
   $("close-modal").addEventListener("click", closeModal);
   $("modal").addEventListener("close", () => {
     if (!$("modal").open) finishModalClose();
@@ -1188,7 +1689,66 @@
       applyFocusItem(item);
     }, "更换计时方向会重置当前计时，并保存为此专注项的默认模式。");
   }));
-  document.querySelectorAll("[data-filter]").forEach(button => button.addEventListener("click", () => { state.filter = button.dataset.filter; renderTasks(); }));
+  document.querySelectorAll("[data-filter]").forEach(button => button.addEventListener("click", () => changeTaskHistory(() => { state.filter = button.dataset.filter; })));
+  $("phone-content").addEventListener("scroll", rememberTaskHistoryPosition, { passive: true });
+  $("task-search").addEventListener("input", event => changeTaskHistory(() => {
+    state.taskSearch = event.target.value.trim();
+    state.historyViews.delete("search");
+  }));
+  $("task-month-prev").addEventListener("click", () => shiftTaskHistoryMonth(-1));
+  $("task-month-next").addEventListener("click", () => shiftTaskHistoryMonth(1));
+  $("task-month-picker").addEventListener("click", taskMonthPicker);
+  $("task-month-current").addEventListener("click", () => setTaskHistoryMonth(localDateKey(new Date()).slice(0, 7)));
+  $("task-undated").addEventListener("click", () => changeTaskHistory(() => { state.historyUndated = true; }));
+  $("task-known-history").addEventListener("click", () => changeTaskHistory(() => { state.historyUndated = false; }));
+  $("task-history-more").addEventListener("click", () => {
+    const scroll = $("phone-content").scrollTop;
+    taskHistoryView().limit += TODO_UI.historyPage;
+    renderTasks();
+    $("phone-content").scrollTop = scroll;
+  });
+  $("task-help").addEventListener("click", () => {
+    const content = element("div", "todo-guide-content");
+    [
+      ["拆成小步", "点进度展开，每一步整行都能勾选。"],
+      ["删除与撤销", "左滑后点删除，可在底部撤销；关闭撤销提示后失效。"],
+      ["回看与重做", "已完成按月查看，搜索覆盖全部时间；重做请到详情中「重新打开」。"],
+      ["暂时放下", "放下不是删除，需要时可以找回。"],
+    ].forEach(([title, description]) => {
+      const section = element("section");
+      section.append(element("h3", "", title), element("p", "", description));
+      content.append(section);
+    });
+    content.append(taskButton("知道了", "primary-button", closeModal));
+    showModal("待办怎么用", content, "todo-guide-sheet");
+  });
+  $("close-todo-sheet").addEventListener("click", closeTaskSheet);
+  $("todo-sheet").addEventListener("cancel", event => { event.preventDefault(); closeTaskSheet(); });
+  $("todo-sheet").addEventListener("close", () => {
+    if ($("todo-sheet").open) return;
+    if (!$("modal").open && !$("page-tasks").hidden) {
+      const returnTo = state.taskEditorReturn;
+      if (returnTo?.isConnected && returnTo.getClientRects().length) returnTo.focus({ preventScroll: true });
+      else $("add-task").focus({ preventScroll: true });
+    }
+    queueMicrotask(pumpProgressPrompts);
+  });
+  $("todo-sheet").addEventListener("click", event => {
+    if (event.target !== $("todo-sheet")) return;
+    const bounds = $("todo-sheet").getBoundingClientRect();
+    if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeTaskSheet();
+  });
+  window.visualViewport?.addEventListener("resize", syncTaskViewport);
+  window.visualViewport?.addEventListener("scroll", syncTaskViewport);
+  window.addEventListener("resize", syncTaskViewport);
+  $("undo-task").addEventListener("click", undoTaskAction);
+  $("dismiss-task-undo").addEventListener("click", () => {
+    state.taskUndo = [];
+    state.taskDrafts.forEach((draft, id) => { if (id !== TODO_UI.newDraft && !state.tasks.some(task => task.id === id)) state.taskDrafts.delete(id); });
+    showTaskUndo();
+    document.querySelector(`[data-filter="${state.filter}"]`).focus();
+  });
+  document.addEventListener("pointerdown", event => { if (!event.target.closest(".task-swipe.swipe-open")) closeSwipes(); });
   document.querySelectorAll("[data-period]").forEach(button => button.addEventListener("click", () => { state.period = button.dataset.period; renderUsage(); }));
   $("timer-toggle").addEventListener("click", () => {
     const wasRunning = timer.running;

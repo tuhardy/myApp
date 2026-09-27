@@ -11,11 +11,18 @@
 - Android 倒计时可以提前结束：需用户在确认框同意，按已专注的实际整秒保存，暂停时间不计入；直接「放弃」仍不生成记录。到零由计时循环自动保存，自动路径不接受未到零。浏览器原型未改，仍只能到零或放弃。
 - Android 计时页只在未开始计时时显示模式切换与「调整/设置」时长入口，二者都直接写回项目，没有仅本次生效的临时覆盖。「调整」打开的是同一个底部面板的只调时长模式，隐藏名称、分类与模式，保存后留在计时页。
 - 待办页用「发酵 + 小路」两条规则（浏览器原型与 Android 同规则，Android 侧在 `domain/Todos.kt` 的 `TodoAging`），没有截止日期和预估时长：每件事记 `createdAt`，按日历天差（`daysBetween`，不按 24 小时整除，避免夏令时偏差）分 fresh / resting（3 天）/ stale（7 天）三档，卡片越躺越浅；已完成的事不参与发酵，未来日期按 0 天处理。
-- 浏览器原型待办页按组查看：标为重要的事跨分类自成一组置顶，其余按 `CATEGORIES`（个人成长 / 工作 / 生活）顺序分组，组标题带件数，空组不显示。已完成的事沉到各组末尾，同组内保持原有先后。组标题已说明重要或分类时，卡片上不重复同一个标签。筛选页签与分组叠加生效。Android 同规则，实现在 `TodoGrouping.group`，分类顺序由它统一提供（`UiLimits.CATEGORIES` 引用同一份），已完成的事不再单独分「待完成 / 已完成」两段，而是沉到各组末尾。
+- 用户已确认把根目录完整浏览器原型的新版待办 UI 与交互迁移到 Android；`design/focus/` 不随此次迁移改变。两端默认「待完成」，另有「已完成 / 放下的」；待完成和放下的按重要置顶、`CATEGORIES`（个人成长 / 工作 / 生活）分组，组标题不与卡片重复标签，空组不显示。Android 使用本机真实待办，不把原型示例塞入空列表。
+- 待办完成时间为 `completedAt`：浏览器用 ISO 字符串，Android 用可空毫秒时间戳 `Long?`。首次完成写入，重复完成、编辑名称不重写时间。已完成页默认本月、按本地日期分隔直接展示，不逐日折叠；过滤后整体分批加载 20 条，不是每天 20 条。浏览器规则在 `selectCompletedTasks`，Android 在 `TodoHistory.select`。左右切月与年月面板均不允许未来月份，空月可跳到最近有记录的月份。页签为当前状态总件数，月份摘要明确写「YYYY年M月 · 完成 N 件」，日期标题件数仅表示当前已加载。
+- 三个待办页签都不显示顶部重复概览，数量只放在页签，切换不因概览隐藏而跳位。统计范围是本机现存待办的当前状态：待完成/已完成均排除放下项，放下项只计入放下的；小步不另计，重新完成同一事项不累计次数，删除后不计数。页签数字不随月份、搜索、分页变化，完成时间未知项计入已完成总数但不计入任一月份。
+- 帮助入口为标题旁的轻量文字「使用指南」，右上角仅保留新增。指南使用简短底部面板，分「拆成小步 / 删除与撤销 / 回看与重做 / 暂时放下」四节，不堆叠技术说明；正常屏一屏阅读，矮屏可滚动。浏览器复用 `#modal` 的指南样式变体并在其它弹窗打开时清除变体，Android 用 `TodoGuideSheet`，均沿用现有弹窗排队机制。
+- 已完成搜索明确覆盖全部时间，匹配标题、分类、小步；搜索时隐藏月份导航，清空后恢复原月份、已加载条数与滚动位置，详情开关或切走再返回也保留位置；在搜索结果中删除或重新打开后撤销，须恢复原搜索、月份、加载数量和阅读位置。缺失或未来完成时间在「时间未记录」入口查看，搜索也可找到，不编造历史。浏览器 `completedTaskDate` 同时容忍非法字符串为未知；Android 备份新字段类型和范围严格校验，缺失或 null 合法，不把损坏值伪装成正常时间。Android `TodoUiState` 按视图保留 `LazyListState` 与加载数量，恢复备份时清除旧界面上下文。
+- 浏览器待办新建/编辑使用 `#todo-sheet`，Android 使用 `TodoEditorDialog` 底部面板，均固定保存栏、内容滚动、适配键盘。草稿按待办在内存隔离保存，取消、返回、遮罩/下拖关闭保留，保存成功后清除；浏览器刷新/Android 进程结束时草稿丢弃，但 Android 已保存的真实待办不会丢失。Android 的 `TodoDrafts` 与项目草稿一样在恢复备份时清空。专注进度提示不得覆盖正在输入的待办，须等现有面板关闭。
 - 躺久了的事只给「续一天」和「放下」两个出口。「续一天」把 `createdAt` 重置为今天，「放下」只置 `archived` 不删除，在「放下的」页签可以找回。
-- 一件事可拆最多 8 个小步，每步 1–40 字，横向小路上走过的点是实心的。点圆点切换该步走过/退回；全部走完父任务自动完成，勾掉父任务会把剩余小步一并算走过，任一步回退父任务也回到未完成。
+- 一件事可拆最多 8 个小步，每步 1–40 字；全部走完父任务自动完成，勾掉父任务会把剩余小步一并算走过。两端的小路圆点只展示进展，点进度行展开后使用至少 48px / 48dp 高的整行步骤按钮；已完成父项的对勾与步骤只读，必须显式「重新打开」并选择重做步骤，其余进度保留。已完成编辑只允许改小步名称，不允许增删小步绕过重新打开。
+- 两端待办卡片左滑仅露出删除按钮（88px / 88dp），点击才删除，滑到底不自动删除；右滑/点击收起，同一时间仅一张展开，纵向滚动不触发。浏览器卡片内左箭头键可展开，Android 提供无障碍替代操作，详情也保留删除入口。删除不追加确认，底部支持依次撤销；关闭提示或浏览器刷新/Android 进程结束清空撤销记录，后续已编辑的数据不得被旧撤销覆盖。撤销条占独立布局空间，不遮挡列表，只在待办页显示。Android 用事务返回的 `TodoChange` 记录真实 before/after/index，`undoTodo` 校验最新数据后再恢复，不能用旧的完整清单覆盖数据库。
+- 两端「小路旅程」用步骤轻弹与终点反馈表达进展。Android 必须先写库成功，再播放 680ms 勾线、终点与到站确认，随后 240ms 收拢，总计 920ms；不能把动画当作持久化成功。动效期间卡片不可操作，撤销仍可用；每次动效独立管理，撤销后重做或连续完成不能被旧回调打断。浏览器减少动态效果 / Android 系统动画缩放为 0 时直接更新，运行中切换也结束装饰动画。发酵仅淡化背景/边框，不降低标题与操作按钮可读性。
 - 小步不是独立实体，只影响待办自身进度，不产生专注记录。Android `FocusSession` / `ActiveTimer` 不再有 `taskId`、`taskTitle`，`Todo` 不再有 `estimate`；旧备份与旧库 JSON 中这些字段忽略读入，新写出数据不包含这些字段。Room 表结构不变，不需要迁移。
-- Android 的 `Todo` 带 `createdAt`（本地 `YYYY-MM-DD`）、`steps`、`archived`。旧备份缺这些字段时按「放入日期为空、没有小步、未放下」读入，不臆造历史；`createdAt` 为空按 0 天处理，保存新待办时才填今天。
+- Android 的 `Todo` 带 `createdAt`（本地 `YYYY-MM-DD`）、`steps`、`archived`、`completedAt`（可空毫秒时间戳）。旧备份缺这些字段时按「放入日期为空、没有小步、未放下、完成时间未知」读入，不臆造历史；`createdAt` 为空按 0 天处理，仅新建填今天，编辑旧事项不补日期。保存时在仓库事务中合并最新小步状态，避免关闭后重开的旧草稿覆盖已走过的步骤。
 - 专注结束立即保存时长，再提示填写文字进度和可选 0–100% 完成度；允许跳过，之后在项目详情或专注记录中补写。已有弹窗不应被结束提示覆盖，须排队等待关闭。进度草稿和记录一样仅驻留内存。
 - 每次进度保存追加历史版本；当前进度按专注结束日期选最新，补写旧记录不覆盖较新记录。用户填写的进度优先于演示进度，删除项目不删除历史专注与进度记录。
 - 专注统计位于 `#statistics`，顶部累计总览不随周期和日期筛选变化，但遵循来源筛选。自然日均按首次完成日至今天（含空闲日）计算，活跃日均只按有记录日计算；空数据均显示 0。自然日天数使用日历差，不按 24 小时除法，以免夏令时偏差。
@@ -78,7 +85,7 @@ uv run --no-project --python 3.12 --with playwright==1.55.0 --with pyee==13.0.0 
 ```
 
 - 测试覆盖计时、待办 CRUD 与重要置顶分类分组、文本安全、使用目标、弹窗、刷新重置、手机和平板布局、横屏表单及直接打开文件；也覆盖统计日期与来源筛选、真实 CSV/JSON 下载内容、分页完整导出、跨午夜和暂停时长、弹窗打开期间新增完成记录。
-- 小步圆点用 `::before` 画，按钮本体保留可点面积，否则会被全局 `button { min-width/min-height: var(--touch-target) }` 撑成大色块。
+- 浏览器小步圆点用 `span` + `::before` 仅作装饰；交互由 `.step-row` 的整行复选按钮承担，不再给小圆点绑定点击。手势测试覆盖真实鼠标拖动、CDP 触屏滑动后立即点删除、删除区纵拖/取消不删除及键盘操作。移动浏览器可能吞掉滑动后紧接的原生 click，删除按钮用受位移阈值和 touchcancel 约束的 touchend 处理短点击，并阻止后续合成点击；不能把任意 touchend 当作删除。截图验证与缩小视口测试不等同于真机软键盘验证。
 - 浏览器模拟时钟的下载后续计时场景使用独立页面隔离，避免测试中的 Blob 下载清理定时器干扰时间推进。
 - 浏览器截图输出到系统临时目录，具体位置由测试输出。
 - `pyee` 和 `greenlet` 显式固定为上述已验证版本，避免临时验证依赖漂移。
@@ -124,7 +131,8 @@ powershell -ExecutionPolicy Bypass -File .\verify.ps1 -Rich testDebugUnitTest -P
 - Robolectric 自带下载器绕过 `settings.gradle.kts` 的仓库配置，会长时间挂住。改由 Gradle 用 `robolectricRuntime` configuration 解析 `android-all-instrumented`，`prepareRobolectricJars` 拷到固定目录，再用 `robolectric.offline=true` 离线复用。这个 jar 有 150 MB，`settings.gradle.kts` 里只给 `org.robolectric` 这一个 group 走阿里云镜像，其余依赖仍走 google() / mavenCentral()。
 - jar 坐标必须和 Robolectric 内置清单完全一致，否则报 `Path is not a file`，报错里的文件名就是它要的版本。SDK 版本三处联动，改一处要同步全部：`build.gradle.kts` 的 `robolectricRuntime` 坐标、`src/test/resources/robolectric.properties` 的 `sdk`、测试类的 `@Config(sdk = [...])`。每个 SDK 一个 150 MB jar，因此统一固定 SDK 35。
 - `androidx.compose.ui:ui-test-manifest` 必须放 `debugImplementation`。它靠清单合并注入 `ComponentActivity`，放 `testImplementation` 清单不参与合并，会报 `Unable to resolve activity for Intent`。
-- 不要用 `onRoot().captureToImage()`：它走窗口级 PixelCopy 抓屏，在 Robolectric 里等不到重绘回调，固定抛 `ComposeTimeoutException`。用 `createAndroidComposeRule<ComponentActivity>()`，再 `view.draw(Canvas(bitmap))` 让根视图自己软件绘制。
+- 不要用 `onRoot().captureToImage()`：它走窗口级 PixelCopy 抓屏，在 Robolectric 里等不到重绘回调，固定抛 `ComposeTimeoutException`。用 `createAndroidComposeRule<ComponentActivity>()`，再 `view.draw(Canvas(bitmap))` 让根视图自己软件绘制。底部面板和弹窗要捕获 `ShadowDialog.getLatestDialog().window.decorView`，不能只截背后的 Activity；待办截图另有系统临时目录副本，路径由测试输出。
+- `ModalBottomSheet` 输入框自动聚焦的 `LaunchedEffect` 必须放在面板内容的组合生命周期中，不能在外部简单等一帧再调用 `FocusRequester.requestFocus()`；取消后重新打开时内部输入框可能尚未挂载，会抛 `FocusRequester is not initialized`。
 - 截图与单测通过仍不等于真机验证通过：软件绘制不覆盖真实渲染、触摸、权限和后台行为。
 - `fillMaxWidth()` / `fillMaxHeight()` 用在 `Row`/`Column` 子项里要警觉，它填的是剩余空间而不是和兄弟等分；多子项场景应改用 `weight(1f)` 或 `IntrinsicSize`。页签行就因此出过一次故障：选中项吃光宽度、其余页签被压成零宽文字竖排，而编译、单测和 lint 全是绿的。
 

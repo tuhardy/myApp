@@ -89,13 +89,24 @@
             <p class="statistics-method">统计口径：倒计时到时完成、正计时手动结束后计入。有效时长精确到秒，不含暂停和休息；分钟展示四舍五入。按本地结束日期筛选记录，时段分布再将这些记录的实际专注区间按小时拆分；日均按有记录的天数计算。</p>
           </section>
           <section class="page" id="page-tasks" aria-labelledby="tasks-heading" hidden>
-            <header class="page-header"><div><p class="overline">给想做的事，一点秩序</p><h2 id="tasks-heading">今日待办<span class="heading-dot">.</span></h2></div><button class="icon-button green" id="add-task" aria-label="新增待办"><svg class="icon"><use href="#i-plus"/></svg></button></header>
-            <div class="daily-card"><div class="daily-copy"><span class="eyebrow">ONE STEP AT A TIME</span><h3>小步前进，也很了不起</h3><p id="task-summary">今天已完成 1 / 4 件事</p></div><div class="completion-badge" id="completion-percent">25<span>%</span></div><div class="completion-track"><div id="completion-bar"></div></div></div>
-            <div class="task-tabs" aria-label="待办筛选"><button class="selected" data-filter="all" aria-pressed="true">全部 <span id="all-count">4</span></button><button data-filter="pending" aria-pressed="false">进行中</button><button data-filter="done" aria-pressed="false">已完成</button><button data-filter="archived" aria-pressed="false">放下的</button></div>
-            <div class="section-heading"><h3 id="task-list-heading">留给今天的事</h3><small>点击任务可编辑</small></div>
-            <div id="task-list" class="task-list" aria-label="待办列表"></div>
-            <button class="add-task-inline" id="add-task-inline"><svg class="icon"><use href="#i-plus"/></svg>添加一个小目标</button>
-            <div class="tip-card"><svg class="icon"><use href="#i-focus"/></svg><div><strong>躺久了会变淡</strong><p>一件事放得越久，卡片越浅。可以「续一天」让它回到眼前，也可以「放下」——那不是删除，只是承认。</p></div></div>
+            <header class="page-header todo-page-header"><div class="todo-title-group"><h2 id="tasks-heading">待办<span class="heading-dot">.</span></h2><button id="task-help" type="button" aria-haspopup="dialog" aria-controls="modal">使用指南</button></div><button class="icon-button green" id="add-task" type="button" aria-label="新增待办" aria-haspopup="dialog" aria-controls="todo-sheet"><svg class="icon"><use href="#i-plus"/></svg></button></header>
+            <div class="task-tabs" aria-label="待办筛选"><button class="selected" type="button" data-filter="pending" aria-pressed="true">待完成 <span id="pending-count">0</span></button><button type="button" data-filter="done" aria-pressed="false">已完成 <span id="done-count">0</span></button><button type="button" data-filter="archived" aria-pressed="false">放下的 <span id="archived-count">0</span></button></div>
+            <label id="task-search-wrap" hidden><span class="sr-only">搜索已完成的事·全部时间</span><input id="task-search" type="search" placeholder="搜索已完成的事·全部时间" aria-label="搜索已完成的事·全部时间" autocomplete="off"></label>
+            <div id="task-history-controls" hidden>
+              <div id="task-month-nav" aria-label="完成记录月份">
+                <button id="task-month-prev" class="icon-button back-button" type="button" aria-label="上一月"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+                <button id="task-month-picker" type="button" aria-haspopup="dialog" aria-controls="modal"><span id="task-month-label">本月</span><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+                <button id="task-month-next" class="icon-button" type="button" aria-label="下一月"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+                <button id="task-month-current" type="button">回到本月</button>
+              </div>
+              <p id="task-history-summary" role="status"></p>
+              <button id="task-undated" type="button" hidden>时间未记录</button>
+              <button id="task-known-history" type="button" hidden>返回按月查看</button>
+            </div>
+            <div class="section-heading todo-list-heading" id="task-list-intro"><h3 id="task-list-heading">留给现在的事</h3><small>小步前进，也很好</small></div>
+            <div id="task-list" class="task-list" aria-label="待办列表"><div class="empty-state"><strong>给想做的事，留个位置</strong><p>添加一件小事，从眼前的一步开始。</p></div></div>
+            <div id="task-history-footer" hidden><button id="task-history-more" type="button">查看更多</button><p id="task-history-count"></p></div>
+            <button class="add-task-inline" id="add-task-inline" type="button" aria-haspopup="dialog" aria-controls="todo-sheet"><svg class="icon"><use href="#i-plus"/></svg>添加一个小目标</button>
           </section>
           <section class="page" id="page-usage" aria-labelledby="usage-heading" hidden>
             <header class="page-header"><div><p class="overline">了解习惯，而不是责备自己</p><h2 id="usage-heading">时间足迹<span class="heading-dot">.</span></h2></div><span class="sample-tag">示例数据</span></header>
@@ -119,6 +130,7 @@
             <p class="version-note">专注助手 · 界面原型 V0.4<br>更少打扰，更多属于你的时间</p>
           </section>
         </div>
+        <div id="task-undo" role="region" aria-label="操作撤销" hidden><span id="task-undo-message" role="status"></span><button id="undo-task" type="button">撤销</button><button id="dismiss-task-undo" type="button" aria-label="关闭提示">关闭提示</button></div>
         <nav class="bottom-nav" aria-label="主导航"><button data-page="focus" class="active" aria-current="page"><span><svg class="icon"><use href="#i-focus"/></svg></span>专注</button><button data-page="tasks"><span><svg class="icon"><use href="#i-tasks"/></svg></span>待办</button><button data-page="usage"><span><svg class="icon"><use href="#i-chart"/></svg></span>用时</button><button data-page="profile"><span><svg class="icon"><use href="#i-user"/></svg></span>我的</button></nav>
         <div class="home-indicator" aria-hidden="true"></div>
       </div>
@@ -126,6 +138,13 @@
     </section>
   </main>
   <dialog id="modal" aria-labelledby="modal-title"><div class="modal-header"><span class="eyebrow">FOCUS / LIFE</span><button class="close-button" id="close-modal" aria-label="关闭弹窗">×</button></div><h2 id="modal-title"></h2><div id="modal-content"></div></dialog>
+  <dialog id="todo-sheet" aria-labelledby="todo-sheet-title">
+    <form id="todo-form">
+      <header class="todo-sheet-heading"><button id="close-todo-sheet" type="button" aria-label="关闭并保留草稿">取消</button><h2 id="todo-sheet-title">新增待办</h2><button id="save-todo-sheet" type="submit">保存</button></header>
+      <div id="todo-sheet-body"></div>
+      <p class="todo-draft-note">关闭保留本页草稿，刷新后重置。</p>
+    </form>
+  </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 </body>
 </html>

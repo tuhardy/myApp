@@ -11,6 +11,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -38,15 +39,114 @@ import com.focusassistant.app.domain.*
 import com.focusassistant.app.platform.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.ZoneId
 
 internal enum class Screen { PROJECTS, TIMER, TODOS, STATISTICS, USAGE, SETTINGS }
+
+internal object TodoUiLimits {
+    const val FINISH_HOLD_MS = 680L
+    const val FINISH_COLLAPSE_MS = 240L
+    const val STEP_PULSE_MS = 160
+    const val STEP_PULSE_SCALE = 1.22f
+    const val SWIPE_WIDTH_DP = 88
+    const val SWIPE_THRESHOLD_DP = 36
+    const val MIN_YEAR = 1900
+    const val HISTORY_HEADER_ITEMS = 2
+}
+
+internal enum class TodoFinishPhase { HOLD, EXIT }
+
+@Stable
+internal class TodoFinish(val token: Long, val beganAt: Long) {
+    var phase by mutableStateOf(TodoFinishPhase.HOLD)
+}
+
+@Stable
+internal class TodoViewState(index: Int = 0, offset: Int = 0, limit: Int = TodoHistory.PAGE_SIZE) {
+    val listState = LazyListState(index, offset)
+    var limit by mutableIntStateOf(limit)
+}
+
+internal data class TodoHistorySnapshot(
+    val month: YearMonth, val query: String, val undated: Boolean, val limit: Int, val index: Int, val offset: Int
+)
+internal data class TodoUndoEntry(val change: TodoChange, val label: String, val filter: TodoFilter, val history: TodoHistorySnapshot?)
+
+@Stable
+internal class TodoUiState {
+    @set:JvmName("assignFilter")
+    var filter by mutableStateOf(TodoFilter.PENDING)
+    var month by mutableStateOf(YearMonth.now())
+    var query by mutableStateOf("")
+    var undated by mutableStateOf(false)
+    var openSwipeId by mutableStateOf<String?>(null)
+    var reduceMotion by mutableStateOf(false)
+    val expanded = mutableStateMapOf<String, Boolean>()
+    val undo = mutableStateListOf<TodoUndoEntry>()
+    val finishing = mutableStateMapOf<String, TodoFinish>()
+    private val views = mutableStateMapOf<String, TodoViewState>()
+
+    private fun viewKey(): String = when {
+        filter != TodoFilter.DONE -> filter.name
+        query.isNotBlank() -> "search"
+        undated -> "undated"
+        else -> month.toString()
+    }
+    fun view(): TodoViewState = views.getOrPut(viewKey()) { TodoViewState() }
+    fun setFilter(value: TodoFilter) { filter = value; openSwipeId = null }
+    fun search(value: String) {
+        if (query == value) return
+        views.remove("search")
+        query = value
+        openSwipeId = null
+    }
+    fun selectMonth(value: YearMonth) {
+        if (value > YearMonth.now() || value.year < TodoUiLimits.MIN_YEAR) return
+        month = value; query = ""; undated = false; openSwipeId = null
+    }
+    fun showUndated(value: Boolean) { undated = value; openSwipeId = null }
+    fun loadMore() { view().limit += TodoHistory.PAGE_SIZE }
+    fun snapshot(): TodoHistorySnapshot? = if (filter != TodoFilter.DONE) null else view().let {
+        TodoHistorySnapshot(month, query, undated, it.limit, it.listState.firstVisibleItemIndex, it.listState.firstVisibleItemScrollOffset)
+    }
+    fun restore(snapshot: TodoHistorySnapshot) {
+        filter = TodoFilter.DONE; month = snapshot.month; query = snapshot.query; undated = snapshot.undated; openSwipeId = null
+        views[viewKey()] = TodoViewState(snapshot.index, snapshot.offset, snapshot.limit)
+    }
+    fun revealCompleted(todo: Todo, todos: List<Todo>) {
+        val date = TodoHistory.completedDate(todo)
+        filter = TodoFilter.DONE; query = ""; undated = date == null; openSwipeId = null
+        if (date != null) month = YearMonth.from(date)
+        val records = TodoHistory.select(todos, month = month, undated = undated, limit = maxOf(TodoHistory.PAGE_SIZE, todos.size))
+        val position = records.groups.flatMap { it.todos }.indexOfFirst { it.id == todo.id }
+        if (position >= 0) {
+            val limit = maxOf(view().limit, (position / TodoHistory.PAGE_SIZE + 1) * TodoHistory.PAGE_SIZE)
+            var listIndex = TodoUiLimits.HISTORY_HEADER_ITEMS
+            for (group in records.groups) {
+                listIndex++
+                val withinGroup = group.todos.indexOfFirst { it.id == todo.id }
+                if (withinGroup >= 0) {
+                    views[viewKey()] = TodoViewState(listIndex + withinGroup, 0, limit)
+                    break
+                }
+                listIndex += group.todos.size
+            }
+        }
+    }
+    fun clear() {
+        filter = TodoFilter.PENDING; month = YearMonth.now(); query = ""; undated = false; openSwipeId = null
+        views.clear(); expanded.clear(); undo.clear(); finishing.clear()
+    }
+}
 
 class NativeUiModel : ViewModel() {
     internal var screen by mutableStateOf(Screen.PROJECTS)
@@ -54,7 +154,9 @@ class NativeUiModel : ViewModel() {
     var dialog by mutableStateOf("")
     var dialogId by mutableStateOf("")
     var busy by mutableStateOf(false)
-    internal var todoFilter by mutableStateOf(TodoFilter.ALL)
+    internal val todos = TodoUiState()
+    private val todoAnimations = mutableMapOf<String, Job>()
+    private var todoAnimationToken = 0L
     var period by mutableStateOf(Period.DAY)
     var anchor by mutableStateOf(LocalDate.now())
     var recordLimit by mutableIntStateOf(UiLimits.RECORD_PAGE)
@@ -74,6 +176,37 @@ class NativeUiModel : ViewModel() {
         dialogId = ""
         if (previous == "progress-auto") screen = Screen.PROJECTS
         if (previous == "project") pendingProject = null
+    }
+    internal fun stopTodoAnimation(id: String) {
+        todoAnimations.remove(id)?.cancel()
+        todos.finishing.remove(id)
+    }
+    internal fun recordTodoChange(change: TodoChange, label: String, history: TodoHistorySnapshot?, celebrate: Boolean) {
+        val id = change.before.id
+        stopTodoAnimation(id)
+        todos.openSwipeId = null
+        val filter = when { change.before.archived -> TodoFilter.ARCHIVED; change.before.done -> TodoFilter.DONE; else -> TodoFilter.PENDING }
+        todos.undo += TodoUndoEntry(change, if (!change.before.done && change.after?.done == true) "已完成" else label, filter, history)
+        if (!celebrate || change.before.done || change.after?.done != true || todos.reduceMotion || screen != Screen.TODOS || todos.filter != TodoFilter.PENDING) return
+        val feedback = TodoFinish(++todoAnimationToken, SystemClock.elapsedRealtime())
+        todos.finishing[id] = feedback
+        todoAnimations[id] = viewModelScope.launch {
+            try {
+                delay(TodoUiLimits.FINISH_HOLD_MS)
+                if (todos.finishing[id] !== feedback) return@launch
+                feedback.phase = TodoFinishPhase.EXIT
+                delay(TodoUiLimits.FINISH_COLLAPSE_MS)
+                if (todos.finishing[id] === feedback) todos.finishing.remove(id)
+            } finally {
+                if (todoAnimations[id] === currentCoroutineContext()[Job]) todoAnimations.remove(id)
+            }
+        }
+    }
+    internal fun clearTodoUi() {
+        todoAnimations.values.toList().forEach { it.cancel() }
+        todoAnimations.clear()
+        todos.clear()
+        TodoDrafts.clear()
     }
     fun perform(action: suspend () -> Unit) {
         if (busy) return
@@ -135,6 +268,47 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
     fun startBreak(longBreak: Boolean) {
         if (state.timer != null) ui.open(if (longBreak) "break-long" else "break-short")
         else sendTimer(if (longBreak) TimerServiceCommands.LONG_BREAK else TimerServiceCommands.SHORT_BREAK)
+    }
+
+    fun closeTodoDialog() { if (ui.dialog.startsWith("todo")) ui.close() }
+    fun editTodo(todo: Todo?) { ui.todos.openSwipeId = null; ui.open("todo", todo?.id.orEmpty()) }
+    fun changeTodo(label: String, celebrate: Boolean = false, after: (TodoChange) -> Unit = {}, action: suspend () -> TodoChange?) {
+        val history = ui.todos.snapshot()
+        ui.perform {
+            val change = action()
+            if (change != null) {
+                ui.recordTodoChange(change, label, history, celebrate)
+                after(change)
+            }
+        }
+    }
+    fun deleteTodo(todo: Todo) { changeTodo("已删除", after = { closeTodoDialog() }) { repository.deleteTodo(todo.id) } }
+    fun restoreTodo(todo: Todo) {
+        changeTodo("已找回", after = { change ->
+            closeTodoDialog()
+            val restored = requireNotNull(change.after)
+            if (restored.done) ui.todos.revealCompleted(restored, repository.state.value.todos) else ui.todos.setFilter(TodoFilter.PENDING)
+        }) { repository.archiveTodo(todo.id, false) }
+    }
+    fun undoTodo() {
+        val entry = ui.todos.undo.lastOrNull() ?: return
+        ui.perform {
+            val restored = repository.undoTodo(entry.change)
+            if (ui.todos.undo.lastOrNull() == entry) ui.todos.undo.removeAt(ui.todos.undo.lastIndex)
+            if (!restored) ui.message("这件事之后已有修改，为避免覆盖，未撤销该操作。")
+            else {
+                ui.stopTodoAnimation(entry.change.before.id)
+                ui.todos.setFilter(entry.filter)
+                if (entry.filter == TodoFilter.DONE) {
+                    if (entry.history != null) ui.todos.restore(entry.history)
+                    else ui.todos.revealCompleted(entry.change.before, repository.state.value.todos)
+                }
+            }
+        }
+    }
+    fun dismissTodoUndo() {
+        ui.todos.undo.clear()
+        TodoDrafts.removeMissing(state.todos.map { it.id }.toSet())
     }
 
     val jsonLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
@@ -245,13 +419,17 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                         currentProject?.let { project -> ui.perform { repository.saveProject(project.copy(timerMode = mode)) } }
                     }, { currentProject?.let { ui.open("project-duration", it.id) } },
                         { if (currentProject != null) sendTimer(TimerServiceCommands.START) }, { sendTimer(TimerServiceCommands.PAUSE) }, { sendTimer(TimerServiceCommands.RESUME) }, { sendTimer(TimerServiceCommands.FINISH) }, { ui.open("finish-early") }, { ui.open("discard") }, { startBreak(false) }, { startBreak(true) })
-                    Screen.TODOS -> TodosScreen(state, ui.todoFilter, today, { ui.todoFilter = it }, { ui.open("todo") }, { ui.open("todo", it.id) },
-                        { todo -> ui.perform { repository.toggleTodoDone(todo.id) } },
-                        { todo, step -> ui.perform { repository.toggleTodoStep(todo.id, step.id) } },
-                        { todo -> ui.perform { repository.renewTodo(todo.id); ui.message("「${todo.title}」回到今天。") } },
-                        { todo -> ui.perform { repository.archiveTodo(todo.id, true); ui.message("「${todo.title}」已放下，可在「放下的」里找回。") } },
-                        { todo -> ui.perform { repository.archiveTodo(todo.id, false); ui.todoFilter = TodoFilter.ALL; ui.message("「${todo.title}」回到清单。") } },
-                        { ui.open("delete-todo", it.id) })
+                    Screen.TODOS -> TodosScreen(
+                        state = state, ui = ui.todos, today = today, now = System.currentTimeMillis(), busy = ui.busy,
+                        onCreate = { editTodo(null) }, onEdit = ::editTodo,
+                        onDetails = { ui.todos.openSwipeId = null; ui.open("todo-detail", it.id) },
+                        onComplete = { todo -> changeTodo("已完成", celebrate = true) { repository.completeTodo(todo.id) } },
+                        onToggleStep = { todo, step -> changeTodo(if (step.done) "已退回一步" else "走过了一步", celebrate = true) { repository.toggleTodoStep(todo.id, step.id) } },
+                        onRenew = { todo -> changeTodo("已续到今天") { repository.renewTodo(todo.id) } },
+                        onArchive = { todo -> changeTodo("已放下") { repository.archiveTodo(todo.id, true) } },
+                        onRestore = ::restoreTodo, onDelete = ::deleteTodo, onUndo = ::undoTodo, onDismissUndo = ::dismissTodoUndo,
+                        onPickMonth = { ui.open("todo-month") }, onHelp = { ui.open("todo-help") }
+                    )
                     Screen.STATISTICS -> StatisticsScreen(state, ui.period, ui.anchor, ui.recordLimit, { ui.period = it; ui.recordLimit = UiLimits.RECORD_PAGE }, {
                         ui.anchor = shiftPeriod(ui.period, ui.anchor, -1); ui.recordLimit = UiLimits.RECORD_PAGE
                     }, { ui.anchor = shiftPeriod(ui.period, ui.anchor, 1); ui.recordLimit = UiLimits.RECORD_PAGE }, { ui.anchor = LocalDate.now(); ui.period = Period.DAY }, {
@@ -276,6 +454,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
 
         val dialogProject = ui.pendingProject ?: state.projects.find { it.id == ui.dialogId }
         val session = state.sessions.find { it.id == ui.dialogId }
+        val dialogTodo = state.todos.find { it.id == ui.dialogId }
         when (ui.dialog) {
             "project", "project-duration" -> ProjectEditorDialog(dialogProject, ui.busy, durationOnly = ui.dialog == "project-duration", onDismiss = { ui.close() }) { project ->
                 if (state.timer?.projectId == project.id) { ui.pendingProject = project; ui.open("save-project-confirm", project.id) }
@@ -290,10 +469,44 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                     }
                 }
             }
-            "todo" -> TodoEditorDialog(state.todos.find { it.id == ui.dialogId }, ui.busy, { ui.close() },
-                onDelete = { todo -> ui.open("delete-todo", todo.id) },
-                onRestore = { todo -> ui.perform { repository.archiveTodo(todo.id, false); ui.todoFilter = TodoFilter.ALL; ui.close(); ui.message("「${todo.title}」回到清单。") } }
-            ) { todo -> ui.perform { repository.saveTodo(todo); ui.close() } }
+            "todo" -> {
+                if (dialogTodo == null && ui.dialogId.isNotEmpty()) InformationDialog("这件事已不在清单中", listOf("待办可能已在其他窗口删除，请返回清单查看。"), { ui.close() })
+                else TodoEditorDialog(dialogTodo, ui.busy, { ui.close() }, onDelete = ::deleteTodo, onRestore = ::restoreTodo) { todo ->
+                    val draftId = ui.dialogId.takeIf { it.isNotEmpty() }
+                    ui.perform {
+                        repository.saveTodo(todo, existing = draftId != null)
+                        TodoDrafts.remove(draftId)
+                        val saved = repository.state.value.todos.find { it.id == todo.id }
+                        when {
+                            saved?.archived == true -> ui.todos.setFilter(TodoFilter.ARCHIVED)
+                            saved?.done == true && dialogTodo?.done != true -> ui.todos.revealCompleted(saved, repository.state.value.todos)
+                            saved?.done == true -> ui.todos.setFilter(TodoFilter.DONE)
+                            else -> ui.todos.setFilter(TodoFilter.PENDING)
+                        }
+                        ui.close()
+                    }
+                }
+            }
+            "todo-detail" -> {
+                if (dialogTodo == null) InformationDialog("这件事已不在清单中", listOf("可以使用底部撤销恢复刚删除的待办。"), { ui.close() })
+                else TodoDetailsDialog(dialogTodo, ui.busy, onDismiss = { ui.close() }, onEdit = { editTodo(dialogTodo) },
+                    onReopen = { ui.open("todo-reopen", dialogTodo.id) }, onDelete = { deleteTodo(dialogTodo) }, onRestore = { restoreTodo(dialogTodo) },
+                    onImportant = { changeTodo("已更新重要标记", after = { closeTodoDialog() }) { repository.setTodoImportant(dialogTodo.id, !dialogTodo.important) } },
+                    onArchive = { changeTodo("已放下", after = { closeTodoDialog() }) { repository.archiveTodo(dialogTodo.id, true) } })
+            }
+            "todo-reopen" -> {
+                if (dialogTodo == null) InformationDialog("这件事已不在清单中", listOf("待办可能已被删除，请返回清单查看。"), { ui.close() })
+                else TodoReopenDialog(dialogTodo, ui.busy, onDismiss = { ui.open("todo-detail", dialogTodo.id) }) { steps ->
+                    changeTodo("已重新打开", after = {
+                        ui.todos.setFilter(TodoFilter.PENDING)
+                        ui.todos.expanded[dialogTodo.id] = true
+                        ui.close()
+                    }) { repository.reopenTodo(dialogTodo.id, steps) }
+                }
+            }
+            "todo-month" -> TodoMonthDialog(ui.todos.month, TodoHistory.select(state.todos, now = System.currentTimeMillis()).months, today,
+                onDismiss = { ui.close() }, onSelect = { month -> ui.todos.selectMonth(month); ui.close() })
+            "todo-help" -> TodoGuideSheet(onDismiss = { ui.close() })
             "progress-auto", "progress-edit" -> if (session != null) ProgressEditorDialog(context, session,
                 Statistics.latestForSession(state.progress, session.id) ?: Statistics.latestProgress(state.progress, session.projectId), ui.busy, { ui.close() }) { note, percent ->
                     ui.perform { repository.saveProgress(session.id, note, percent); ProgressDrafts.remove(appContext, session.id); ui.close() }
@@ -327,15 +540,14 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                 val backup = ui.pendingBackup
                 if (backup == null) InformationDialog("重新选择备份", listOf("备份预览已失效，请重新选择文件。未修改任何本地数据。"), { ui.close() })
                 else ConfirmDialog("确认覆盖本机数据？", "备份包含 ${backup.projects.size} 个项目、${backup.todos.size} 个待办、${backup.sessions.size} 次专注和 ${backup.progress.size} 条进度。恢复会替换当前数据，不合并。建议先导出当前备份。", ui.busy, { ui.pendingBackup = null; ui.close() }) {
-                    ui.perform { repository.restoreBackup(backup); ProgressDrafts.clear(appContext); ProjectDrafts.clear(); ui.pendingBackup = null; ui.projectId = null; ui.close(); ui.message("备份已恢复。"); refresh++ }
+                    ui.perform { repository.restoreBackup(backup); ProgressDrafts.clear(appContext); ProjectDrafts.clear(); ui.clearTodoUi(); ui.pendingBackup = null; ui.projectId = null; ui.close(); ui.message("备份已恢复。"); refresh++ }
                 }
             }
-            "delete-project", "delete-todo", "discard", "finish-early", "switch-project", "save-project-confirm", "break-short", "break-long" -> {
+            "delete-project", "discard", "finish-early", "switch-project", "save-project-confirm", "break-short", "break-long" -> {
                 val kind = ui.dialog
                 val targetId = ui.dialogId
                 val message = when (kind) {
                     "delete-project" -> "删除项目会保留专注记录和进度历史。如果正在为此项目计时，当前未保存的计时会被放弃。"
-                    "delete-todo" -> "待办及其小步将被删除，无法撤销。"
                     "finish-early" -> "倒计时还没到零。提前结束会按已专注的实际时长保存为记录，暂停时间不计入。"
                     else -> "当前未完成的计时会被放弃，不计入统计。如需保留正计时，请先取消，再结束并记录。"
                 }
@@ -350,7 +562,6 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                     ui.perform {
                         when (kind) {
                             "delete-project" -> { if (repository.state.value.timer?.projectId == targetId) repository.discardTimer(); repository.deleteProject(targetId); if (ui.projectId == targetId) ui.projectId = null; ui.screen = Screen.PROJECTS }
-                            "delete-todo" -> repository.deleteTodo(targetId)
                             "discard" -> repository.discardTimer()
                             "finish-early" -> sendTimer(TimerServiceCommands.FINISH_EARLY)
                             "switch-project" -> { repository.discardTimer(); ui.projectId = targetId; ui.screen = Screen.TIMER }

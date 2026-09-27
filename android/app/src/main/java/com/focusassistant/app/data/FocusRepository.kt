@@ -89,29 +89,54 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
             current.copy(projects = current.projects.filterNot { it.id == id })
         }
     }
-    suspend fun saveTodo(todo: Todo) {
+    suspend fun saveTodo(todo: Todo, existing: Boolean = false) {
         // 新建的事从今天开始发酵；已有的事保留原本的放入日期。
-        val stored = if (todo.createdAt.isBlank()) todo.copy(createdAt = today().toString()) else todo
-        Validation.todo(stored)
-        mutate { it.copy(todos = upsert(it.todos, stored) { item -> item.id }) }
-    }
-    suspend fun deleteTodo(id: String) { mutate { it.copy(todos = it.todos.filterNot { todo -> todo.id == id }) } }
-    /** 勾掉父任务把剩余小步一并算走过，任一步回退父任务也回到未完成。 */
-    suspend fun toggleTodoDone(id: String) = updateTodo(id, TodoAging::toggleDone)
-    suspend fun toggleTodoStep(id: String, stepId: String) = updateTodo(id) { TodoAging.toggleStep(it, stepId) }
-    /** 「续一天」把放入日期重置为今天，让它回到眼前。 */
-    suspend fun renewTodo(id: String) = updateTodo(id) { it.copy(createdAt = today().toString()) }
-    /** 「放下」只置 archived 不删除，之后可以找回。 */
-    suspend fun archiveTodo(id: String, archived: Boolean) = updateTodo(id) {
-        if (archived) it.copy(archived = true) else it.copy(archived = false, createdAt = today().toString())
-    }
-    private suspend fun updateTodo(id: String, change: (Todo) -> Todo) {
         mutate { current ->
-            val todo = current.todos.find { it.id == id } ?: return@mutate current
-            val next = change(todo)
-            Validation.todo(next)
-            current.copy(todos = current.todos.map { if (it.id == id) next else it })
+            val previous = current.todos.find { it.id == todo.id }
+            require(!existing || previous != null) { "这件待办已被删除，未保存修改" }
+            val stored = TodoEditing.merge(previous, todo, today(), System.currentTimeMillis())
+            Validation.todo(stored)
+            current.copy(todos = upsert(current.todos, stored) { it.id })
         }
+    }
+    suspend fun deleteTodo(id: String): TodoChange? = updateTodo(id) { null }
+    /** 勾掉父任务把剩余小步一并算走过，已完成项必须明确选择重新打开。 */
+    suspend fun completeTodo(id: String): TodoChange? = updateTodo(id) { TodoAging.complete(it) }
+    suspend fun toggleTodoDone(id: String): TodoChange? = completeTodo(id)
+    suspend fun toggleTodoStep(id: String, stepId: String): TodoChange? = updateTodo(id) { TodoAging.toggleStep(it, stepId) }
+    /** 「续一天」把放入日期重置为今天，让它回到眼前。 */
+    suspend fun renewTodo(id: String): TodoChange? = updateTodo(id) { it.copy(createdAt = today().toString()) }
+    /** 「放下」只置 archived 不删除，之后可以找回。 */
+    suspend fun archiveTodo(id: String, archived: Boolean): TodoChange? = updateTodo(id) {
+        if (it.archived == archived) it else if (archived) it.copy(archived = true)
+        else it.copy(archived = false, createdAt = today().toString())
+    }
+    suspend fun setTodoImportant(id: String, important: Boolean): TodoChange? = updateTodo(id) { it.copy(important = important) }
+    suspend fun reopenTodo(id: String, redoStepIds: Set<String>): TodoChange? = updateTodo(id) { TodoAging.reopen(it, redoStepIds) }
+    suspend fun undoTodo(change: TodoChange): Boolean {
+        var restored = false
+        mutate { current ->
+            val todos = TodoUndo.apply(current.todos, change) ?: return@mutate current
+            Validation.todo(change.before)
+            restored = true
+            current.copy(todos = todos)
+        }
+        return restored
+    }
+    private suspend fun updateTodo(id: String, change: (Todo) -> Todo?): TodoChange? {
+        var result: TodoChange? = null
+        mutate { current ->
+            val index = current.todos.indexOfFirst { it.id == id }
+            if (index < 0) return@mutate current
+            val todo = current.todos[index]
+            val next = change(todo)
+            if (next == todo) return@mutate current
+            next?.let(Validation::todo)
+            result = TodoChange(todo, next, index)
+            current.copy(todos = if (next == null) current.todos.filterNot { it.id == id }
+                else current.todos.map { if (it.id == id) next else it })
+        }
+        return result
     }
     private fun today() = java.time.LocalDate.now()
     suspend fun saveSettings(settings: AppSettings) {

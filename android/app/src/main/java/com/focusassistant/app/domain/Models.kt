@@ -15,7 +15,8 @@ data class TodoStep(val id: String, val title: String, val done: Boolean = false
 data class Todo(
     val id: String, val title: String, val category: String, val important: Boolean = false,
     val done: Boolean = false,
-    val createdAt: String = "", val steps: List<TodoStep> = emptyList(), val archived: Boolean = false
+    val createdAt: String = "", val steps: List<TodoStep> = emptyList(), val archived: Boolean = false,
+    val completedAt: Long? = null
 )
 data class TimeSegment(val startedAt: Long, val endedAt: Long)
 data class FocusSession(
@@ -60,6 +61,7 @@ data class TimerEvent(val kind: TimerEventKind, val projectTitle: String, val se
 data class BackupData(val projects: List<Project>, val todos: List<Todo>, val sessions: List<FocusSession>, val progress: List<ProgressEntry>, val settings: AppSettings)
 
 object Validation {
+    const val MAX_TIMESTAMP_MS = 253402300799999L
     const val MAX_TITLE = 80
     const val MAX_NOTE = 2000
     /** 一件事最多 8 个小步，每步 1–40 字。 */
@@ -86,6 +88,7 @@ object Validation {
         require(value.id.isNotBlank() && value.id.length <= 128) { "待办标识无效" }
         require(value.title.isNotBlank() && value.title.length <= MAX_TITLE && value.category.length <= MAX_TITLE) { "待办名称或分类无效" }
         require(value.createdAt.isBlank() || DATE_KEY.matches(value.createdAt)) { "放入日期须为 YYYY-MM-DD" }
+        require(value.completedAt == null || value.completedAt in 0..MAX_TIMESTAMP_MS) { "完成日期无效" }
         require(value.steps.size <= MAX_STEPS) { "每件事最多 $MAX_STEPS 个小步" }
         val ids = value.steps.map { it.id }
         require(ids.all { it.isNotBlank() && it.length <= 128 } && ids.toSet().size == ids.size) { "小步标识缺失或重复" }

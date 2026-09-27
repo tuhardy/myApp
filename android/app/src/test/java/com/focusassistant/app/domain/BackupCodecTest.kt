@@ -97,10 +97,71 @@ class BackupCodecTest {
         val restored = BackupCodec.decode(BackupCodec.encode(state().copy(todos = listOf(rich))))
         assertEquals(rich, restored.todos.single())
     }
+    @Test fun completionTimestampRoundTripsInBackupAndStoredJson() {
+        val values = listOf<Long?>(null, 0L, 1L, Int.MAX_VALUE.toLong() + 1, Validation.MAX_TIMESTAMP_MS)
+        values.forEachIndexed { index, time ->
+            val todo = Todo("t$index", "已完成", "工作", important = true, done = true,
+                createdAt = "2026-03-11", steps = listOf(TodoStep("a", "一步", true)),
+                archived = index % 2 == 0, completedAt = time)
+            val stored = JsonCodec.todo(todo)
+            assertTrue(stored.has("completedAt"))
+            if (time == null) assertTrue(stored.isNull("completedAt"))
+            else assertEquals(time.toLong(), stored.getLong("completedAt"))
+            assertEquals(todo, JsonCodec.readTodo(JSONObject(stored.toString())))
+            val backup = BackupCodec.decode(BackupCodec.encode(state().copy(todos = listOf(todo))))
+            assertEquals(todo, backup.todos.single())
+            assertEquals(1, reencode(backup).getInt("version"))
+            assertBackupHasNoLegacyFields(reencode(backup))
+        }
+    }
+    @Test fun missingAndNullCompletionTimesRemainUnknownForLegacyDoneTodos() {
+        listOf(false, true).forEach { explicitNull ->
+            val root = root()
+            val todo = root.getJSONArray("todos").getJSONObject(0).put("done", true)
+            if (explicitNull) todo.put("completedAt", JSONObject.NULL) else todo.remove("completedAt")
+            val stored = JsonCodec.readTodo(JSONObject(todo.toString()))
+            assertTrue(stored.done)
+            assertNull(stored.completedAt)
+            val restored = BackupCodec.decode(root.toString())
+            assertEquals(stored, restored.todos.single())
+            val written = reencode(restored).getJSONArray("todos").getJSONObject(0)
+            assertTrue(written.has("completedAt"))
+            assertTrue(written.isNull("completedAt"))
+        }
+    }
+    @Test fun validFutureCompletionIsPreservedButClassifiedAsUnknown() {
+        val now = 1000L
+        val future = Todo("future", "未来时间", "生活", done = true, completedAt = now + 1)
+        val restored = BackupCodec.decode(BackupCodec.encode(state().copy(todos = listOf(future)))).todos.single()
+        assertEquals(future, restored)
+        assertNull(TodoHistory.completedDate(restored, now, java.time.ZoneId.of("UTC")))
+        assertEquals(LocalDate.of(1970, 1, 1), TodoHistory.completedDate(restored, now + 1, java.time.ZoneId.of("UTC")))
+    }
+    @Test fun completionTimestampRejectsWrongTypesAndOutOfRangeValues() {
+        val invalid = listOf<Any>("1000", "", true, false, 1.5, -1L,
+            Validation.MAX_TIMESTAMP_MS + 1, Long.MIN_VALUE, Long.MAX_VALUE,
+            JSONObject(), org.json.JSONArray())
+        invalid.forEach { value ->
+            val root = root()
+            val todo = root.getJSONArray("todos").getJSONObject(0).put("completedAt", value)
+            assertThrows(IllegalArgumentException::class.java) { JsonCodec.readTodo(todo) }
+            rejected(root)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            JsonCodec.readTodo(JsonCodec.todo(state().todos.single()).put("completedAt", 1000.0))
+        }
+        listOf(-1L, Validation.MAX_TIMESTAMP_MS + 1, Long.MIN_VALUE, Long.MAX_VALUE).forEach { time ->
+            val todo = state().todos.single().copy(completedAt = time)
+            assertThrows(IllegalArgumentException::class.java) { Validation.todo(todo) }
+            assertThrows(IllegalArgumentException::class.java) {
+                BackupCodec.validate(BackupData(emptyList(), listOf(todo), emptyList(), emptyList(), AppSettings()))
+            }
+        }
+    }
     @Test fun olderBackupsWithoutAgingFieldsLoadWithoutInventingHistory() {
         val root = root()
         val todo = root.getJSONArray("todos").getJSONObject(0)
-        todo.remove("createdAt"); todo.remove("steps"); todo.remove("archived")
+        todo.remove("createdAt"); todo.remove("steps"); todo.remove("archived"); todo.remove("completedAt")
         todo.put("estimate", 3)
         root.getJSONArray("sessions").getJSONObject(0).put("taskId", "t").put("taskTitle", "待办快照")
         val backup = BackupCodec.decode(root.toString())
