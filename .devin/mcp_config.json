@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@playwright/mcp@0.0.80",
+        "--browser",
+        "msedge",
+        "--headless"
+      ]
+    }
+  }
+}
