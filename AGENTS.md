@@ -145,6 +145,12 @@ powershell -ExecutionPolicy Bypass -File .\verify.ps1 -Rich testDebugUnitTest -P
 - 新建/编辑项目采用独立底部面板 `#project-sheet`，以文字单选按钮切换计时模式，不使用下拉框。下划线先向新位置拉伸再收拢（320ms），快速反向从当前位置接续，减少动画模式直接切换。正计时默认显示不限时，按需展开目标输入；各模式、各项目草稿独立保留，关闭/Esc/遮罩/下拖不丢草稿，保存成功后清除对应草稿，刷新仍重置。
 - 若需本机服务，在 `design/focus/` 目录运行 `uv run --no-project --python 3.12 python -m http.server 5174 --bind 127.0.0.1`。
 
+## GitHub Pages
+
+- `.github/workflows/pages.yml` 在 `main` 推送（仅原型相关文件变化）或手动触发时运行：先跑 `node --check` 与 `node --test model.test.cjs`，再只把 `index.html`、`styles.css`、`model.js`、`app.js` 和 `design/focus/` 拷到 `_site` 发布，`android/`、`AGENTS.md`、测试脚本不上站。
+- 仓库 Settings → Pages → Source 须选「GitHub Actions」。站点地址 `https://tuhardy.github.io/myApp/`，设计稿在 `/design/focus/`。原型新增运行时文件时要同步加进工作流的 `cp` 与 `paths`。
+- 未装 `uv` 时可用 `python -m http.server 5173 --bind 127.0.0.1` 起本机预览。
+
 ## 日记（浏览器原型 + Android）
 
 - Android 已迁移（0.6.0 / versionCode 13）：规则在 `domain/Diary.kt` 的 `DiaryRules`（校验、`parseDateQuery`、`select`、回收站、`unreferenced`），界面在 `ui/DiaryScreens.kt`（`DiaryUiState` 四视图、`DiaryDrafts`、首页/详情/编辑/回收站），附件存储在 `data/DiaryFiles.kt`，录音/播放/缩略图在 `platform/DiaryMedia.kt`，单测 `DiaryTest.kt`。
