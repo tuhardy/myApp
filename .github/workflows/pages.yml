@@ -9,7 +9,6 @@ on:
       - model.js
       - app.js
       - model.test.cjs
-      - design/**
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -37,9 +36,8 @@ jobs:
           node --test model.test.cjs
       - name: Assemble site
         run: |
-          mkdir -p _site/design
+          mkdir -p _site
           cp index.html styles.css model.js app.js _site/
-          cp -r design/focus _site/design/
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
