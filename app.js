@@ -5,7 +5,7 @@
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv,
     initialFocusItems, validateFocusItem, focusHourDistribution, initialProgressEntries, validateProgress,
     latestProjectProgress, allTimeFocusSummary } = FocusModel;
-  const UI = Object.freeze({ tickMs: 250, toastMs: 3400, ringRadius: 122, initialGoalMinutes: 240, maxSessionDots: 8,
+  const UI = Object.freeze({ tickMs: 250, toastMs: 3400, ringRadius: 118, tickRadius: 134, initialGoalMinutes: 240, gaugeTicks: 20, minutesPerHour: 60, finishRevealMs: 900,
     recordPageSize: 20, exportReleaseMs: 60000, weekDays: 7, minYear: 1900, maxYear: 2100,
     heatLevels: 4, chartAxisLabels: 5, fullCircle: 360, jsonIndent: 2 });
   const CATEGORY_COLORS = ["#c44e22", "#e8aa84", "#8b8a98", "#7d97b5"];
@@ -68,6 +68,7 @@
 
   function showModal(title, content, variant = "") {
     $("modal").classList.toggle("todo-guide-sheet", variant === "todo-guide-sheet");
+    $("modal").classList.remove("after-finish");
     state.progressDialogRecord = null;
     state.progressReturnHome = false;
     $("modal-title").textContent = title;
@@ -121,7 +122,7 @@
     PAGES.forEach(name => { $(`page-${name}`).hidden = name !== safePage; });
     syncDiaryChrome();
     if (safePage === "statistics") renderStatistics();
-    if (safePage === "focus") renderProjectList();
+    if (safePage === "focus") { renderFocusOverview(); renderProjectList(); }
     if (safePage === "tasks") renderTasks();
     if (safePage === "diary") renderDiary();
     closeSwipes();
@@ -172,18 +173,33 @@
     $("timer-time").textContent = formatTime(seconds);
     $("timer-time").setAttribute("aria-label", isCountup ? "已专注时间" : "剩余时间");
     const circumference = 2 * Math.PI * UI.ringRadius;
+    const tickCircumference = 2 * Math.PI * UI.tickRadius;
     const progress = Math.min(1, timer.elapsedMs / timer.totalMs);
+    const visible = isCountup ? progress : 1 - progress;
     $("ring-progress").style.strokeDasharray = circumference;
-    $("ring-progress").style.strokeDashoffset = circumference * (isCountup ? 1 - progress : progress);
+    $("ring-progress").style.strokeDashoffset = circumference * (1 - visible);
+    $("ring-lit-arc").style.strokeDasharray = tickCircumference;
+    $("ring-lit-arc").style.strokeDashoffset = tickCircumference * (1 - visible);
+    $("ring-head").style.transform = `rotate(${visible * UI.fullCircle}deg)`;
+    const phase = timer.completed ? "completed" : timer.running ? "running" : timer.hasProgress ? "paused" : "idle";
+    if ($("timer-area").dataset.state !== phase) $("timer-area").dataset.state = phase;
     $("timer-phase").textContent = timer.completed ? "这一段，已记录" : timer.mode !== "focus" ? MODE_NAMES[timer.mode]
       : isCountup && timer.targetReached ? "目标已达成，继续也很好" : timer.running ? "正在专注，不负当下" : "把节奏，交还给自己";
-    $("timer-caption").textContent = isCountup ? "从零累加 · 手动结束后记录" : "按设定时长倒数 · 到时完成";
+    const remainingMs = Math.max(0, timer.totalMs - timer.elapsedMs);
+    const minuteMs = LIMITS.secondsPerMinute * LIMITS.millisecondsPerSecond;
+    $("timer-caption").textContent = timer.completed ? (timer.mode === "focus" ? "时长已保存" : "休息好了，再开始下一段")
+      : !timer.running && !timer.hasProgress ? (isCountup ? `从零累加 · ${currentFocusItem().durationMinutes} 分钟目标后继续` : timer.mode === "focus" ? "到时自动完成并记录" : "休息不计入专注统计")
+      : !timer.running ? "已暂停 · 暂停时间不计入"
+      : isCountup ? (timer.targetReached ? "完成后点「结束并记录」" : `还差 ${Math.ceil(remainingMs / minuteMs)} 分钟达到目标`)
+      : `预计 ${clockLabel(new Date(Date.now() + remainingMs))} 结束`;
+    $("timer-heading").textContent = timer.mode === "focus" ? "专注计时" : MODE_NAMES[timer.mode];
+    if ($("page-timer").dataset.dial !== timer.mode) $("page-timer").dataset.dial = timer.mode;
     $("timer-toggle-icon").setAttribute("href", timer.running ? "#i-pause" : "#i-play");
     $("timer-toggle-label").textContent = timer.running ? "暂停计时" : timer.completed ? "再来一段" : timer.hasProgress ? "继续计时" : `开始${MODE_NAMES[timer.mode]}`;
     $("timer-finish").hidden = !isCountup || timer.completed || !timer.hasProgress;
     $("timer-finish").disabled = timer.elapsedSeconds < 1;
-    $("focus-config-summary").textContent = timer.mode !== "focus" ? `${MODE_NAMES[timer.mode]} · ${timer.durations[timer.mode]} 分钟，不计入专注统计`
-      : `${itemDescription(currentFocusItem())} · ${isCountup ? "达到目标提示后继续" : "到时自动完成"}`;
+    $("focus-config-summary").hidden = timer.mode === "focus";
+    $("focus-config-summary").textContent = `${MODE_NAMES[timer.mode]} · ${timer.durations[timer.mode]} 分钟，不计入专注统计`;
     document.querySelectorAll("[data-mode]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.mode === timer.mode)));
     document.querySelectorAll("[data-timing-mode]").forEach(button => {
       const selected = button.dataset.timingMode === timer.timerMode;
@@ -199,12 +215,42 @@
 
   function renderFocusOverview() {
     const now = new Date();
-    const summary = focusSummary(selectFocusRecords(state.records, { period: "day", anchor: now }));
+    const records = selectFocusRecords(state.records, { period: "day", anchor: now });
+    const summary = focusSummary(records);
     $("focus-minutes").textContent = numberLabel(summary.minutes);
     $("focus-sessions").textContent = summary.count;
-    const dots = Array.from({ length: Math.min(summary.count + 1, UI.maxSessionDots) }, (_, index) => element("i", index < summary.count ? "" : "empty"));
-    $("session-dots").replaceChildren(...dots);
     state.overviewDay = localDateKey(now);
+    $("focus-date").textContent = `${now.getMonth() + 1}月${now.getDate()}日 ${now.toLocaleDateString("zh-CN", { weekday: "short" })}`;
+    renderTodayRibbon(records, now);
+  }
+
+  function renderTodayRibbon(records, now) {
+    const { start, end } = periodRange("day", now);
+    const dayStart = start.getTime();
+    const dayMs = end.getTime() - dayStart;
+    const spans = records.flatMap(record => (record.segments?.length ? record.segments : [record])
+      .map(segment => [Math.max(dayStart, Date.parse(segment.startedAt)), Math.min(end.getTime(), Date.parse(segment.endedAt))])
+      .filter(([from, to]) => to > from))
+      .sort((left, right) => left[0] - right[0]);
+    const marks = spans.map(([from, to], index) => {
+      const mark = element("i");
+      mark.style.setProperty("--i", index);
+      mark.style.left = `${(from - dayStart) / dayMs * 100}%`;
+      mark.style.width = `${(to - from) / dayMs * 100}%`;
+      return mark;
+    });
+    const extras = spans.length ? [] : [element("span", "today-empty", "今天还空着，从一个项目开始")];
+    $("today-ribbon").replaceChildren(...marks, ...extras, element("b", "today-now"));
+    $("today-ribbon").setAttribute("aria-label", spans.length
+      ? `今天的专注时段：${spans.map(([from, to]) => `${clockLabel(new Date(from))} 至 ${clockLabel(new Date(to))}`).join("，")}`
+      : "今天还没有专注记录");
+    updateTodayNow(now);
+  }
+
+  function updateTodayNow(now = new Date()) {
+    if (localDateKey(now) !== state.overviewDay && state.overviewDay) return renderFocusOverview();
+    const { start, end } = periodRange("day", now);
+    $("today-ribbon").style.setProperty("--now", `${(now - start) / (end - start) * 100}%`);
   }
 
   function sessionTime() {
@@ -343,13 +389,29 @@
     if ($("resume-session-caption").textContent !== caption) $("resume-session-caption").textContent = caption;
   }
 
-  function openProject(item) {
-    const open = () => {
+  function reducedMotion() {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  function morphTo(direction, update, source = null) {
+    if (!document.startViewTransition || reducedMotion() || document.hidden) return update();
+    const root = document.documentElement;
+    if (source) source.style.viewTransitionName = "focus-project";
+    root.classList.add(`vt-${direction}`);
+    const transition = document.startViewTransition(() => {
+      if (source) source.style.viewTransitionName = "";
+      update();
+    });
+    transition.finished.finally(() => root.classList.remove(`vt-${direction}`));
+  }
+
+  function openProject(item, card = null) {
+    const open = (source = null) => morphTo("forward", () => {
       if (item.id !== state.selectedFocusItem) applyFocusItem(item);
       navigate("timer");
-    };
-    if (item.id === state.selectedFocusItem) open();
-    else guardedTimerChange(open, "切换学习项目会重置当前计时。");
+    }, source);
+    if (item.id === state.selectedFocusItem || timer.completed || (!timer.running && !timer.hasProgress)) open(card);
+    else guardedTimerChange(() => open(), "切换学习项目会重置当前计时。");
   }
 
   function renderProjectList() {
@@ -358,15 +420,45 @@
       const summary = focusSummary(records);
       const latest = currentProjectProgress(item.id);
       const pending = records.filter(record => record.source === "session" && !latestRecordProgress(record.id));
-      const card = element("article", "project-card");
+      const isCurrent = item.id === state.selectedFocusItem;
+      const live = isCurrent && timer.mode === "focus" && !timer.completed ? timer.running ? "running" : timer.hasProgress ? "paused" : "" : "";
+      const card = element("article", `project-card${isCurrent ? " current" : ""}`);
       card.setAttribute("role", "listitem");
       card.dataset.projectId = item.id;
       const row = element("div", "project-row");
       const main = element("button", "project-main");
       main.setAttribute("aria-label", `进入项目：${item.title}`);
-      main.append(element("strong", "project-title", item.title), element("span", "project-meta", itemDescription(item)),
-        element("span", "project-meta", `累计 ${numberLabel(summary.minutes)} 分钟 · ${summary.count} 次专注${latest?.percent != null ? ` · 进度 ${latest.percent}%` : ""}${pending.length ? ` · ${pending.length} 条待补写` : ""}`));
-      main.addEventListener("click", () => openProject(item));
+      const described = [];
+      const head = element("span", "project-head");
+      head.append(element("strong", "project-title", item.title));
+      if (isCurrent) {
+        const status = element("span", `project-status${live ? ` ${live}` : ""}`, live === "running" ? "计时中" : live === "paused" ? "已暂停" : "接着学");
+        status.id = `project-status-${index}`;
+        described.push(status.id);
+        head.append(status);
+      }
+      const play = element("span", "project-play");
+      play.setAttribute("aria-hidden", "true");
+      play.append(icon(live === "running" ? "pause" : "play"));
+      const total = summary.minutes >= UI.minutesPerHour ? `${Number((summary.minutes / UI.minutesPerHour).toFixed(1))} 小时` : `${numberLabel(summary.minutes)} 分钟`;
+      const meta = element("span", "project-meta");
+      meta.append(...[itemDescription(item), `累计 ${total}`, `${summary.count} 次`, ...(pending.length ? [`${pending.length} 条待补写`] : [])]
+        .map(text => element("span", "", text)));
+      main.append(play, head, meta);
+      if (latest?.percent != null) {
+        const gauge = element("span", "project-gauge");
+        const filled = Math.round(latest.percent / 100 * UI.gaugeTicks);
+        const ticks = element("span", "project-gauge-ticks");
+        ticks.setAttribute("aria-hidden", "true");
+        ticks.append(...Array.from({ length: UI.gaugeTicks }, (_, tick) => element("i", tick < filled ? "on" : "")));
+        const value = element("span", "project-gauge-value", `${latest.percent}%`);
+        value.id = `project-gauge-${index}`;
+        described.push(value.id);
+        gauge.append(ticks, value);
+        main.append(gauge);
+      }
+      if (described.length) main.setAttribute("aria-describedby", described.join(" "));
+      main.addEventListener("click", () => openProject(item, card));
       const expanded = state.openProjects.has(item.id);
       const expand = element("button", "project-expand");
       expand.id = `project-expand-${index}`;
@@ -388,14 +480,14 @@
       heading.append(element("h3", "", "当前学习进度"), element("span", "sample-tag", latest?.percent != null ? `${latest.percent}%` : "未填写完成度"));
       details.append(heading);
       if (latest?.percent != null) {
-        const progress = element("progress", "project-progress-bar");
+        const progress = element("progress", "sr-only");
         progress.max = 100;
         progress.value = latest.percent;
         progress.setAttribute("aria-label", `${item.title}完成度 ${latest.percent}%`);
         details.append(progress);
       }
       details.append(element("p", "project-progress-note", latest?.note || "还没有进度记录。完成一次专注后，记下学到了哪里、接下来做什么。"));
-      if (latest) details.append(element("p", "project-progress-meta", `${latest.sample ? "示例进度 · " : ""}专注结束：${localTimestamp(latest.recordEndedAt)}\n更新：${localTimestamp(latest.updatedAt)}`));
+      if (latest) details.append(element("p", "project-progress-meta", `专注结束：${localTimestamp(latest.recordEndedAt)} 更新：${localTimestamp(latest.updatedAt)}`));
       pending.forEach(record => {
         const fill = element("button", "project-pending-button", `补写进度 · ${localTimestamp(record.endedAt)} · ${formatTime(record.durationSeconds)}`);
         fill.dataset.recordId = record.id;
@@ -496,6 +588,7 @@
       toast("学习进度已保存，历史版本保留。");
     });
     showModal(afterSession ? "这一段，推进了什么？" : "编辑学习进度", form);
+    $("modal").classList.toggle("after-finish", afterSession && !$("page-timer").hidden && !reducedMotion());
     state.progressDialogRecord = recordId;
     state.progressReturnHome = afterSession;
   }
@@ -2330,6 +2423,7 @@
 
   document.documentElement.style.setProperty("--todo-finish-hold", `${TODO_UI.finishHoldMs}ms`);
   document.documentElement.style.setProperty("--todo-finish-collapse", `${TODO_UI.finishCollapseMs}ms`);
+  document.documentElement.style.setProperty("--finish-reveal", `${UI.finishRevealMs}ms`);
   window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", event => {
     if (!event.matches) return;
     [...state.finishingTasks.keys()].forEach(cancelTaskFinish);
@@ -2453,15 +2547,15 @@
     else { if (timer.completed) resetTimer(); startTimer(); }
     renderTimer();
   });
+  setInterval(() => { if (!$("page-focus").hidden) updateTodayNow(); }, LIMITS.secondsPerMinute * LIMITS.millisecondsPerSecond);
   $("timer-finish").addEventListener("click", finishCountup);
   $("timer-reset").addEventListener("click", () => guardedTimerChange(() => { resetTimer(); renderTimer(); }, "重置会放弃当前进度。"));
   $("add-focus-item").addEventListener("click", () => focusItemEditor());
   $("select-focus-item").addEventListener("click", () => navigate("focus"));
-  $("timer-back").addEventListener("click", () => navigate("focus"));
+  $("timer-back").addEventListener("click", () => morphTo("back", () => navigate("focus")));
   $("resume-session").addEventListener("click", () => navigate("timer"));
   $("timer-statistics").addEventListener("click", () => navigate("statistics"));
   $("open-statistics").addEventListener("click", () => navigate("statistics"));
-  $("statistics-detail").addEventListener("click", () => navigate("statistics"));
   $("statistics-back").addEventListener("click", () => navigate("focus"));
   $("export-statistics").addEventListener("click", exportStatistics);
   $("alltime-help").addEventListener("click", showAllTimeHelp);
