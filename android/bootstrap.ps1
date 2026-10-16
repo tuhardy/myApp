@@ -1,14 +1,17 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
-    [string]$JdkPath = $(if ($env:JAVA_HOME) { $env:JAVA_HOME } else { 'D:\jdk\jdk21' }),
+    # 不传时读取 android\.env 的 JAVA_HOME；首次传入且 .env 不存在时，会按 .env.example 生成 .env。
+    [string]$JdkPath,
     [switch]$AcceptAndroidSdkLicense,
     [switch]$UseAliyunGradleMirror
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'local-env.ps1')
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $toolsRoot = Join-Path $projectRoot '.tools'
-$sdkRoot = Join-Path $toolsRoot 'android-sdk'
+$sdkRoot = Get-LocalEnvPath 'ANDROID_HOME' (Join-Path $toolsRoot 'android-sdk')
+$gradleUserHome = Get-LocalEnvPath 'GRADLE_USER_HOME' (Join-Path $toolsRoot 'gradle-user-home')
 $downloads = Join-Path $toolsRoot 'downloads'
 $gradleVersion = '8.11.1'
 $gradleSha256 = 'f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6'
@@ -45,8 +48,12 @@ function Get-VerifiedArchive([string[]]$Urls, [string]$Destination, [string]$Sha
     throw "Unable to download an official archive: $Destination"
 }
 
-if (-not (Test-Path -LiteralPath (Join-Path $JdkPath 'bin\java.exe') -PathType Leaf)) {
-    throw 'Pass -JdkPath with an installed JDK 21 directory.'
+if (-not $JdkPath) { $JdkPath = Get-LocalEnvPath 'JAVA_HOME' }
+Assert-LocalJdk $JdkPath
+if (-not (Test-Path -LiteralPath $LocalEnvFile -PathType Leaf)) {
+    $template = [IO.File]::ReadAllText($LocalEnvExample) -replace '(?m)^JAVA_HOME=.*$', "JAVA_HOME=$JdkPath"
+    [IO.File]::WriteAllText($LocalEnvFile, $template, [Text.UTF8Encoding]::new($true))
+    Write-Host "已按 .env.example 生成 android\.env（JAVA_HOME=$JdkPath）。以后 bootstrap.ps1 与 verify.ps1 都从这里读取本机路径，换电脑时只需修改这个文件。"
 }
 if (-not $AcceptAndroidSdkLicense -and -not (Test-Path -LiteralPath (Join-Path $sdkRoot 'licenses\android-sdk-license'))) {
     throw 'Read https://developer.android.com/studio/terms and rerun with -AcceptAndroidSdkLicense only if you agree.'
@@ -58,7 +65,7 @@ $previousGradleHome = $env:GRADLE_USER_HOME
 try {
     $env:JAVA_HOME = $JdkPath
     $env:PATH = "$(Join-Path $JdkPath 'bin');$env:PATH"
-    $env:GRADLE_USER_HOME = Join-Path $toolsRoot 'gradle-user-home'
+    $env:GRADLE_USER_HOME = $gradleUserHome
     Ensure-Directory $toolsRoot
     Ensure-Directory $downloads
     Ensure-Directory $sdkRoot
@@ -114,7 +121,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Gradle validation failed.' }
     Write-Host "Android SDK: $sdkRoot"
     Write-Host "Gradle: $gradleRoot"
-    Write-Host "For this PowerShell session: `$env:JAVA_HOME = '$JdkPath'; `$env:GRADLE_USER_HOME = '$(Join-Path $toolsRoot 'gradle-user-home')'"
+    Write-Host "JDK: $JdkPath（本机路径保存在 android\.env，可直接修改）"
+    Write-Host '下一步：powershell -ExecutionPolicy Bypass -File .\verify.ps1'
 } finally {
     $env:JAVA_HOME = $previousJavaHome
     $env:PATH = $previousPath

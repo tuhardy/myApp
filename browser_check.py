@@ -48,12 +48,33 @@ def assert_hour_distribution(page):
 
 def assert_statistics_period(page, period, trend_count):
     page.locator(f'[data-stat-period="{period}"]').click()
-    expect(page.locator("#statistics-trend .trend-bar")).to_have_count(trend_count)
+    expect(page.locator(f'[data-stat-period="{period}"]')).to_have_attribute("aria-pressed", "true")
     if period == "day":
         expect(page.locator("#statistics-trend-section")).not_to_be_visible()
+        expect(page.locator("#statistics-month-section")).not_to_be_visible()
+        expect(page.locator("#statistics-timeline")).to_be_visible()
+    elif period == "month":
+        expect(page.locator("#statistics-trend-section")).not_to_be_visible()
+        expect(page.locator("#statistics-month-section")).to_be_visible()
+        expect(page.locator("#statistics-calendar .calendar-day")).to_have_count(trend_count)
     else:
         expect(page.locator("#statistics-trend-section")).to_be_visible()
+        expect(page.locator("#statistics-trend .trend-bar")).to_have_count(trend_count)
     return assert_hour_distribution(page)
+
+
+def set_statistics_date(page, value):
+    if not page.locator("#statistics-anchor").is_visible():
+        page.locator("#statistics-period-label").click()
+    page.locator("#statistics-anchor").fill(value)
+    page.locator("#statistics-anchor").dispatch_event("change")
+    expect(page.locator("#statistics-picker")).not_to_be_visible()
+
+
+def statistics_today(page):
+    if page.locator("#statistics-today").is_visible():
+        page.locator("#statistics-today").click()
+    expect(page.locator("#statistics-today")).not_to_be_visible()
 
 
 def assert_no_task_fields(value):
@@ -1590,7 +1611,10 @@ def check_progress_workflow(browser, errors):
     page.set_viewport_size(DESKTOP_VIEWPORT)
     open_statistics(page)
     page.locator("#statistics-source").select_option("session")
-    page.locator('.record-progress-button[data-record-id="session-2"]').click()
+    record_row = page.locator('.record-row[data-record-id="session-2"]')
+    record_row.locator(".record-toggle").click()
+    expect(record_row.locator(".record-toggle")).to_have_attribute("aria-expanded", "true")
+    record_row.locator(".record-progress-button").click()
     expect(note).to_have_value(unsafe_note)
     page.keyboard.press("Escape")
     expect(page.locator("#page-statistics")).to_be_visible()
@@ -1686,6 +1710,8 @@ def check_progress_queue(browser, errors):
 
 
 def alltime_snapshot(page):
+    page.locator('[data-stat-period="all"]').click()
+    expect(page.locator(".alltime-overview")).to_be_visible()
     snapshot = {name: page.locator(f"#{name}").inner_text() for name in ALLTIME_IDS}
     page.locator("#alltime-help").click()
     expect(page.get_by_role("dialog", name="累计统计说明")).to_be_visible()
@@ -1699,12 +1725,18 @@ def alltime_snapshot(page):
 def check_alltime_statistics(browser, errors):
     page = fresh_timer_page(browser, errors)
     open_statistics(page)
+    day_minutes = float(page.locator("#statistics-minutes").inner_text())
+    expect(page.locator(".alltime-overview")).not_to_be_visible()
+    page.locator('[data-stat-period="all"]').click()
+    expect(page.locator("#statistics-previous")).not_to_be_visible()
+    expect(page.locator("#statistics-period-label")).to_be_disabled()
     overview = page.locator(".alltime-overview")
+    expect(overview).to_be_visible()
     expect(overview.locator("strong")).to_have_count(3)
     expect(overview.locator("p, small")).to_have_count(0)
     for explanation in ("分母", "统计范围", "次专注", "首次", "空白日", "不受", "刷新"):
         expect(overview).not_to_contain_text(explanation)
-    assert overview.evaluate("el => { const css = getComputedStyle(el); return css.backgroundColor === 'rgb(255, 255, 255)' && css.borderTopWidth === '0px' && css.paddingTop === '0px'; }")
+    assert overview.evaluate("el => { const css = getComputedStyle(el); return css.backgroundColor === 'rgba(0, 0, 0, 0)' && css.borderTopWidth === '0px' && css.paddingTop === '0px'; }")
     help_button = page.get_by_role("button", name="累计统计说明", exact=True)
     expect(help_button).to_have_text("?")
     expect(help_button).to_have_attribute("title", "查看累计统计的范围与计算方式")
@@ -1731,12 +1763,15 @@ def check_alltime_statistics(browser, errors):
     samples = page.evaluate("FocusModel.initialFocusRecords().map(record => ({seconds: record.durationSeconds, date: FocusModel.localDateKey(new Date(record.endedAt))}))")
     sample_dates = {datetime.fromisoformat(record["date"]).date() for record in samples}
     assert minutes == sum(record["seconds"] for record in samples) / 60
-    assert minutes > float(page.locator("#statistics-minutes").inner_text())
+    assert minutes > day_minutes
+    assert abs(float(page.locator("#statistics-minutes").inner_text()) - minutes) < 0.01
+    expect(page.locator("#statistics-trend .trend-bar")).to_have_count(len({record["date"][:7] for record in samples}))
+    assert_hour_distribution(page)
     today = datetime.fromisoformat(page.evaluate("FocusModel.localDateKey(new Date())")).date()
     denominators = [int(value) for value in re.findall(r"分母：(\d+) 个(?:自然|活跃)日", initial["details"])]
     assert denominators == [(today - min(sample_dates)).days + 1, len(sample_dates)]
     assert f"{min(sample_dates)} 至 {today} · {len(samples)} 次专注" in initial["details"]
-    for explanation in ("自然日均 = 累计专注分钟数 ÷ 自然日天数", "活跃日均 = 累计专注分钟数 ÷ 有专注记录的天数", "首尾均计入", "空白日", "按日历差", "四舍五入至两位小数", "示例 + 本次计时（含演示记录）", "仅驻留内存", "刷新恢复示例", "不代表真实设备", "不受下方日、周、月、年周期和所选日期影响"):
+    for explanation in ("自然日均 = 累计专注分钟数 ÷ 自然日天数", "活跃日均 = 累计专注分钟数 ÷ 有专注记录的天数", "首尾均计入", "空白日", "按日历差", "四舍五入至两位小数", "示例 + 本次计时（含演示记录）", "仅驻留内存", "刷新恢复示例", "不代表真实设备", "不受日、周、月、年的所选日期影响"):
         assert explanation in initial["details"]
     assert denominators[0] > denominators[1] > 0
     for name, denominator in zip(("alltime-calendar-average", "alltime-active-average"), denominators):
@@ -1744,8 +1779,8 @@ def check_alltime_statistics(browser, errors):
     for period, trend_count in STAT_PERIODS:
         assert_statistics_period(page, period, trend_count)
         assert alltime_snapshot(page) == initial
-    page.locator("#statistics-anchor").fill("2024-02-29")
-    page.locator("#statistics-anchor").dispatch_event("change")
+    page.locator('[data-stat-period="day"]').click()
+    set_statistics_date(page, "2024-02-29")
     expect(page.locator("#statistics-count")).to_have_text("0")
     assert alltime_snapshot(page) == initial
     page.locator("#statistics-source").select_option("session")
@@ -1766,6 +1801,7 @@ def check_alltime_statistics(browser, errors):
     expect(page.locator("#focus-sessions")).to_have_text("4")
     skip_progress(page, return_to_timer=False)
     open_statistics(page)
+    page.locator('[data-stat-period="day"]').click()
     expect(page.locator("#statistics-count")).to_have_text("0")
     assert abs(float(page.locator("#alltime-duration").get_attribute("data-minutes")) - minutes - 61 / 60) < 0.000001
     completed = alltime_snapshot(page)
@@ -1781,8 +1817,8 @@ def check_alltime_statistics(browser, errors):
     assert "分母：1 个自然日" in session["details"]
     assert "分母：1 个活跃日" in session["details"]
     assert "仅本次计时（不含示例）" in session["details"]
-    page.locator("#statistics-today").click()
     page.locator('[data-stat-period="day"]').click()
+    statistics_today(page)
     assert alltime_snapshot(page) == session
     page.locator("#statistics-source").select_option("all")
     assert alltime_snapshot(page) == completed
@@ -1805,6 +1841,10 @@ def check_alltime_statistics(browser, errors):
     assert payload["progressHistory"] == []
     page.locator("#statistics-source").select_option("all")
     payload = download_statistics(page, "json")
+    assert payload["period"] == "all"
+    assert abs(payload["summary"]["minutes"] - payload["allTimeSummary"]["minutes"]) < 0.000001
+    page.locator('[data-stat-period="day"]').click()
+    payload = download_statistics(page, "json")
     assert payload["allTimeSummary"]["minutes"] > payload["summary"]["minutes"]
     assert abs(payload["allTimeSummary"]["minutes"] - minutes - 61 / 60) < 0.000001
     page.close()
@@ -1820,7 +1860,7 @@ def check_alltime_statistics(browser, errors):
     assert f"分母：{denominators[1]} 个活跃日" in advanced["details"]
     assert abs(float(advanced["alltime-calendar-average"]) - minutes / (denominators[0] + 1)) <= 0.005
     page.close()
-    print("PASS: minimal white all-time overview, keyboard help/focus return, dynamic popup formulas/range/denominators, next-day refresh, period/date invariance, source filters, completion refresh and JSON scope.", flush=True)
+    print("PASS: all-period overview without nested card, keyboard help/focus return, dynamic popup formulas/range/denominators, next-day refresh, period/date invariance, source filters, completion refresh and JSON scope.", flush=True)
 
 
 def run_checks():
@@ -1936,23 +1976,30 @@ def run_checks():
         assert len(csv_rows) == 5
         assert sum(float(row["时长（分钟）"]) for row in csv_rows) == 77
         assert {row["来源"] for row in csv_rows} == {"示例", "专注计时"}
-        page.locator("#statistics-anchor").fill("2024-02-29")
-        page.locator("#statistics-anchor").dispatch_event("change")
-        expect(page.locator(".calendar-day")).to_have_count(29)
+        set_statistics_date(page, "2024-02-29")
+        expect(page.locator("#statistics-period-text")).to_have_text("2024年2月29日 周四")
         expect(page.locator("#statistics-count")).to_have_text("0")
         expect(page.locator("#export-statistics")).to_be_disabled()
         page.locator('[data-stat-period="month"]').click()
+        expect(page.locator("#statistics-calendar .calendar-day")).to_have_count(29)
         page.locator("#statistics-next").click()
         expect(page.locator("#statistics-anchor")).to_have_value("2024-03-01")
-        page.locator("#statistics-today").click()
+        statistics_today(page)
         page.locator(".calendar-day").filter(has_text="26").click()
         expect(page.locator('[data-stat-period="day"]')).to_have_attribute("aria-pressed", "true")
         expect(page.locator("#statistics-count")).to_have_text("5")
+        page.locator('[data-stat-period="week"]').click()
+        page.locator("#statistics-period-label").click()
+        page.locator(".picker-week").first.click()
+        expect(page.locator("#statistics-picker")).not_to_be_visible()
+        expect(page.locator("#statistics-today")).to_be_visible()
+        statistics_today(page)
         page.locator('[data-stat-period="month"]').click()
         expected_records = int(page.locator("#statistics-count").inner_text())
-        expect(page.locator("#statistics-records > li")).to_have_count(20)
+        expect(page.locator("#statistics-records .record-row")).to_have_count(20)
+        expect(page.locator("#statistics-records .record-day").first).to_be_visible()
         page.locator("#statistics-more").click()
-        expect(page.locator("#statistics-records > li")).to_have_count(min(40, expected_records))
+        expect(page.locator("#statistics-records .record-row")).to_have_count(min(40, expected_records))
         rows = download_statistics(page, "csv")
         assert len(rows) == expected_records
 
@@ -1995,6 +2042,7 @@ def run_checks():
             if width == 390:
                 page.locator('[data-stat-period="week"]').click()
                 page.screenshot(path=str(SCREENSHOT_DIRECTORY / "mobile-statistics.png"))
+                page.locator('[data-stat-period="month"]').click()
                 page.locator("#statistics-calendar").screenshot(path=str(SCREENSHOT_DIRECTORY / "calendar.png"))
             page.locator("#export-statistics").click()
             assert page.locator("#modal").evaluate("el => el.scrollWidth <= el.clientWidth"), (width, "export dialog overflow")
@@ -2034,7 +2082,7 @@ def run_checks():
         midnight_page.clock.fast_forward(ONE_MINUTE_MS)
         midnight_page.locator("#timer-toggle").click()
         open_statistics(midnight_page)
-        midnight_page.locator("#statistics-today").click()
+        statistics_today(midnight_page)
         midnight_page.locator("#statistics-source").select_option("session")
         expect(midnight_page.locator("#statistics-count")).to_have_text("0")
         print("Midnight pause/resume verified; advancing delayed completion.", flush=True)

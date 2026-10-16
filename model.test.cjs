@@ -1301,3 +1301,38 @@ test("CSV 在基础六列后追加模式、独立专注项、目标和实际整�
   assert.ok(exportFocusCsv([record]).endsWith(',"专注计时","正计时","编程","50","61","","",""\r\n'));
   assert.ok(exportFocusCsv([{ ...record, timerMode: "countdown", durationMinutes: 25, durationSeconds: 1500 }]).endsWith(',"专注计时","倒计时","编程","50","1500","","",""\r\n'));
 });
+
+test("全部周期只取截至今天的记录，范围从首个完成日到明天零点，按月趋势补齐空月", () => {
+  const { allTimeRecords, allTimeRange, focusMonthlyTrend } = require("./model.js");
+  const now = new Date(2026, 9, 16, 12);
+  const at = (month, day, hour = 9) => new Date(2026, month, day, hour).toISOString();
+  const records = Object.freeze([
+    Object.freeze({ id: "a", endedAt: at(7, 30), durationMinutes: 30 }),
+    Object.freeze({ id: "b", endedAt: at(9, 16, 10), durationMinutes: 25 }),
+    Object.freeze({ id: "future", endedAt: at(9, 17), durationMinutes: 60 }),
+  ]);
+  assert.deepEqual(allTimeRecords(records, now).map(record => record.id), ["b", "a"]);
+  const range = allTimeRange(records, now);
+  assert.deepEqual([localDateKey(range.start), localDateKey(range.end)], ["2026-08-30", "2026-10-17"]);
+  assert.equal(allTimeRange([], now), null);
+  const trend = focusMonthlyTrend(records, now);
+  assert.deepEqual(trend.map(bin => [bin.key, bin.label, bin.minutes]), [["2026-08", "8月", 30], ["2026-09", "9月", 0], ["2026-10", "10月", 25]]);
+  assert.deepEqual(focusMonthlyTrend([], now), []);
+  assert.equal(focusMonthlyTrend([{ endedAt: new Date(2025, 11, 31).toISOString(), durationMinutes: 5 }], now)[0].label, "25年12月");
+});
+
+test("周期平移按日周月年整段移动，环比与上一周期对比且不修改输入", () => {
+  const { shiftPeriodAnchor, comparePeriods } = require("./model.js");
+  const anchor = new Date(2026, 9, 16, 15);
+  assert.equal(localDateKey(shiftPeriodAnchor("day", anchor, -1)), "2026-10-15");
+  assert.equal(localDateKey(shiftPeriodAnchor("week", anchor, -1)), "2026-10-05");
+  assert.equal(localDateKey(shiftPeriodAnchor("month", new Date(2026, 2, 31), -1)), "2026-02-01");
+  assert.equal(localDateKey(shiftPeriodAnchor("year", anchor, 1)), "2027-01-01");
+  const records = Object.freeze([
+    Object.freeze({ endedAt: new Date(2026, 9, 14).toISOString(), durationMinutes: 40, source: "session" }),
+    Object.freeze({ endedAt: new Date(2026, 9, 8).toISOString(), durationMinutes: 25, source: "sample" }),
+  ]);
+  assert.deepEqual(comparePeriods(records, { period: "week", anchor }), { current: 40, previous: 25, difference: 15 });
+  assert.deepEqual(comparePeriods(records, { period: "week", anchor, includeSamples: false }), { current: 40, previous: 0, difference: 40 });
+  assert.deepEqual(comparePeriods(records, { period: "day", anchor }), { current: 0, previous: 0, difference: 0 });
+});

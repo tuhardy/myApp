@@ -9,8 +9,11 @@
 # 默认复用 Gradle daemon 省去每次冷启动 JVM；构建行为可疑时用 -NoDaemon 排除 daemon 状态。
 # 默认 --console=plain 便于把输出重定向到文件阅读，但它会隐藏下载进度条；
 # 人工盯大文件下载时用 -Rich 换成动态进度输出。
-[CmdletBinding()]
+# 本机路径（JDK、可选的 SDK 与 Gradle 缓存）只写在 android\.env，模板见 .env.example；-JdkPath 可临时覆盖。
+# PositionalBinding = $false：不带参数名的值（如 assembleDebug）只会作为 Gradle 任务，不会被当成 -JdkPath。
+[CmdletBinding(PositionalBinding = $false)]
 param(
+    [string]$JdkPath,
     [switch]$NoDaemon,
     [switch]$Rich,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -20,9 +23,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 
-$env:JAVA_HOME = 'D:\jdk\jdk21'
-$env:GRADLE_USER_HOME = Join-Path $projectRoot '.tools\gradle-user-home'
-$env:ANDROID_HOME = Join-Path $projectRoot '.tools\android-sdk'
+. (Join-Path $PSScriptRoot 'local-env.ps1')
+if (-not $JdkPath) { $JdkPath = Get-LocalEnvPath 'JAVA_HOME' }
+Assert-LocalJdk $JdkPath
+$env:JAVA_HOME = $JdkPath
+$env:GRADLE_USER_HOME = Get-LocalEnvPath 'GRADLE_USER_HOME' (Join-Path $projectRoot '.tools\gradle-user-home')
+$env:ANDROID_HOME = Get-LocalEnvPath 'ANDROID_HOME' (Join-Path $projectRoot '.tools\android-sdk')
 $gradle = Join-Path $projectRoot '.tools\gradle-8.11.1\bin\gradle.bat'
 
 foreach ($required in @($env:JAVA_HOME, $env:ANDROID_HOME, $gradle)) {
@@ -51,8 +57,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # APK 只在 assemble 任务后才会更新，路径固定，方便直接覆盖安装。
-$apk = Join-Path $PSScriptRoot 'app\build\outputs\apk\debug\app-debug.apk'
-if (Test-Path -LiteralPath $apk) {
-    $info = Get-Item -LiteralPath $apk
-    Write-Host "APK: $apk ($([math]::Round($info.Length / 1MB, 1)) MB, $($info.LastWriteTime))"
+# assemblePreview 产出独立包名的预览版，可与已装的正式包并存。
+foreach ($variant in @('debug', 'preview')) {
+    $apk = Join-Path $PSScriptRoot "app\build\outputs\apk\$variant\app-$variant.apk"
+    if (Test-Path -LiteralPath $apk) {
+        $info = Get-Item -LiteralPath $apk
+        Write-Host "APK ($variant): $apk ($([math]::Round($info.Length / 1MB, 1)) MB, $($info.LastWriteTime))"
+    }
 }

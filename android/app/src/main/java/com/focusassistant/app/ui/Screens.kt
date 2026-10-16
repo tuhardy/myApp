@@ -8,6 +8,14 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import android.provider.Settings
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -151,17 +159,6 @@ private fun todoListHeading(filter: TodoFilter): String = when (filter) {
     TodoFilter.PENDING -> "从眼前的一步开始"
 }
 
-/** 按分类给项目一个稳定的图标与配色，纯展示，不参与任何统计。 */
-private fun projectGlyph(project: Project): Pair<androidx.compose.ui.graphics.vector.ImageVector, Pair<Color, Color>> {
-    val palette = listOf(
-        Icons.Outlined.Headphones to (Color(0xFFF6EEE8) to Color(0xFFA36743)),
-        Icons.Outlined.MenuBook to (Color(0xFFEFEDF5) to Color(0xFF77668B)),
-        Icons.Outlined.Code to (Color(0xFFEDF0F4) to Color(0xFF63768B))
-    )
-    val index = ((project.category.hashCode() % palette.size) + palette.size) % palette.size
-    return palette[index]
-}
-
 @Composable
 internal fun ProjectsScreen(
     state: AppState,
@@ -175,23 +172,19 @@ internal fun ProjectsScreen(
     onHistory: (Project) -> Unit,
     onResumeTimer: () -> Unit
 ) {
+    val reduceMotion = rememberReduceMotion()
+    // 「接着学」标在正在计时的项目上；没有计时时标在最近一次完成专注的项目上。
+    val currentId = state.timer?.projectId ?: state.sessions.maxByOrNull { it.endedAt }?.projectId
     ScreenBody {
-        PageTitle("专注") {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(buildAnnotatedString { append("今天，接着学"); withStyle(SpanStyle(color = Accent)) { append(".") } },
+                    fontSize = 25.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
+                Caption("${today.monthValue}月${today.dayOfMonth}日 ${weekdayLabel(today)}")
+            }
             IconButton(onClick = onStatistics) { Icon(Icons.Outlined.TrendingUp, "专注统计") }
             IconButton(onClick = onCreate) { Icon(Icons.Outlined.Add, "新建学习项目") }
         }
-        Caption("从一件小事，进入状态。")
-        // 今日摘要：只汇总本机真实完成记录，没有记录就显示 0。
-        val todaySessions = Statistics.select(state.sessions, Period.DAY, today)
-        val todaySeconds = todaySessions.sumOf { it.durationSeconds }
-        Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.Bottom) {
-            Text("今日专注", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(end = 6.dp, bottom = 2.dp))
-            Text(targetText((todaySeconds / UiLimits.SECONDS_PER_MINUTE).toInt()), fontSize = 20.sp, fontWeight = FontWeight.Medium)
-            Text(" / ", color = Color(0xFFB8B3AE), modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
-            Text("${todaySessions.size}", fontSize = 20.sp, fontWeight = FontWeight.Medium)
-            Text("次完成", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
-        }
-        HorizontalDivider()
         state.timer?.let { timer ->
             Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(14.dp)) {
                 Row(Modifier.fillMaxWidth().clickable(onClick = onResumeTimer).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -205,95 +198,186 @@ internal fun ProjectsScreen(
                 }
             }
         }
+        // 今日摘要只汇总本机真实完成记录，没有记录就显示 0 与空刻度尺。
+        TodayPanel(Statistics.select(state.sessions, Period.DAY, today), today, reduceMotion)
         if (state.projects.isEmpty()) {
             EmptyMessage("为重要的事，留一段时间", "创建一个可反复使用的学习项目。从一次专注开始，慢慢积累自己的进度。")
             Button(onClick = onCreate, modifier = Modifier.fillMaxWidth()) { Text("创建第一个项目") }
         } else {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("我的项目", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Text(" ${state.projects.size}", color = Muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("持续推进的小目标", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                 TextButton(onClick = onCreate, contentPadding = PaddingValues(horizontal = 8.dp)) {
                     Icon(Icons.Outlined.Add, null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("新建", fontSize = 12.sp)
+                    Text("新建项目", fontSize = 12.sp)
                 }
             }
             state.projects.forEach { project ->
                 key(project.id) {
-                    var expanded by rememberSaveable(project.id) { mutableStateOf(false) }
-                    val latest = Statistics.latestProgress(state.progress, project.id)
-                    val sessions = state.sessions.filter { it.projectId == project.id }.sortedByDescending { it.endedAt }
-                    val (glyph, tones) = projectGlyph(project)
-                    Surface(shape = RoundedCornerShape(18.dp), color = Color.White,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, if (expanded) Color(0xFFDCB29F) else Color(0xFFEAE7E4))) {
-                        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
+                    ProjectCard(project, state, project.id == currentId, onOpen, onEdit, onDelete, onProgress, onHistory)
+                }
+            }
+        }
+    }
+}
+
+/** 今天的两个数字 + 24 小时刻度尺：专注片段按真实起止时间落在尺上，已过去的时段铺浅色底。 */
+@Composable
+private fun TodayPanel(sessions: List<FocusSession>, today: LocalDate, reduceMotion: Boolean) {
+    val zone = ZoneId.systemDefault()
+    val dayStart = today.atStartOfDay(zone).toInstant().toEpochMilli()
+    val dayEnd = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+    val dayMs = (dayEnd - dayStart).toFloat()
+    val spans = remember(sessions, dayStart) {
+        sessions.flatMap { it.segments }.map { maxOf(dayStart, it.startedAt) to minOf(dayEnd, it.endedAt) }
+            .filter { it.second > it.first }.sortedBy { it.first }
+    }
+    val rise = remember(spans) { Animatable(if (reduceMotion) 1f else 0f) }
+    LaunchedEffect(spans, reduceMotion) { if (reduceMotion) rise.snapTo(1f) else rise.animateTo(1f, tween(VisualLimits.RISE_MS)) }
+    val nowFraction = ((System.currentTimeMillis() - dayStart) / dayMs).coerceIn(0f, 1f)
+    val description = if (spans.isEmpty()) "今天还没有专注记录"
+        else "今天的专注时段：" + spans.joinToString("，") { "${clockLabel(it.first)} 至 ${clockLabel(it.second)}" }
+    Surface(color = AccentSoft, shape = RoundedCornerShape(20.dp)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp)) {
+            Text("今天的小积累", color = AccentDark, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Row(Modifier.padding(top = 6.dp, bottom = 16.dp)) {
+                BigFigure(trimDecimal(sessions.sumOf { it.durationSeconds } / UiLimits.SECONDS_PER_MINUTE.toDouble()), "分钟专注")
+                Spacer(Modifier.width(28.dp))
+                BigFigure(sessions.size.toString(), "次完成")
+            }
+            Box(Modifier.fillMaxWidth().height(24.dp).semantics { contentDescription = description }) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val width = size.width
+                    val height = size.height
+                    drawRect(RulerPast, size = androidx.compose.ui.geometry.Size(width * nowFraction, height))
+                    for (hour in 0..HOURS_PER_DAY) {
+                        val x = (width - 1f) * hour / HOURS_PER_DAY
+                        val major = hour % 6 == 0
+                        drawLine(if (major) RulerMajor else RulerMinor, Offset(x, height - (if (major) 11 else 5).dp.toPx()), Offset(x, height), 1.dp.toPx())
+                    }
+                    drawLine(RulerMajor, Offset(0f, height), Offset(width, height), 1.dp.toPx())
+                    val top = 3.dp.toPx()
+                    spans.forEach { (from, to) ->
+                        val left = width * (from - dayStart) / dayMs
+                        val barWidth = maxOf(3.dp.toPx(), width * (to - from) / dayMs)
+                        val barHeight = (height - top) * rise.value
+                        drawRoundRect(Accent, Offset(left, height - barHeight), androidx.compose.ui.geometry.Size(barWidth, barHeight),
+                            androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()))
+                    }
+                    val x = width * nowFraction
+                    drawLine(Ink, Offset(x, -3.dp.toPx()), Offset(x, height + 4.dp.toPx()), 1.5.dp.toPx())
+                    drawCircle(Ink, 3.dp.toPx(), Offset(x, -3.dp.toPx()))
+                }
+                if (spans.isEmpty()) Text("今天还空着，从一个项目开始", color = AccentDark, fontSize = 12.sp,
+                    modifier = Modifier.align(Alignment.BottomStart).padding(bottom = 6.dp))
+            }
+            PositionedLabels(listOf(0f to "0 时", 0.25f to "6", 0.5f to "12", 0.75f to "18", 1f to "24"), Modifier.padding(top = 4.dp), AccentDark)
+        }
+    }
+}
+
+@Composable
+private fun BigFigure(value: String, unit: String) {
+    Row {
+        Text(value, fontSize = 46.sp, fontWeight = FontWeight.Light, letterSpacing = (-1).sp, color = Ink, modifier = Modifier.alignByBaseline())
+        Text(unit, fontSize = 12.sp, color = AccentDark, modifier = Modifier.alignByBaseline().padding(start = 6.dp))
+    }
+}
+
+/** 项目卡片：左侧播放圆钮、标题旁状态、单行元信息、20 格完成度刻度。 */
+@Composable
+private fun ProjectCard(
+    project: Project, state: AppState, current: Boolean,
+    onOpen: (Project) -> Unit, onEdit: (Project) -> Unit, onDelete: (Project) -> Unit,
+    onProgress: (FocusSession) -> Unit, onHistory: (Project) -> Unit
+) {
+    var expanded by rememberSaveable(project.id) { mutableStateOf(false) }
+    val latest = Statistics.latestProgress(state.progress, project.id)
+    val sessions = state.sessions.filter { it.projectId == project.id }.sortedByDescending { it.endedAt }
+    val pending = sessions.filter { Statistics.latestForSession(state.progress, it.id) == null }
+    val timer = state.timer?.takeIf { it.projectId == project.id && it.phase == TimerPhase.FOCUS }
+    val status = when {
+        timer?.status == TimerStatus.RUNNING -> "计时中"
+        timer?.status == TimerStatus.PAUSED -> "已暂停"
+        current -> "接着学"
+        else -> null
+    }
+    val totalSeconds = sessions.sumOf { it.durationSeconds }
+    val total = if (totalSeconds >= UiLimits.MINUTES_PER_HOUR * UiLimits.SECONDS_PER_MINUTE)
+        "${trimDecimal(totalSeconds / (UiLimits.MINUTES_PER_HOUR * UiLimits.SECONDS_PER_MINUTE).toDouble())} 小时" else durationText(totalSeconds)
+    val meta = listOfNotNull(projectSubtitle(project), "累计 $total", "${sessions.size} 次", pending.size.takeIf { it > 0 }?.let { "$it 条待补写" })
+    Surface(shape = RoundedCornerShape(18.dp), color = Color.White,
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (current || expanded) Color(0xFFE8C4B5) else Line)) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.Top) {
+                Row(Modifier.weight(1f).clip(RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp)).clickable { onOpen(project) }
+                    .padding(start = 14.dp, top = 14.dp, bottom = 14.dp, end = 4.dp)) {
+                    Box(Modifier.size(36.dp).clip(CircleShape).background(if (current) Accent else AccentSoft), contentAlignment = Alignment.Center) {
+                        Icon(if (timer?.status == TimerStatus.RUNNING) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, null,
+                            tint = if (current) Color.White else AccentDark, modifier = Modifier.size(18.dp))
+                    }
+                    Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(project.title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f, fill = false))
+                            if (status != null) StatusChip(status, paused = timer?.status == TimerStatus.PAUSED, running = timer?.status == TimerStatus.RUNNING, reduceMotion = rememberReduceMotion())
+                        }
+                        Text(meta.joinToString(" · "), color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+                        latest?.percent?.let { percent ->
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Row(Modifier.weight(1f).clickable { onOpen(project) }.padding(vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Box(Modifier.size(35.dp).clip(RoundedCornerShape(11.dp)).background(tones.first), contentAlignment = Alignment.Center) {
-                                        Icon(glyph, null, tint = tones.second, modifier = Modifier.size(18.dp))
-                                    }
-                                    Column(Modifier.weight(1f).padding(start = 11.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                        Text(project.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                        Caption(projectSubtitle(project))
-                                    }
-                                }
-                                IconButton(onClick = { expanded = !expanded }) {
-                                    Icon(if (expanded) Icons.Outlined.ExpandMore else Icons.Outlined.MoreHoriz,
-                                        if (expanded) "收起项目进度" else "展开项目进度", tint = Muted)
-                                }
-                            }
-                            // 最近一条进度直接可见，不必展开。
-                            Row(Modifier.fillMaxWidth().clickable { onHistory(project) }.padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Outlined.Notes, null, tint = Color(0xFF92908D), modifier = Modifier.size(13.dp))
-                                Text(latest?.note?.let { "上次：$it" } ?: "还没有进度记录",
-                                    color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f).padding(start = 6.dp))
-                                Icon(Icons.Outlined.ChevronRight, null, tint = Color(0xFF92908D), modifier = Modifier.size(13.dp))
-                            }
-                            HorizontalDivider(color = Color(0xFFF2EFED))
-                            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Caption("累计 ${durationText(sessions.sumOf { it.durationSeconds })}")
-                                Spacer(Modifier.weight(1f))
-                                Row(Modifier.clickable { onOpen(project) }, verticalAlignment = Alignment.CenterVertically) {
-                                    Text("打开", color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                                    Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(15.dp))
-                                }
-                            }
-                            if (expanded) {
-                                HorizontalDivider(color = Color(0xFFF2EFED))
-                                Column(Modifier.padding(vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Text("已专注 ${durationText(sessions.sumOf { it.durationSeconds })} · ${sessions.size} 次", style = MaterialTheme.typography.bodySmall, color = Muted)
-                                    if (latest == null) Caption("尚未填写学习进度。完成专注后可记录，也可以稍后补写。")
-                                    else {
-                                        latest.percent?.let { percent ->
-                                            Text("完成度 $percent%", color = Accent, fontWeight = FontWeight.Medium)
-                                            LinearProgressIndicator(progress = { percent.toFloat() / UiLimits.MAX_PERCENT }, modifier = Modifier.fillMaxWidth())
-                                        }
-                                        Text(latest.note, style = MaterialTheme.typography.bodyMedium)
-                                        Caption("专注结束 ${timestampText(latest.sessionEndedAt)}")
-                                        state.sessions.find { it.id == latest.sessionId }?.let { session ->
-                                            TextButton(onClick = { onProgress(session) }) { Text("修改这次进度") }
-                                        }
-                                    }
-                                    sessions.filter { Statistics.latestForSession(state.progress, it.id) == null }.forEach { session ->
-                                        OutlinedButton(onClick = { onProgress(session) }, modifier = Modifier.fillMaxWidth()) {
-                                            Text("补写进度 · ${timestampText(session.endedAt)}", textAlign = TextAlign.Center)
-                                        }
-                                    }
-                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        TextButton(onClick = { onHistory(project) }) { Text("进度历史") }
-                                        IconButton(onClick = { onEdit(project) }) { Icon(Icons.Outlined.Settings, "项目设置") }
-                                        IconButton(onClick = { onDelete(project) }) { Icon(Icons.Outlined.DeleteOutline, "删除项目", tint = Muted) }
-                                    }
-                                }
+                                TickGauge(percent, Modifier.weight(1f))
+                                Text("$percent%", color = AccentDark, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 12.dp))
                             }
                         }
                     }
                 }
+                IconButton(onClick = { expanded = !expanded }, modifier = Modifier.padding(top = 4.dp)) {
+                    Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, if (expanded) "收起项目进度" else "展开项目进度", tint = Muted)
+                }
             }
-            Text("一点点投入，会慢慢有答案。", color = Muted, fontSize = 11.sp,
-                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+            if (expanded) {
+                HorizontalDivider(color = Line)
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("当前学习进度", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text(latest?.percent?.let { "$it%" } ?: "未填写完成度", fontSize = 11.sp, color = Muted,
+                            modifier = Modifier.border(1.dp, Line, RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp))
+                    }
+                    if (latest == null) Caption("还没有进度记录。完成一次专注后，记下学到了哪里、接下来做什么。")
+                    else {
+                        Text(latest.note, style = MaterialTheme.typography.bodyMedium)
+                        Caption("专注结束：${timestampText(latest.sessionEndedAt)} 更新：${timestampText(latest.updatedAt)}")
+                    }
+                    pending.forEach { session ->
+                        OutlinedButton(onClick = { onProgress(session) }, modifier = Modifier.fillMaxWidth()) {
+                            Text("补写进度 · ${timestampText(session.endedAt)}", textAlign = TextAlign.Center)
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { onHistory(project) }) { Text("进度历史") }
+                        if (latest != null) state.sessions.find { it.id == latest.sessionId }?.let { session ->
+                            TextButton(onClick = { onProgress(session) }) { Text("编辑本次进度") }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        IconButton(onClick = { onEdit(project) }) { Icon(Icons.Outlined.Settings, "项目设置") }
+                        IconButton(onClick = { onDelete(project) }) { Icon(Icons.Outlined.DeleteOutline, "删除项目", tint = Muted) }
+                    }
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun StatusChip(text: String, paused: Boolean, running: Boolean, reduceMotion: Boolean) {
+    val breathe = if (running && !reduceMotion) {
+        val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "status-breathe")
+        transition.animateFloat(1f, 0.35f, androidx.compose.animation.core.infiniteRepeatable(tween(800),
+            androidx.compose.animation.core.RepeatMode.Reverse), label = "status-dot").value
+    } else 1f
+    Row(Modifier.padding(start = 8.dp).clip(CircleShape).background(if (paused) SoftSurface else AccentSoft).padding(horizontal = 8.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        if (running || paused) Box(Modifier.padding(end = 5.dp).size(6.dp).alpha(breathe).clip(CircleShape).background(if (paused) Muted else AccentDark))
+        Text(text, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = if (paused) Muted else AccentDark)
     }
 }
 
@@ -356,59 +440,60 @@ internal fun TimerScreen(
                     Text(if (targetMinutes == null) "设置" else "调整", color = Accent, fontSize = 13.sp)
                 }
             }
-            Box(Modifier.fillMaxWidth().padding(vertical = 14.dp), contentAlignment = Alignment.Center) {
-                Box(Modifier.sizeIn(maxWidth = 272.dp, maxHeight = 272.dp).fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
-                    // 无目标（不限时正计时）不画进度弧，只保留轨道，避免出现没有意义的进度。
-                    val ringColor = if (timer?.status == TimerStatus.PAUSED) Color(0xFFB7AAA0) else Accent
-                    Canvas(Modifier.fillMaxSize()) {
-                        val stroke = 3.dp.toPx()
-                        val diameter = size.minDimension - stroke
-                        val corner = Offset((size.width - diameter) / 2f, (size.height - diameter) / 2f)
-                        val box = androidx.compose.ui.geometry.Size(diameter, diameter)
-                        drawArc(Color(0xFFF0EDEB), 0f, 360f, false, topLeft = corner, size = box,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
-                        if (targetSeconds != null && targetSeconds > 0L && timer != null) {
-                            val sweep = (elapsedSeconds.toFloat() / targetSeconds).coerceIn(0f, 1f) * 360f
-                            drawArc(ringColor, -90f, sweep, false, topLeft = corner, size = box,
-                                style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
-                        }
-                    }
-                    Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            val reduceMotion = rememberReduceMotion()
+            val dialColor = if (resting) RestSlate else Accent
+            val dialDark = if (resting) RestSlateDark else AccentDark
+            val targetMillis = targetSeconds?.let { it * UiLimits.MILLIS_PER_SECOND }
+            val progress = if (targetMillis == null || targetMillis <= 0L) 0f else (elapsedMillis.toFloat() / targetMillis).coerceIn(0f, 1f)
+            // 倒计时显示剩余的弧段，正计时显示已走过的弧段；不限时没有弧段。
+            val visible = when {
+                targetMillis == null || targetMillis <= 0L -> 0f
+                mode == TimerMode.COUNTUP && !resting -> progress
+                else -> 1f - progress
+            }
+            val dialState = when { timer == null -> DialState.IDLE; timer.status == TimerStatus.PAUSED -> DialState.PAUSED; else -> DialState.RUNNING }
+            val remainingMillis = targetMillis?.let { (it - elapsedMillis).coerceAtLeast(0L) } ?: 0L
+            val caption = when {
+                timer == null && targetMinutes == null -> "不限时，按自己的节奏结束"
+                timer == null && mode == TimerMode.COUNTUP -> "从零累加 · ${targetText(targetMinutes)}目标后继续"
+                timer == null -> "到时自动完成并记录"
+                timer.status == TimerStatus.PAUSED -> "已暂停 · 暂停时间不计入"
+                !resting && targetMinutes == null -> "已专注 · 手动结束"
+                !resting && mode == TimerMode.COUNTUP -> if (timer.targetReached(nowElapsed)) "已达到目标，完成后点「结束并保存专注」"
+                    else "还差 ${(remainingMillis + 59_999) / 60_000} 分钟达到目标"
+                else -> "预计 ${clockLabel(System.currentTimeMillis() + remainingMillis)} 结束"
+            }
+            Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                TimerDial(visible, dialState, dialColor, reduceMotion) {
+                    Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(5.dp).clip(RoundedCornerShape(50)).background(
-                                when { timer == null -> Color(0xFFB4ADA7); timer.status == TimerStatus.PAUSED -> Color(0xFFA49C95); else -> Accent }))
+                            Box(Modifier.size(5.dp).clip(RoundedCornerShape(50)).background(if (timer == null) Color(0xFFB4ADA7) else dialColor))
                             Text(when {
                                 timer == null -> "准备好，就开始"
                                 timer.status == TimerStatus.PAUSED -> "已暂停"
                                 resting -> "休息中"
                                 else -> "正在专注"
-                            }, color = Muted, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
+                            }, color = dialDark, fontSize = 12.sp, modifier = Modifier.padding(start = 6.dp))
                         }
-                        Text(clockText(shownSeconds), fontSize = if (shownSeconds >= 3600) 42.sp else 56.sp,
-                            fontWeight = FontWeight.Light, letterSpacing = (-2).sp)
-                        Caption(when {
-                            timer == null && targetMinutes == null -> "不限时，按自己的节奏结束"
-                            timer == null -> "给这件事一段完整的时间"
-                            timer.status == TimerStatus.PAUSED -> "休息一下，再继续"
-                            targetMinutes == null -> "已专注 · 手动结束"
-                            mode == TimerMode.COUNTUP -> "已专注 · 达到目标后继续"
-                            else -> "剩余时间"
-                        })
+                        val blink = if (dialState == DialState.PAUSED && !reduceMotion) {
+                            rememberInfiniteTransition(label = "paused-blink").animateFloat(1f, 0.35f,
+                                infiniteRepeatable(tween(VisualLimits.BLINK_MS / 2), RepeatMode.Reverse), label = "paused-alpha").value
+                        } else 1f
+                        Text(clockText(shownSeconds), fontSize = if (shownSeconds >= 3600) 44.sp else 60.sp,
+                            fontWeight = FontWeight.Light, letterSpacing = (-1).sp, color = Ink, modifier = Modifier.alpha(blink))
+                        Text(caption, color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
                     }
                 }
             }
-            if (mode == TimerMode.COUNTUP && !resting) {
-                val note = when {
-                    targetMinutes == null -> "未设目标，按自己的节奏结束。手动结束后记录实际专注时长。"
-                    timer?.targetReached(nowElapsed) == true -> "已达到目标，计时仍在继续。按自己的节奏结束。"
-                    else -> "达到目标只提醒，不会停止。手动结束后记录实际专注时长。"
-                }
-                Text(note, color = Muted, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-            }
             if (timer == null) {
-                Button(onClick = onStart, enabled = project != null, modifier = Modifier.fillMaxWidth()) { Text("开始专注") }
+                Button(onClick = onStart, enabled = project != null, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), shape = RoundedCornerShape(15.dp)) {
+                    Icon(Icons.Outlined.PlayArrow, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("开始专注")
+                }
             } else {
-                Button(onClick = if (timer.status == TimerStatus.PAUSED) onResume else onPause, modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = if (timer.status == TimerStatus.PAUSED) onResume else onPause, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), shape = RoundedCornerShape(15.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = if (resting) RestSlate else Accent)) {
                     Icon(if (timer.status == TimerStatus.PAUSED) Icons.Outlined.PlayArrow else Icons.Outlined.Pause, null)
                     Spacer(Modifier.width(8.dp))
                     Text(if (timer.status == TimerStatus.PAUSED) "继续计时" else "暂停")
@@ -431,6 +516,56 @@ internal fun TimerScreen(
             OutlinedButton(onClick = onLongBreak, modifier = Modifier.weight(1f)) { Text("长休息") }
         }
         Caption("休息和暂停不计入专注统计。返回首页不会停止计时。")
+    }
+}
+
+private enum class DialState { IDLE, RUNNING, PAUSED }
+
+/**
+ * 60 格分钟表盘：剩余（倒计时）或已走（正计时）弧段上的刻度点亮，弧端小钮随进度走。
+ * 计时中小钮像心跳一样脉动；暂停时弧段变淡；未开始时只显示灰色刻度。系统移除动画时直接到终态。
+ */
+@Composable
+private fun TimerDial(visible: Float, state: DialState, color: Color, reduceMotion: Boolean, content: @Composable () -> Unit) {
+    val idle = state == DialState.IDLE
+    val arc by animateFloatAsState(visible, if (reduceMotion) snap() else tween(400, easing = LinearEasing), label = "dial-arc")
+    val lit by animateFloatAsState(if (idle) 0f else 1f, if (reduceMotion) snap() else tween(700), label = "dial-lit")
+    val knob by animateFloatAsState(if (idle) 0f else 1f, if (reduceMotion) snap() else spring(dampingRatio = 0.55f), label = "dial-knob")
+    val dim by animateFloatAsState(if (state == DialState.PAUSED) 0.45f else 1f, if (reduceMotion) snap() else tween(300), label = "dial-dim")
+    val tint by animateColorAsState(color, if (reduceMotion) snap() else tween(500), label = "dial-color")
+    val pulse = if (state == DialState.RUNNING && !reduceMotion) {
+        rememberInfiniteTransition(label = "dial-pulse").animateFloat(0f, 1f,
+            infiniteRepeatable(tween(VisualLimits.PULSE_MS, easing = FastOutSlowInEasing), RepeatMode.Restart), label = "dial-pulse-value").value
+    } else -1f
+    Box(Modifier.sizeIn(maxWidth = 280.dp, maxHeight = 280.dp).fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            val outer = size.minDimension / 2f - 2.dp.toPx()
+            for (index in 0 until VisualLimits.DIAL_TICKS) {
+                val major = index % VisualLimits.DIAL_MAJOR_EVERY == 0
+                val angle = Math.toRadians(index * 360.0 / VisualLimits.DIAL_TICKS - 90.0)
+                val length = (if (major) 11 else 5).dp.toPx()
+                val width = (if (major) 2.4f else 1.2f).dp.toPx()
+                val start = Offset(center.x + kotlin.math.cos(angle).toFloat() * (outer - length), center.y + kotlin.math.sin(angle).toFloat() * (outer - length))
+                val end = Offset(center.x + kotlin.math.cos(angle).toFloat() * outer, center.y + kotlin.math.sin(angle).toFloat() * outer)
+                drawLine(if (major) TickIdleMajor else TickIdle, start, end, width)
+                if (lit > 0f && index.toFloat() / VisualLimits.DIAL_TICKS < arc) drawLine(tint.copy(alpha = lit * dim), start, end, width)
+            }
+            val ring = outer - 18.dp.toPx()
+            val stroke = 4.dp.toPx()
+            drawCircle(Color(0xFFF0F0F0), ring, center, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+            if (arc > 0f) drawArc(tint.copy(alpha = dim), -90f, arc * 360f, false, topLeft = Offset(center.x - ring, center.y - ring),
+                size = androidx.compose.ui.geometry.Size(ring * 2, ring * 2),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = StrokeCap.Round))
+            if (knob > 0.01f) {
+                val angle = Math.toRadians(arc * 360.0 - 90.0)
+                val point = Offset(center.x + kotlin.math.cos(angle).toFloat() * ring, center.y + kotlin.math.sin(angle).toFloat() * ring)
+                val radius = 7.dp.toPx() * knob
+                if (pulse >= 0f) drawCircle(tint.copy(alpha = 0.35f * (1f - pulse)), 7.dp.toPx() * (1f + 2.2f * pulse), point)
+                drawCircle(Color.White, radius, point)
+                drawCircle(tint, radius, point, style = androidx.compose.ui.graphics.drawscope.Stroke(3.dp.toPx() * knob))
+            }
+        }
+        content()
     }
 }
 
@@ -905,101 +1040,6 @@ private fun StepPath(todo: Todo, expanded: Boolean, enabled: Boolean, onExpand: 
     }
 }
 
-@Composable
-internal fun StatisticsScreen(
-    state: AppState,
-    period: Period,
-    anchor: LocalDate,
-    recordLimit: Int,
-    onPeriod: (Period) -> Unit,
-    onPrevious: () -> Unit,
-    onNext: () -> Unit,
-    onToday: () -> Unit,
-    onPickDate: () -> Unit,
-    onBack: () -> Unit,
-    onHelp: () -> Unit,
-    onExport: () -> Unit,
-    onMoreRecords: () -> Unit,
-    onProgress: (FocusSession) -> Unit,
-    onSelectDay: (LocalDate) -> Unit,
-    today: LocalDate
-) {
-    val all = remember(state.sessions, today) { Statistics.allTime(state.sessions, today) }
-    val selected = remember(state.sessions, period, anchor) { Statistics.select(state.sessions, period, anchor).sortedByDescending { it.endedAt } }
-    val summary = remember(selected) { Statistics.summary(selected) }
-    val hours = remember(selected) { Statistics.hours(selected) }
-    val trend = remember(state.sessions, period, anchor) { Statistics.trend(state.sessions, period, anchor) }
-    val range = Statistics.range(period, anchor)
-    ScreenBody {
-        PageTitle("专注统计", onBack) { IconButton(onClick = onExport, enabled = selected.isNotEmpty()) { Icon(Icons.Outlined.FileDownload, "导出当前周期") } }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Caption("累计专注")
-                Text(durationText(all.seconds), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-            }
-            HelpButton(onHelp)
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Metric("自然日均", "${minuteText(all.calendarAverageSeconds)} 分钟", Modifier.weight(1f))
-            Metric("活跃日均", "${minuteText(all.activeAverageSeconds)} 分钟", Modifier.weight(1f))
-        }
-        HorizontalDivider()
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Period.entries.forEach { value ->
-                FilterChip(selected = period == value, onClick = { onPeriod(value) }, label = { Text(periodName(value), textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) }, modifier = Modifier.weight(1f))
-            }
-        }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onPrevious) { Icon(Icons.Outlined.ChevronLeft, "上一周期") }
-            TextButton(onClick = onPickDate, modifier = Modifier.weight(1f)) {
-                Text(if (period == Period.DAY) anchor.toString() else "${range.first}\n— ${range.second.minusDays(1)}", textAlign = TextAlign.Center)
-            }
-            IconButton(onClick = onNext) { Icon(Icons.Outlined.ChevronRight, "下一周期") }
-        }
-        TextButton(onClick = onToday, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("回到今天") }
-        Surface(color = SoftSurface, shape = RoundedCornerShape(14.dp)) {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Metric("所选周期专注", durationText(summary.seconds))
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Metric("完成次数", "${summary.count} 次", Modifier.weight(1f))
-                    Metric("活跃日均", "${minuteText(summary.averageSeconds)} 分钟", Modifier.weight(1f))
-                }
-                Caption("有记录 ${summary.activeDays} 天")
-            }
-        }
-        if (period != Period.DAY) {
-            SectionTitle("${periodName(period)}专注趋势")
-            ChartWithScale(trend.map { it.seconds }, trendLabels(trend, period), "所选${periodName(period)}每${if (period == Period.YEAR) "月" else "日"}完成专注时长")
-        }
-        SectionTitle("24 小时专注分布")
-        ChartWithScale(hours, listOf("00", "06", "12", "18", "23 时"), "${HOURS_PER_DAY} 小时实际活动分布：" + hours.mapIndexed { index, seconds -> "$index 时 ${durationText(seconds)}" }.joinToString("；"))
-        Caption("按实际专注片段分配到小时，不包含暂停。")
-        SectionTitle("分类占比")
-        if (selected.isEmpty()) Caption("当前周期还没有完成记录。")
-        selected.groupBy { it.category }.map { (category, records) -> category to records.sumOf { it.durationSeconds } }.sortedByDescending { it.second }.forEach { (category, seconds) ->
-            ShareRow(category.ifBlank { "未分类" }, seconds, summary.seconds)
-        }
-        MonthlyCalendar(state.sessions, anchor, onSelectDay)
-        SectionTitle("项目排行")
-        val ranks = selected.groupBy { it.projectId }.values.sortedByDescending { records -> records.sumOf { it.durationSeconds } }
-        if (ranks.isEmpty()) Caption("完成一次专注后，这里会出现你的积累。")
-        ranks.forEachIndexed { index, records ->
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("${index + 1}. ${records.maxByOrNull { it.endedAt }?.projectTitle.orEmpty()}", fontWeight = FontWeight.Medium)
-                Caption("${durationText(records.sumOf { it.durationSeconds })} · ${records.size} 次")
-            }
-        }
-        HorizontalDivider()
-        SectionTitle("专注记录 · ${selected.size} 次")
-        if (selected.isEmpty()) EmptyMessage("这段时间还没有记录", "只有已完成的专注会计入统计，休息和放弃的计时不会保存为专注记录。")
-        selected.take(recordLimit.coerceAtLeast(0)).forEach { session ->
-            SessionRow(session, Statistics.latestForSession(state.progress, session.id), onProgress)
-        }
-        if (selected.size > recordLimit) OutlinedButton(onClick = onMoreRecords, modifier = Modifier.fillMaxWidth()) { Text("加载更多（已显示 ${recordLimit.coerceAtLeast(0)} / ${selected.size}）") }
-        if (selected.isNotEmpty()) TextButton(onClick = onExport, modifier = Modifier.fillMaxWidth()) { Text("导出当前周期全部记录") }
-    }
-}
-
 private fun todoFilterName(filter: TodoFilter): String = when (filter) {
     TodoFilter.PENDING -> "待完成"
     TodoFilter.DONE -> "已完成"
@@ -1016,107 +1056,6 @@ private fun emptyTodoDetail(filter: TodoFilter): String = when (filter) {
     TodoFilter.DONE -> "慢慢来，走一步算一步。"
     TodoFilter.ARCHIVED -> "放下不是删除，是承认它这阵子不重要。"
     TodoFilter.PENDING -> "记下一件想做的事，也可以把它拆成几个小步。"
-}
-
-private fun periodName(period: Period): String = when (period) {
-    Period.DAY -> "日"
-    Period.WEEK -> "周"
-    Period.MONTH -> "月"
-    Period.YEAR -> "年"
-}
-
-private fun trendLabels(points: List<TrendPoint>, period: Period): List<String> {
-    if (points.isEmpty()) return emptyList()
-    val indexes = listOf(0, points.lastIndex / 2, points.lastIndex).distinct()
-    return indexes.map { index ->
-        val label = points[index].label
-        if (period == Period.YEAR) "${label}月" else label.substringAfter("-")
-    }
-}
-
-@Composable
-private fun Metric(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Caption(label)
-        Text(value, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.titleMedium)
-    }
-}
-
-@Composable
-private fun ChartWithScale(values: List<Long>, labels: List<String>, description: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Caption("最高 ${durationText(values.maxOrNull() ?: 0)}")
-        BarChart(values, labels, description)
-    }
-}
-
-@Composable
-private fun ShareRow(label: String, seconds: Long, total: Long) {
-    val fraction = if (total > 0) (seconds.toFloat() / total).coerceIn(0f, 1f) else 0f
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(label, fontWeight = FontWeight.Medium)
-        Caption("${durationText(seconds)} · ${(fraction * UiLimits.MAX_PERCENT).toInt()}%")
-        LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth(), trackColor = SoftSurface)
-    }
-}
-
-@Composable
-private fun MonthlyCalendar(sessions: List<FocusSession>, anchor: LocalDate, onSelectDay: (LocalDate) -> Unit) {
-    val first = anchor.withDayOfMonth(1)
-    val zone = ZoneId.systemDefault()
-    val totals = remember(sessions, first, zone) {
-        Statistics.select(sessions, Period.MONTH, first).groupBy { Instant.ofEpochMilli(it.endedAt).atZone(zone).toLocalDate() }
-            .mapValues { (_, records) -> records.sumOf { it.durationSeconds } }
-    }
-    val maximum = (totals.values.maxOrNull() ?: 0L).coerceAtLeast(1L)
-    val offset = first.dayOfWeek.value - 1
-    val cells = ((offset + first.lengthOfMonth() + DAYS_PER_WEEK - 1) / DAYS_PER_WEEK) * DAYS_PER_WEEK
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionTitle("${first.year} 年 ${first.monthValue} 月 · 专注日历")
-        Row(Modifier.fillMaxWidth()) {
-            listOf("一", "二", "三", "四", "五", "六", "日").forEach { label ->
-                Text(label, Modifier.weight(1f), textAlign = TextAlign.Center, color = Muted, fontSize = 12.sp)
-            }
-        }
-        repeat(cells / DAYS_PER_WEEK) { week ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                repeat(DAYS_PER_WEEK) { weekday ->
-                    val day = week * DAYS_PER_WEEK + weekday - offset + 1
-                    if (day !in 1..first.lengthOfMonth()) Spacer(Modifier.weight(1f).aspectRatio(1f))
-                    else {
-                        val date = first.withDayOfMonth(day)
-                        val seconds = totals[date] ?: 0L
-                        val intensity = seconds.toFloat() / maximum
-                        val background = if (seconds == 0L) SoftSurface else Accent.copy(alpha = 0.16f + intensity * 0.84f)
-                        Box(
-                            Modifier.weight(1f).aspectRatio(1f).clip(RoundedCornerShape(8.dp)).background(background)
-                                .clickable { onSelectDay(date) }.semantics { contentDescription = "$date，专注 ${durationText(seconds)}，查看当天" },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(day.toString(), fontSize = 12.sp, color = if (intensity > 0.55f) Color.White else MaterialTheme.colorScheme.onSurface, fontWeight = if (date == anchor) FontWeight.Bold else FontWeight.Normal)
-                        }
-                    }
-                }
-            }
-        }
-        Caption("周一开周 · 颜色越深，专注越多 · 点日期查看明细")
-    }
-}
-
-@Composable
-private fun SessionRow(session: FocusSession, progress: ProgressEntry?, onProgress: (FocusSession) -> Unit) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(session.projectTitle, style = MaterialTheme.typography.titleMedium)
-        Caption("${timestampText(session.endedAt)} · ${session.category}")
-        Text(durationText(session.durationSeconds), color = Accent, fontWeight = FontWeight.Medium)
-        Caption("${modeName(session.timerMode)} · ${session.targetMinutes?.let { "目标 ${targetText(it)}" } ?: "不限时"}")
-        if (progress != null) {
-            progress.percent?.let { Caption("完成度 $it%") }
-            Text(progress.note, style = MaterialTheme.typography.bodyMedium)
-        }
-        TextButton(onClick = { onProgress(session) }) { Text(if (progress == null) "补写进度" else "修改进度") }
-        HorizontalDivider()
-    }
 }
 
 @Composable

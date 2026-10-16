@@ -11,14 +11,17 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 object ExportCodec {
-    fun statisticsJson(sessions: List<FocusSession>, progress: List<ProgressEntry>, allSessions: List<FocusSession>, period: Period, anchor: LocalDate): String {
+    /** allPeriod 为 true 时导出「全部」周期：范围从首个完成日到明天零点，趋势按月。 */
+    fun statisticsJson(sessions: List<FocusSession>, progress: List<ProgressEntry>, allSessions: List<FocusSession>, period: Period, anchor: LocalDate, allPeriod: Boolean = false): String {
         val zone = ZoneId.systemDefault()
-        val (start, end) = Statistics.range(period, anchor)
+        val today = LocalDate.now(zone)
+        val (start, end) = if (allPeriod) Statistics.allTimeRange(sessions, today, zone) ?: (today to today.plusDays(1)) else Statistics.range(period, anchor)
         val summary = Statistics.summary(sessions, zone)
-        val all = Statistics.allTime(allSessions, LocalDate.now(zone), zone)
+        val all = Statistics.allTime(allSessions, today, zone)
         val ids = sessions.map { it.id }.toSet()
+        val trend = if (allPeriod) Statistics.monthlyTrend(sessions, today, zone) else Statistics.trend(sessions, period, anchor, zone)
         return JSONObject().put("kind", "focus-statistics").put("schemaVersion", 1)
-            .put("exportedAt", Instant.now().toString()).put("period", period.name).put("anchor", anchor.toString())
+            .put("exportedAt", Instant.now().toString()).put("period", if (allPeriod) "ALL" else period.name).put("anchor", anchor.toString())
             .put("range", JSONObject().put("start", start.atStartOfDay(zone).toInstant().toString()).put("endExclusive", end.atStartOfDay(zone).toInstant().toString()))
             .put("timeZone", zone.id).put("grouping", "local-completion-date").put("activeDayAverage", true)
             .put("includesSamples", false).put("source", "native-focus-sessions").put("durationUnit", "seconds")
@@ -27,7 +30,7 @@ object ExportCodec {
             .put("allTimeSummary", JSONObject().put("seconds", all.seconds).put("count", all.count).put("activeDays", all.activeDays).put("calendarDays", all.calendarDays)
                 .put("calendarAverageSeconds", all.calendarAverageSeconds).put("activeAverageSeconds", all.activeAverageSeconds).put("firstDate", all.firstDate?.toString() ?: JSONObject.NULL))
             .put("hours", JSONArray(Statistics.hours(sessions, zone)))
-            .put("trend", JSONArray(Statistics.trend(sessions, period, anchor, zone).map { JSONObject().put("label", it.label).put("seconds", it.seconds) }))
+            .put("trend", JSONArray(trend.map { JSONObject().put("label", it.label).put("seconds", it.seconds) }))
             .put("sessions", JSONArray(sessions.map { session -> JsonCodec.session(session).put("latestProgress", Statistics.latestForSession(progress, session.id)?.let(JsonCodec::progress) ?: JSONObject.NULL) }))
             .put("progress", JSONArray(progress.filter { it.sessionId in ids }.map(JsonCodec::progress))).toString(2)
     }

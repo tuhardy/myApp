@@ -864,23 +864,3 @@ internal fun ProgressEditorDialog(context: Context, session: FocusSession, previ
         }
     }) { Text(if (busy) "保存中" else "保存进度") } }, dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("稍后再写") } })
 }
-
-@Composable
-internal fun BarChart(values: List<Long>, labels: List<String>, description: String) {
-    val color = MaterialTheme.colorScheme.primary
-    val maximum = (values.maxOrNull() ?: 0L).coerceAtLeast(1L)
-    Column {
-        Canvas(Modifier.fillMaxWidth().height(125.dp).semantics { contentDescription = description }) {
-            val line = Color(0xFFEEEEEE)
-            repeat(4) { index -> val y = size.height * index / 3f; drawLine(line, Offset(0f, y), Offset(size.width, y)) }
-            if (values.isNotEmpty()) {
-                val cell = size.width / values.size
-                values.forEachIndexed { index, value ->
-                    val height = (size.height - 8.dp.toPx()) * value.toFloat() / maximum
-                    drawRoundRect(if (value == maximum) color else Color(0xFFBBBBBB), Offset(index * cell + cell * 0.16f, size.height - height.coerceAtLeast(1f)), Size(cell * 0.68f, height.coerceAtLeast(1f)), CornerRadius(3.dp.toPx()))
-                }
-            }
-        }
-        Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) { labels.forEach { Text(it, fontSize = 10.sp, color = Muted) } }
-    }
-}

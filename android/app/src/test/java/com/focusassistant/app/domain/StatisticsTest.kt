@@ -75,6 +75,32 @@ class StatisticsTest {
         assertEquals(29, Statistics.trend(emptyList(), Period.MONTH, LocalDate.parse("2024-02-20"), utc).size)
         assertEquals(12, Statistics.trend(emptyList(), Period.YEAR, LocalDate.parse("2024-02-20"), utc).size)
     }
+    @Test fun allPeriodKeepsCompletionsThroughTodayAndFillsMonthlyTrend() {
+        val august = session("2026-08-30T09:00:00Z", "2026-08-30T09:30:00Z", "a")
+        val october = session("2026-10-16T09:00:00Z", "2026-10-16T09:25:00Z", "b")
+        val future = session("2026-10-17T09:00:00Z", "2026-10-17T10:00:00Z", "f")
+        val today = LocalDate.parse("2026-10-16")
+        assertEquals(listOf("b", "a"), Statistics.allTimeSessions(listOf(august, future, october), today, utc).map { it.id })
+        assertEquals(LocalDate.parse("2026-08-30") to LocalDate.parse("2026-10-17"), Statistics.allTimeRange(listOf(august, october, future), today, utc))
+        assertNull(Statistics.allTimeRange(emptyList(), today, utc))
+        assertEquals(listOf(TrendPoint("8月", 1800), TrendPoint("9月", 0), TrendPoint("10月", 1500)), Statistics.monthlyTrend(listOf(august, october, future), today, utc))
+        assertTrue(Statistics.monthlyTrend(emptyList(), today, utc).isEmpty())
+        val lastYear = session("2025-12-31T09:00:00Z", "2025-12-31T09:05:00Z")
+        assertEquals("25年12月", Statistics.monthlyTrend(listOf(lastYear), today, utc).first().label)
+    }
+    @Test fun shiftMovesWholePeriodsAndCompareUsesPreviousPeriod() {
+        val anchor = LocalDate.parse("2026-10-16")
+        assertEquals(LocalDate.parse("2026-10-15"), Statistics.shift(Period.DAY, anchor, -1))
+        assertEquals(LocalDate.parse("2026-10-05"), Statistics.shift(Period.WEEK, anchor, -1))
+        assertEquals(LocalDate.parse("2026-02-01"), Statistics.shift(Period.MONTH, LocalDate.parse("2026-03-31"), -1))
+        assertEquals(LocalDate.parse("2027-01-01"), Statistics.shift(Period.YEAR, anchor, 1))
+        val thisWeek = session("2026-10-14T09:00:00Z", "2026-10-14T09:40:00Z", "c")
+        val lastWeek = session("2026-10-08T09:00:00Z", "2026-10-08T09:25:00Z", "p")
+        val comparison = Statistics.compare(listOf(thisWeek, lastWeek), Period.WEEK, anchor, utc)
+        assertEquals(Comparison(2400, 1500), comparison)
+        assertEquals(900L, comparison.difference)
+        assertEquals(mapOf(LocalDate.parse("2026-10-14") to 2400L, LocalDate.parse("2026-10-08") to 1500L), Statistics.dailySeconds(listOf(thisWeek, lastWeek), utc))
+    }
     @Test fun backfillingOlderSessionNeverOverridesNewerSessionProgress() {
         val newer = ProgressEntry("n", "new", "p", 2000, "新专注", 20, 3000)
         val older = ProgressEntry("o", "old", "p", 1000, "晚补旧专注", 90, 9000)

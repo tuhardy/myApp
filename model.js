@@ -446,9 +446,49 @@
     return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / MILLISECONDS_PER_DAY;
   }
 
+  function allTimeRecords(records, now = new Date()) {
+    const today = calendarOrdinal(now);
+    return records.filter(record => calendarOrdinal(new Date(record.endedAt)) <= today)
+      .sort((left, right) => Date.parse(right.endedAt) - Date.parse(left.endedAt));
+  }
+
+  function allTimeRange(records, now = new Date()) {
+    const completed = allTimeRecords(records, now);
+    if (!completed.length) return null;
+    return { start: periodRange("day", new Date(completed.at(-1).endedAt)).start, end: periodRange("day", now).end };
+  }
+
+  function focusMonthlyTrend(records, now = new Date()) {
+    const range = allTimeRange(records, now);
+    if (!range) return [];
+    const bins = [];
+    for (const date = new Date(range.start.getFullYear(), range.start.getMonth(), 1); date < range.end; date.setMonth(date.getMonth() + 1)) {
+      const key = trendKey(date, "year");
+      bins.push({ key, label: date.getFullYear() === now.getFullYear() ? `${date.getMonth() + 1}月` : `${String(date.getFullYear()).slice(-2)}年${date.getMonth() + 1}月`, minutes: 0 });
+    }
+    const byKey = new Map(bins.map(bin => [bin.key, bin]));
+    for (const record of allTimeRecords(records, now)) byKey.get(trendKey(new Date(record.endedAt), "year")).minutes += recordMinutes(record);
+    return bins.map(bin => ({ ...bin, minutes: roundMinutes(bin.minutes) }));
+  }
+
+  function shiftPeriodAnchor(period, anchor, direction) {
+    const { start } = periodRange(period, anchor);
+    if (period === "day") start.setDate(start.getDate() + direction);
+    if (period === "week") start.setDate(start.getDate() + direction * DAYS_PER_WEEK);
+    if (period === "month") start.setMonth(start.getMonth() + direction);
+    if (period === "year") start.setFullYear(start.getFullYear() + direction);
+    return start;
+  }
+
+  function comparePeriods(records, { period, anchor, includeSamples = true }) {
+    const current = focusSummary(selectFocusRecords(records, { period, anchor, includeSamples })).minutes;
+    const previous = focusSummary(selectFocusRecords(records, { period, anchor: shiftPeriodAnchor(period, anchor, -1), includeSamples })).minutes;
+    return { current, previous, difference: roundMinutes(current - previous) };
+  }
+
   function allTimeFocusSummary(records, now = new Date()) {
     const today = calendarOrdinal(now);
-    const completed = records.filter(record => calendarOrdinal(new Date(record.endedAt)) <= today);
+    const completed = allTimeRecords(records, now);
     const { minutes, count, activeDays, averageMinutes } = focusSummary(completed);
     let first = null;
     let last = null;
@@ -875,6 +915,7 @@
     LIMITS, MODES, CATEGORIES, USAGE, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, daysBetween, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
     validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary,
+    allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,
     completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks,
     DIARY_LIMITS, initialDiaryEntries, diaryEntryDate, parseDiaryDateQuery, validateDiaryEntry, selectDiaryEntries, trashedDiaryEntries, listDiaryDrafts, moveDiaryToTrash, restoreDiaryEntry,
   });

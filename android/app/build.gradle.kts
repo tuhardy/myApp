@@ -24,8 +24,19 @@ android {
         applicationId = "com.focusassistant.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 14
-        versionName = "0.6.1"
+        versionCode = 15
+        versionName = "0.7.0"
+    }
+
+    buildTypes {
+        // 预览版：独立包名 com.focusassistant.app.preview，与正式包并存安装，数据互不影响。
+        // 用于在签名不一致（换电脑打包）时先体验新版界面，不必卸载已装的应用。
+        create("preview") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".preview"
+            versionNameSuffix = "-preview"
+            matchingFallbacks += listOf("debug")
+        }
     }
 
     buildFeatures {

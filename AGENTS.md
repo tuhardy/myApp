@@ -25,10 +25,13 @@
 - Android 的 `Todo` 带 `createdAt`（本地 `YYYY-MM-DD`）、`steps`、`archived`、`completedAt`（可空毫秒时间戳）。旧备份缺这些字段时按「放入日期为空、没有小步、未放下、完成时间未知」读入，不臆造历史；`createdAt` 为空按 0 天处理，仅新建填今天，编辑旧事项不补日期。保存时在仓库事务中合并最新小步状态，避免关闭后重开的旧草稿覆盖已走过的步骤。
 - 专注结束立即保存时长，再提示填写文字进度和可选 0–100% 完成度；允许跳过，之后在项目详情或专注记录中补写。已有弹窗不应被结束提示覆盖，须排队等待关闭。进度草稿和记录一样仅驻留内存。
 - 每次进度保存追加历史版本；当前进度按专注结束日期选最新，补写旧记录不覆盖较新记录。用户填写的进度优先于演示进度，删除项目不删除历史专注与进度记录。
-- 浏览器原型专注首页与计时页采用「刻度」视觉：首页顶部「今天的小积累」用 24 小时刻度尺 `#today-ribbon` 按真实专注片段落点，项目卡用 20 格刻度显示完成度（项目按钮无障碍名称保持 `进入项目：{标题}`，状态与百分比走 `aria-describedby`；展开详情仍保留视觉隐藏的 `<progress>`，有完成度才渲染，`browser_check.py` 依赖它）；计时页为 60 格分钟表盘，`#timer-area[data-state]`（idle / running / paused / completed）驱动刻度点亮、弧端小钮脉动、暂停数字明灭与完成涟漪。休息模式由 `#page-timer[data-dial]` 把表盘与主按钮换成石板灰（不要用 `data-mode`，那是休息按钮的选择器）。计时页完成后进度弹窗照常立即打开，只用 CSS 延迟 900ms 显现（`#modal.after-finish`），不得改用 `setTimeout`：`browser_check.py` 用暂停的 `page.clock`，JS 定时器不会走。首页↔计时页用 View Transitions 让项目卡片过渡到选择器（`morphTo`），减少动态效果时跳过。尚未迁移到 Android。app.js 是单个 IIFE，新增函数前先搜索同名函数，后声明的会覆盖先声明的。
-- 专注统计位于 `#statistics`，顶部累计总览不随周期和日期筛选变化，但遵循来源筛选。自然日均按首次完成日至今天（含空闲日）计算，活跃日均只按有记录日计算；空数据均显示 0。自然日天数使用日历差，不按 24 小时除法，以免夏令时偏差。
-- 下方周期统计按本地结束日期筛选，周一开周，周期日均仍按活跃日计算。不计休息、暂停和被放弃的计时。
-- 日、周、月、年都有 24 小时专注时段分布；对筛选出的完成记录按实际活动片段拆分小时，不再次按日期裁剪片段。周、月、年另外保留完成时长趋势图。
+- 浏览器原型专注首页与计时页采用「刻度」视觉：首页顶部「今天的小积累」用 24 小时刻度尺 `#today-ribbon` 按真实专注片段落点，项目卡用 20 格刻度显示完成度（项目按钮无障碍名称保持 `进入项目：{标题}`，状态与百分比走 `aria-describedby`；展开详情仍保留视觉隐藏的 `<progress>`，有完成度才渲染，`browser_check.py` 依赖它）；计时页为 60 格分钟表盘，`#timer-area[data-state]`（idle / running / paused / completed）驱动刻度点亮、弧端小钮脉动、暂停数字明灭与完成涟漪。休息模式由 `#page-timer[data-dial]` 把表盘与主按钮换成石板灰（不要用 `data-mode`，那是休息按钮的选择器）。计时页完成后进度弹窗照常立即打开，只用 CSS 延迟 900ms 显现（`#modal.after-finish`），不得改用 `setTimeout`：`browser_check.py` 用暂停的 `page.clock`，JS 定时器不会走。首页↔计时页用 View Transitions 让项目卡片过渡到选择器（`morphTo`），减少动态效果时跳过。Android 已同步（v0.7.0，见下条）。app.js 是单个 IIFE，新增函数前先搜索同名函数，后声明的会覆盖先声明的。
+- Android 同步了上述专注首页、计时表盘与统计页 UI（`ui/FocusVisuals.kt` 放共用刻度组件与色值，`ui/StatisticsScreens.kt` 是统计页）：统计页标题、周期切换（M3 分段按钮，含「全部」，状态为 `NativeUiModel.statsAll`）与周期导航固定在顶部，区块跳转用 `PrimaryTabRow` 驱动 `LazyColumn`；周期选择用底部面板（热力月历选日/整周、月 12 格、年 12 年，另可打开系统日期选择器）。Android 只用本机真实数据，不同步原型的「数据来源」切换；计时完成时进度弹窗照常立即出现，不做原型的完成涟漪；首页→计时页不做 View Transitions。周期平移统一用 `Statistics.shift`，环比用 `Statistics.compare`，「全部」用 `allTimeSessions` / `monthlyTrend`，导出 JSON 的 period 为 `ALL`。
+- 专注统计位于 `#statistics`（浏览器原型）：标题下是吸顶控制栏 `#statistics-bar`，含周期「日 / 周 / 月 / 年 / 全部」、周期导航（中间 `#statistics-period-label` 显示周期本身，点开 `#statistics-picker`：日/周为热力月历选日或整周、月为 12 格、年为 12 年，另有 `#statistics-anchor` 直接跳日期）和区块跳转（概览 / 时段 / 分布 / 排行 / 明细，随滚动高亮）。不在当前周期时才显示 `#statistics-today`「回到今天/本周…」，点击只重置日期、不改周期。页面所有区块都跟随所选周期；数据来源与统计口径在页面底部。
+- 「全部」是第 5 个周期：汇总当前来源截至今天的全部记录（`allTimeRecords`），概览显示累计总时长、自然日均、活跃日均与说明「?」，不显示环比；其它周期概览显示总时长并与上一周期环比（`comparePeriods`）。自然日均按首次完成日至今天（含空闲日）计算，活跃日均只按有记录日计算；空数据均显示 0。自然日天数使用日历差，不按 24 小时除法，以免夏令时偏差。
+- 周期统计按本地结束日期筛选，周一开周，周期日均仍按活跃日计算。不计休息、暂停和被放弃的计时。
+- 「时段」区块：日视图为当天时间线（按真实片段起止）；周、年为时长趋势柱状图，全部为按月趋势（`focusMonthlyTrend`），月视图改为热力月历（点日期进入日视图）。所有周期都有 24 小时专注时段分布，对筛选出的完成记录按实际活动片段拆分小时，不再次按日期裁剪片段。趋势、时段分布与时间线都是 `role="slider"`：点按、按住左右滑动或方向键查看具体数值，读数显示在图表上方，默认显示峰值。
+- 「明细」按本地结束日期分组，每行「时间段 · 项目 · 时长」，点行展开后才有进度笔记与「编辑/补写进度」按钮（`.record-row[data-record-id] .record-toggle`）；分页仍每次 20 条，日期标题不计入条数。
 - 专注记录保留开始时的专注项名称、模式、目标及分类快照，后续编辑或删除事项不追改历史记录；活动片段与有效整秒用于分布和导出，示例与本次计时使用不同来源标记。
 - 专注统计可实际下载 CSV 或 JSON。CSV 使用 UTF-8 BOM、CRLF 和字段转义，防止用户文本触发电子表格公式；附带每次专注最新的进度文字、完成度和更新时间。JSON 另含对应进度历史、时段分布与来源筛选后的累计总览，不是完整 APP 备份。明细与进度历史遵循当前日期及来源筛选，包含未在分页中展示的记录。CSV 已删除「任务」列，列数已变，旧导出文件与新表头不兼容，不能直接按相同列位置拼接。
 
@@ -98,7 +101,8 @@ uv run --no-project --python 3.12 --with playwright==1.55.0 --with pyee==13.0.0 
 - 未确认数据与未来时段显示未知占位，不冒充真实零用时；桶内有事件只表明存在系统记录，不保证整段历史完整。跨午夜和夏令时使用本地日历边界。
 - 当前工作目录已初始化 Git，主分支为 `main`。`docs/`、`.tools/`、构建产物和本地配置不提交；文档仅留在本机，需要另行备份。
 - 没有连接设备时，构建与单元测试通过不等于真机 UI、权限和后台行为验证通过。
-- 本机已有校验通过的 Gradle 8.11.1。Wrapper 可能重复联网下载，`android/verify.ps1` 固定调用已安装版本，并集中 `JAVA_HOME` / `GRADLE_USER_HOME` / `ANDROID_HOME` 三个变量，缺工具链时提示先跑 `bootstrap.ps1`。在 `android/` 目录运行：
+- 工程未配置固定签名，debug 包用各电脑自己的 `~/.android/debug.keystore`，换电脑打包会与手机上已装版本签名冲突。此时不要让用户卸载（会丢本机数据，日记不在完整备份内），改用 `verify.ps1 assemblePreview`：预览版包名 `com.focusassistant.app.preview`、桌面名「专注助手 预览」（`src/preview/res`），与正式包并存、数据独立。
+- 本机已有校验通过的 Gradle 8.11.1。Wrapper 可能重复联网下载，本机路径不写进脚本：每台电脑把 `android/.env.example` 复制为 `android/.env`（已被 `.gitignore` 忽略）并填写 `JAVA_HOME`（可选 `ANDROID_HOME`、`GRADLE_USER_HOME`，相对路径按 `android/` 解析）；`bootstrap.ps1` 与 `verify.ps1` 都通过 `android/local-env.ps1` 读取，缺文件或路径无效时给出修改提示，`-JdkPath` 可临时覆盖，首次 `bootstrap.ps1 -JdkPath ...` 会自动生成 `.env`。新增本机相关路径时加到 `.env.example`，不要写死在脚本里。`android/verify.ps1` 固定调用已安装版本，并集中 `JAVA_HOME` / `GRADLE_USER_HOME` / `ANDROID_HOME` 三个变量，缺工具链时提示先跑 `bootstrap.ps1`。在 `android/` 目录运行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\verify.ps1
