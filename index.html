@@ -181,9 +181,21 @@
             <header class="page-header"><div><p class="overline">了解习惯，而不是责备自己</p><h2 id="usage-heading">时间足迹<span class="heading-dot">.</span></h2></div><span class="sample-tag">示例数据</span></header>
             <div class="permission-note"><svg class="icon"><use href="#i-shield"/></svg><span>正式版需授权「使用情况访问权限」</span><button id="usage-permission" aria-label="查看使用统计权限说明">了解</button></div>
             <div class="segmented usage-tabs"><button class="selected" data-period="today" aria-pressed="true">今日</button><button data-period="week" aria-pressed="false">本周</button></div>
-            <div class="usage-total"><span id="usage-total-label">今日屏幕使用</span><div id="usage-total"><strong>3</strong> 小时 <strong>24</strong> 分钟</div><span class="comparison" id="usage-comparison">比昨日少 36 分钟，继续保持</span></div>
-            <div class="chart" id="usage-chart" role="img" aria-label="示例柱状图"></div><div class="chart-labels" id="chart-labels"></div>
-            <div class="goal-card"><div class="goal-top"><span><svg class="icon"><use href="#i-focus"/></svg>每日使用目标</span><button id="edit-goal">4 小时 <svg class="icon"><use href="#i-arrow"/></svg></button></div><div class="goal-track"><div id="goal-progress"></div></div><p id="goal-summary">今天还剩 36 分钟，留一点时间给生活。</p></div>
+            <div class="usage-hero">
+              <div class="usage-total"><span id="usage-total-label">今日屏幕使用</span><div id="usage-total"><strong>3</strong> 小时 <strong>24</strong> 分钟</div><span class="comparison" id="usage-comparison">比昨日少 36 分钟，继续保持</span></div>
+              <button class="goal-ring" id="edit-goal" type="button" aria-label="每日使用目标"><span class="goal-ring-ticks" id="goal-ring-ticks" aria-hidden="true"></span><span class="goal-ring-label"><strong id="goal-percent">85%</strong><small id="goal-target">目标 4 小时</small></span></button>
+            </div>
+            <p class="goal-summary" id="goal-summary">今天还剩 36 分钟，留一点时间给生活。</p>
+            <div class="usage-day" id="usage-day">
+              <button class="usage-ruler" id="usage-ribbon" type="button" aria-label="今天的用屏与专注时段，点按放大"><span class="usage-track screen" id="usage-screen-track"></span><span class="usage-track focus" id="usage-focus-track"></span></button>
+              <div class="today-hours" aria-hidden="true"><span>0 时</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
+              <p class="usage-legend" id="usage-focus-legend"></p>
+            </div>
+            <div class="usage-week" id="usage-week" hidden>
+              <div class="chart" id="usage-chart" role="img" aria-label="示例柱状图"></div><div class="chart-labels" id="chart-labels"></div>
+              <p class="usage-legend"><i class="screen"></i>用屏<i class="focus"></i>专注</p>
+            </div>
+            <div class="night-card" id="night-card"><span class="night-moon" aria-hidden="true"></span><div><strong id="night-title">夜间足迹</strong><p id="night-summary"></p></div></div>
             <div class="section-heading"><h3>时间花在哪里</h3><small id="usage-list-caption">按使用时长</small></div>
             <div class="app-list" id="usage-apps"></div>
             <div class="reminder-row"><div><strong>每日超时提醒</strong><small id="reminder-caption">仅演示开关，不发送系统通知</small></div><button class="switch" id="reminder-switch" role="switch" aria-checked="false" aria-label="每日超时提醒演示"><span></span></button></div>

@@ -36,6 +36,7 @@
     },
     week: {
       total: 1440,
+      nightMinutes: 185,
       bars: [210, 180, 192, 198, 216, 240, 204],
       labels: ["一", "二", "三", "四", "五", "六", "日"],
       apps: [
@@ -45,7 +46,20 @@
         { name: "其他应用", glyph: "其", minutes: 240, color: "#ebe9df", ink: "#9d9981" },
       ],
     },
+    night: { startHour: 23, endHour: 5 },
   });
+  /**
+   * 今日示例用屏片段 [开始分钟, 时长, 应用]，相对今天 0 点；负数表示昨晚。
+   * 每个应用的片段之和、每两小时之和分别与 USAGE.today.apps / bars 对齐，单测校验。
+   */
+  const SAMPLE_USAGE = Object.freeze([
+    [-35, 25, "微信"],
+    [10, 4, "哔哩哔哩"], [150, 2, "其他应用"], [300, 3, "浏览器"],
+    [400, 8, "微信"], [560, 12, "浏览器"], [640, 19, "微信"],
+    [760, 20, "哔哩哔哩"], [800, 12, "微信"], [880, 26, "浏览器"], [930, 20, "哔哩哔哩"],
+    [1000, 14, "其他应用"], [1030, 19, "微信"], [1100, 14, "哔哩哔哩"], [1130, 11, "微信"],
+    [1230, 9, "其他应用"], [1260, 5, "浏览器"], [1340, 3, "微信"], [1380, 3, "其他应用"],
+  ]);
 
   /**
    * 示例待办。createdAt 为「放进清单的那天」，用于计算停留天数；
@@ -400,6 +414,53 @@
       }
     }
     return records;
+  }
+
+  function sampleUsageSegments(now = new Date()) {
+    const { start } = periodRange("day", now);
+    return SAMPLE_USAGE.map(([minute, minutes, app]) => {
+      const startedAt = new Date(start);
+      startedAt.setMinutes(minute);
+      const endedAt = new Date(startedAt);
+      endedAt.setMinutes(endedAt.getMinutes() + minutes);
+      return { app, startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString() };
+    });
+  }
+
+  /** 专注记录按真实活动片段裁剪到 [start, end)，返回按开始时间排序的 [from, to] 毫秒区间。 */
+  function focusSpans(records, start, end) {
+    return records.flatMap(record => (record.segments?.length ? record.segments : [record])
+      .map(segment => [Math.max(start.getTime(), Date.parse(segment.startedAt)), Math.min(end.getTime(), Date.parse(segment.endedAt))])
+      .filter(([from, to]) => to > from))
+      .sort((left, right) => left[0] - right[0]);
+  }
+
+  /**
+   * 一天的用屏汇总：总时长与应用分项按本地日历日裁剪；夜间足迹取前一晚 23 点至当天 5 点；
+   * overlapCount 是与专注片段有重叠的用屏片段数，即「专注时拿起手机」的次数。
+   */
+  function usageDaySummary(segments, focus, anchor) {
+    const { start, end } = periodRange("day", anchor);
+    const nightStart = new Date(start);
+    nightStart.setDate(nightStart.getDate() - 1);
+    nightStart.setHours(USAGE.night.startHour);
+    const nightEnd = new Date(start);
+    nightEnd.setHours(USAGE.night.endHour);
+    const clip = (from, to) => segments
+      .map(segment => ({ app: segment.app, from: Math.max(from.getTime(), Date.parse(segment.startedAt)), to: Math.min(to.getTime(), Date.parse(segment.endedAt)) }))
+      .filter(span => span.to > span.from)
+      .sort((left, right) => left.from - right.from);
+    const minutesOf = spans => Math.round(spans.reduce((sum, span) => sum + span.to - span.from, 0) / MILLISECONDS_PER_MINUTE);
+    const spans = clip(start, end);
+    const night = clip(nightStart, nightEnd);
+    const apps = [...new Set(spans.map(span => span.app))]
+      .map(name => ({ name, minutes: minutesOf(spans.filter(span => span.app === name)) }))
+      .sort((left, right) => right.minutes - left.minutes);
+    return {
+      spans, apps, total: minutesOf(spans), nightMinutes: minutesOf(night),
+      lastNightUse: night.length ? new Date(Math.max(...night.map(span => span.to))) : null,
+      overlapCount: spans.filter(span => focus.some(([from, to]) => span.from < to && from < span.to)).length,
+    };
   }
 
   function initialProgressEntries(records) {
@@ -912,7 +973,7 @@
   }
 
   const api = Object.freeze({
-    LIMITS, MODES, CATEGORIES, USAGE, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, daysBetween, formatTime, Timer,
+    LIMITS, MODES, CATEGORIES, USAGE, sampleUsageSegments, focusSpans, usageDaySummary, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, daysBetween, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
     validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary,
     allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,

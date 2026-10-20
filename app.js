@@ -1,11 +1,11 @@
 "use strict";
 
 (() => {
-  const { LIMITS, CATEGORIES, USAGE, initialTasks, integerInRange, validateTask, taskSummary, formatTime, Timer,
+  const { LIMITS, CATEGORIES, USAGE, sampleUsageSegments, focusSpans, usageDaySummary, initialTasks, integerInRange, validateTask, taskSummary, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv,
     initialFocusItems, validateFocusItem, focusHourDistribution, initialProgressEntries, validateProgress,
     latestProjectProgress, allTimeFocusSummary, allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods } = FocusModel;
-  const UI = Object.freeze({ tickMs: 250, toastMs: 3400, ringRadius: 118, tickRadius: 134, initialGoalMinutes: 240, gaugeTicks: 20, minutesPerHour: 60, finishRevealMs: 900,
+  const UI = Object.freeze({ tickMs: 250, toastMs: 3400, ringRadius: 118, tickRadius: 134, initialGoalMinutes: 240, gaugeTicks: 20, goalTicks: 40, minutesPerHour: 60, finishRevealMs: 900,
     recordPageSize: 20, exportReleaseMs: 60000, weekDays: 7, minYear: 1900, maxYear: 2100,
     heatLevels: 4, chartAxisLabels: 5, fullCircle: 360, jsonIndent: 2, pickerYears: 12, jumpOffset: 12 });
   const STAT_PERIOD_NAMES = {
@@ -20,7 +20,7 @@
     finishHoldMs: 680, finishCollapseMs: 240, historyPage: 20, newDraft: "new" });
   const DURATION_PRESETS = [15, 25, 45, 60];
   const DURATION_STEP = 5;
-  const MODAL_VARIANTS = ["todo-guide-sheet", "focus-item-sheet"];
+  const MODAL_VARIANTS = ["todo-guide-sheet", "focus-item-sheet", "usage-zoom-sheet"];
   const PAGES = ["focus", "timer", "statistics", "tasks", "diary", "usage", "profile"];
   const DIARY_UI = Object.freeze({ visiblePhotos: 3, photoTones: 3, nameLength: 16, pickCounts: [1, 3] });
   const DIARY_VIEWS = ["home", "trash", "drafts", "detail", "editor"];
@@ -84,7 +84,7 @@
     $("modal-title").textContent = title;
     $("modal-content").replaceChildren(content);
     if (!$("modal").open) $("modal").showModal();
-    if (variant === "todo-guide-sheet") {
+    if (["todo-guide-sheet", "usage-zoom-sheet"].includes(variant)) {
       $("close-modal").focus({ preventScroll: true });
       $("modal").scrollTop = 0;
     } else $("modal-content").querySelector("input, textarea, select, button")?.focus();
@@ -135,6 +135,7 @@
     if (safePage === "focus") { renderFocusOverview(); renderProjectList(); }
     if (safePage === "tasks") renderTasks();
     if (safePage === "diary") renderDiary();
+    if (safePage === "usage") renderUsage();
     closeSwipes();
     showTaskUndo();
     document.querySelectorAll("[data-page]").forEach(button => {
@@ -238,10 +239,7 @@
     const { start, end } = periodRange("day", now);
     const dayStart = start.getTime();
     const dayMs = end.getTime() - dayStart;
-    const spans = records.flatMap(record => (record.segments?.length ? record.segments : [record])
-      .map(segment => [Math.max(dayStart, Date.parse(segment.startedAt)), Math.min(end.getTime(), Date.parse(segment.endedAt))])
-      .filter(([from, to]) => to > from))
-      .sort((left, right) => left[0] - right[0]);
+    const spans = focusSpans(records, start, end);
     const marks = spans.map(([from, to], index) => {
       const mark = element("i");
       mark.style.setProperty("--i", index);
@@ -2876,8 +2874,10 @@
   }
 
   function renderUsage() {
-    const data = USAGE[state.period];
+    const now = new Date();
     const isToday = state.period === "today";
+    const day = usageDaySummary(sampleUsageSegments(now), focusSpans(state.records, periodRange("day", now).start, periodRange("day", now).end), now);
+    const data = isToday ? { ...USAGE.today, total: day.total, nightMinutes: day.nightMinutes } : USAGE.week;
     $("usage-total-label").textContent = isToday ? "今日屏幕使用" : "本周屏幕使用";
     $("usage-total").replaceChildren(element("strong", "", Math.floor(data.total / LIMITS.secondsPerMinute)), document.createTextNode(" 小时 "), element("strong", "", data.total % LIMITS.secondsPerMinute), document.createTextNode(" 分钟"));
     $("usage-comparison").textContent = isToday ? "比昨日少 36 分钟，继续保持" : "日均约 3 小时 26 分钟 · 示例统计";
@@ -2886,23 +2886,15 @@
       button.classList.toggle("selected", selected);
       button.setAttribute("aria-pressed", String(selected));
     });
-    const maximum = Math.max(...data.bars);
-    const highlight = isToday ? data.bars.indexOf(maximum) : data.bars.length - 1;
-    $("usage-chart").replaceChildren(...data.bars.map((value, index) => {
-      const column = element("div", "bar-column");
-      const bar = element("div", `chart-bar${index === highlight ? " highlight" : ""}`);
-      bar.style.height = `${value / maximum * 100}%`;
-      bar.title = `${value} 分钟`;
-      column.append(bar);
-      return column;
-    }));
-    $("usage-chart").setAttribute("aria-label", `示例${isToday ? "今日各时段" : "本周每日"}使用分钟数：${data.bars.join("、")}`);
-    $("chart-labels").replaceChildren(...data.labels.map(label => element("span", "", label)));
-    $("edit-goal").replaceChildren(document.createTextNode(durationLabel(state.goal)), icon("arrow"));
-    $("goal-progress").style.width = `${Math.min(100, USAGE.today.total / state.goal * 100)}%`;
-    const remaining = state.goal - USAGE.today.total;
-    $("goal-summary").textContent = remaining > 0 ? `今天还剩 ${durationLabel(remaining)}，留一点时间给生活。` : remaining === 0 ? "今天已达到目标时长，休息一下吧。" : `今天已超出目标 ${durationLabel(-remaining)}，给眼睛一点休息。`;
-    $("usage-apps").replaceChildren(...data.apps.map(app => {
+    $("usage-day").hidden = !isToday;
+    $("usage-week").hidden = isToday;
+    if (isToday) renderUsageRibbon(day, now);
+    else renderUsageWeek(data, now);
+    renderGoalRing(day.total);
+    renderNightCard(data.nightMinutes, isToday ? day.lastNightUse : null, isToday);
+    const glyphs = new Map(USAGE.today.apps.map(app => [app.name, app]));
+    const apps = isToday ? day.apps.map(app => ({ ...glyphs.get(app.name), ...app })) : data.apps;
+    $("usage-apps").replaceChildren(...apps.map(app => {
       const row = element("div", "app-row");
       const avatar = element("div", "app-avatar", app.glyph);
       avatar.style.background = app.color;
@@ -2910,33 +2902,238 @@
       const details = element("div", "app-details");
       const heading = element("div");
       heading.append(element("span", "", app.name), element("small", "", durationLabel(app.minutes)));
-      const track = element("div", "app-track");
-      const fill = element("div");
-      fill.style.width = `${app.minutes / data.total * 100}%`;
-      track.append(fill);
-      details.append(heading, track);
+      const filled = Math.round(app.minutes / data.total * UI.gaugeTicks);
+      const ticks = element("span", "project-gauge-ticks app-ticks");
+      ticks.setAttribute("aria-hidden", "true");
+      ticks.append(...Array.from({ length: UI.gaugeTicks }, (_, tick) => element("i", tick < filled ? "on" : "")));
+      details.append(heading, ticks);
       row.append(avatar, details);
       return row;
     }));
   }
 
+  /** 今日双轨刻度尺：上轨示例用屏，下轨本次会话里真实的专注片段；夜间区段由 CSS 铺底。 */
+  function renderUsageRibbon(day, now) {
+    const { start, end } = periodRange("day", now);
+    const dayMs = end - start;
+    const focus = focusSpans(state.records, start, end);
+    const marks = spans => spans.map(([from, to], index) => {
+      const mark = element("i");
+      mark.style.setProperty("--i", index);
+      mark.style.left = `${(from - start) / dayMs * 100}%`;
+      mark.style.width = `${(to - from) / dayMs * 100}%`;
+      return mark;
+    });
+    $("usage-screen-track").replaceChildren(...marks(day.spans.map(span => [span.from, span.to])));
+    $("usage-focus-track").replaceChildren(...marks(focus));
+    const focusMinutes = Math.round(focus.reduce((sum, [from, to]) => sum + to - from, 0) / (LIMITS.secondsPerMinute * LIMITS.millisecondsPerSecond));
+    $("usage-ribbon").setAttribute("aria-label", `今天示例用屏 ${durationLabel(day.total)}，专注 ${durationLabel(focusMinutes)}，专注期间拿起手机 ${day.overlapCount} 次。点按放大查看细节`);
+    const legend = [element("i", "screen"), document.createTextNode(`用屏 ${durationLabel(day.total)}`), element("i", "focus"), document.createTextNode(`专注 ${durationLabel(focusMinutes)}`)];
+    if (focus.length) legend.push(element("span", "usage-overlap", day.overlapCount ? `专注时拿起手机 ${day.overlapCount} 次` : "专注时没有拿起手机"));
+    $("usage-focus-legend").replaceChildren(...legend);
+  }
+
+  /**
+   * 刻度尺放大面板：上方是可左右滚动的放大时间轴（每小时 56px，由 CSS 的 --hours 决定总宽），
+   * 下方按时间顺序列出每段用屏与专注，与专注重叠的用屏标出「专注中」。点轴上片段跳到对应行。
+   */
+  function usageRibbonDetail() {
+    const now = new Date();
+    const { start, end } = periodRange("day", now);
+    const minuteMs = LIMITS.secondsPerMinute * LIMITS.millisecondsPerSecond;
+    const focusRecords = selectFocusRecords(state.records, { period: "day", anchor: now });
+    const focus = focusRecords.flatMap(record => focusSpans([record], start, end).map(([from, to]) => ({ from, to, title: record.focusItemTitle || "专注" })));
+    const day = usageDaySummary(sampleUsageSegments(now), focus.map(span => [span.from, span.to]), now);
+    const events = [
+      ...day.spans.map(span => ({ ...span, kind: "screen", title: span.app, overlap: focus.some(item => span.from < item.to && item.from < span.to) })),
+      ...focus.map(span => ({ ...span, kind: "focus" })),
+    ].sort((left, right) => left.from - right.from || (left.kind === "focus" ? -1 : 1));
+    const hourMs = UI.minutesPerHour * minuteMs;
+    const hours = Math.round((end - start) / hourMs);
+    const content = element("div", "usage-zoom");
+    const scroller = element("div", "usage-zoom-scroll");
+    const axis = element("div", "usage-zoom-axis");
+    axis.style.setProperty("--hours", hours);
+    const lanes = { screen: element("div", "usage-zoom-lane screen"), focus: element("div", "usage-zoom-lane focus") };
+    const list = element("ol", "usage-zoom-list");
+    const rows = events.map((event, index) => {
+      const label = `${clockLabel(new Date(event.from))}–${clockLabel(new Date(event.to))}`;
+      const minutes = Math.max(1, Math.round((event.to - event.from) / minuteMs));
+      const mark = element("button", "usage-zoom-mark");
+      mark.type = "button";
+      mark.style.left = `${(event.from - start) / hourMs * 100 / hours}%`;
+      mark.style.width = `${(event.to - event.from) / hourMs * 100 / hours}%`;
+      mark.setAttribute("aria-label", `${label} ${event.kind === "focus" ? "专注" : "用屏"} ${event.title} ${durationLabel(minutes)}`);
+      lanes[event.kind].append(mark);
+      const row = element("li", `usage-zoom-row ${event.kind}${event.overlap ? " overlap" : ""}`);
+      row.id = `usage-zoom-row-${index}`;
+      const name = element("strong", "", event.title);
+      if (event.overlap) name.append(element("em", "", "专注中"));
+      row.append(element("span", "usage-zoom-time", label), element("i"), name, element("small", "", durationLabel(minutes)));
+      mark.addEventListener("click", () => {
+        list.querySelector(".selected")?.classList.remove("selected");
+        axis.querySelector(".usage-zoom-mark.selected")?.classList.remove("selected");
+        row.classList.add("selected");
+        mark.classList.add("selected");
+        row.scrollIntoView({ block: "nearest", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+      });
+      return row;
+    });
+    const hourLabels = element("div", "usage-zoom-hours");
+    hourLabels.setAttribute("aria-hidden", "true");
+    hourLabels.append(...Array.from({ length: hours + 1 }, (_, hour) => {
+      const label = element("span", "", String(hour));
+      label.style.left = `${hour / hours * 100}%`;
+      return label;
+    }));
+    const nowLine = element("b", "usage-zoom-now");
+    nowLine.style.left = `${(now - start) / hourMs * 100 / hours}%`;
+    axis.append(lanes.screen, lanes.focus, nowLine, hourLabels);
+    scroller.append(axis);
+    const summary = element("p", "usage-zoom-summary");
+    summary.append(element("i", "screen"), document.createTextNode(`用屏 ${day.spans.length} 段 · ${durationLabel(day.total)}`),
+      element("i", "focus"), document.createTextNode(`专注 ${focus.length} 段 · ${durationLabel(Math.round(focus.reduce((sum, span) => sum + span.to - span.from, 0) / minuteMs))}`));
+    list.append(...rows);
+    if (!rows.length) list.append(element("li", "usage-zoom-empty", "今天还没有记录。"));
+    content.append(summary, scroller, element("p", "usage-zoom-hint", "左右滑动查看全天，点片段定位到下方明细。用屏为示例数据。"), list);
+    showModal(`${now.getMonth() + 1}月${now.getDate()}日 · 时间细节`, content, "usage-zoom-sheet");
+    scroller.scrollLeft = Math.max(0, (now - start) / (end - start) * scroller.scrollWidth - scroller.clientWidth * 0.6);
+  }
+
+  /** 本周：每天一对柱子，灰色是示例用屏，暖橙是同一天真实的专注时长，共用同一纵轴。 */
+  function renderUsageWeek(data, now) {
+    const focus = focusTrend(state.records, "week", now).map(bin => Math.round(bin.minutes));
+    const maximum = Math.max(...data.bars, ...focus);
+    $("usage-chart").replaceChildren(...data.bars.map((value, index) => {
+      const column = element("div", "bar-column");
+      const bar = element("div", `chart-bar${index === data.bars.length - 1 ? " highlight" : ""}`);
+      bar.style.height = `${value / maximum * 100}%`;
+      bar.title = `用屏 ${value} 分钟`;
+      const focusBar = element("div", "chart-focus");
+      focusBar.style.height = `${focus[index] / maximum * 100}%`;
+      focusBar.title = `专注 ${focus[index]} 分钟`;
+      column.append(bar, focusBar);
+      focusBar.hidden = !focus[index];
+      return column;
+    }));
+    $("usage-chart").setAttribute("aria-label", `示例本周每日使用分钟数：${data.bars.join("、")}；本周每日专注分钟数：${focus.join("、")}`);
+    $("chart-labels").replaceChildren(...data.labels.map(label => element("span", "", label)));
+  }
+
+  /** 目标刻度环：40 格按已用 / 目标点亮，超出部分从起点再走一圈并换深色。 */
+  function renderGoalRing(used) {
+    const ratio = used / state.goal;
+    const lit = Math.min(UI.goalTicks, Math.round(ratio * UI.goalTicks));
+    const over = Math.min(UI.goalTicks, Math.round(Math.max(0, ratio - 1) * UI.goalTicks));
+    $("goal-ring-ticks").replaceChildren(...Array.from({ length: UI.goalTicks }, (_, tick) => {
+      const mark = element("i", tick < over ? "over" : tick < lit ? "on" : "");
+      mark.style.setProperty("--k", tick);
+      return mark;
+    }));
+    $("goal-percent").textContent = `${Math.round(ratio * 100)}%`;
+    $("goal-target").textContent = `目标 ${durationLabel(state.goal)}`;
+    $("edit-goal").setAttribute("aria-label", `每日使用目标 ${durationLabel(state.goal)}，已用 ${Math.round(ratio * 100)}%，点按修改`);
+    const remaining = state.goal - used;
+    $("goal-summary").textContent = remaining > 0 ? `今天还剩 ${durationLabel(remaining)}，留一点时间给生活。` : remaining === 0 ? "今天已达到目标时长，休息一下吧。" : `今天已超出目标 ${durationLabel(-remaining)}，给眼睛一点休息。`;
+  }
+
+  function renderNightCard(minutes, lastUse, isToday) {
+    $("night-card").classList.toggle("quiet", minutes === 0);
+    $("night-title").textContent = isToday ? `昨夜足迹 · ${minutes ? durationLabel(minutes) : "没有"}` : `本周夜间足迹 · ${durationLabel(minutes)}`;
+    $("night-summary").textContent = !minutes ? "23 点到 5 点没有拿起手机，昨晚睡得很安静。"
+      : isToday ? `最后一次放下手机是 ${clockLabel(lastUse)}，今晚试着早一点说晚安。`
+      : `本周 23 点到 5 点共用了 ${durationLabel(minutes)}，夜里的时间留给睡眠吧。`;
+  }
+
+  /**
+   * 目标时长滚轮：小时 0–24、分钟按 5 分钟一档，两列 scroll-snap 各自滚动，
+   * 停下后吸附到正中的格子。方向键 / PageUp / PageDown 逐格移动，点格子直接选中。
+   */
+  function wheelColumn(label, values, selected, format) {
+    const column = element("div", "goal-wheel-column");
+    const list = element("div", "goal-wheel-list");
+    list.tabIndex = 0;
+    list.setAttribute("role", "listbox");
+    list.setAttribute("aria-label", label);
+    const options = values.map(value => {
+      const option = element("div", "goal-wheel-option", format(value));
+      option.setAttribute("role", "option");
+      option.dataset.value = value;
+      option.addEventListener("click", () => select(value, true));
+      return option;
+    });
+    list.append(element("div", "goal-wheel-pad"), ...options, element("div", "goal-wheel-pad"));
+    column.append(list, element("span", "goal-wheel-unit", label));
+    let current = selected;
+    const smooth = () => matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+    function mark(value) {
+      current = value;
+      options.forEach(option => {
+        const on = Number(option.dataset.value) === value;
+        option.classList.toggle("selected", on);
+        option.setAttribute("aria-selected", String(on));
+      });
+      column.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    function select(value, animate) {
+      const index = values.indexOf(value);
+      list.scrollTo({ top: index * options[0].offsetHeight, behavior: animate ? smooth() : "auto" });
+      mark(value);
+    }
+    let settle = null;
+    list.addEventListener("scroll", () => {
+      const index = Math.min(values.length - 1, Math.max(0, Math.round(list.scrollTop / options[0].offsetHeight)));
+      if (values[index] !== current) mark(values[index]);
+      clearTimeout(settle);
+      settle = setTimeout(() => select(current, true), 120);
+    });
+    list.addEventListener("keydown", event => {
+      const step = { ArrowUp: -1, ArrowDown: 1, PageUp: -3, PageDown: 3 }[event.key];
+      if (!step) return;
+      event.preventDefault();
+      select(values[Math.min(values.length - 1, Math.max(0, values.indexOf(current) + step))], true);
+    });
+    return { column, value: () => current, select: value => select(value, false) };
+  }
+
   function goalSettings() {
-    const form = element("form");
-    form.append(element("div", "modal-notice", "使用固定的示例数据演示目标进度，不会限制任何应用。"));
-    field(form, "每日目标（分钟）", "goal", state.goal, { type: "number", min: LIMITS.minGoalMinutes, max: LIMITS.maxGoalMinutes });
+    const form = element("form", "goal-form");
+    const maxHours = LIMITS.maxGoalMinutes / UI.minutesPerHour;
+    const minuteStep = 5;
+    const hours = wheelColumn("小时", Array.from({ length: maxHours + 1 }, (_, value) => value), Math.floor(state.goal / UI.minutesPerHour), String);
+    const minutes = wheelColumn("分钟", Array.from({ length: UI.minutesPerHour / minuteStep }, (_, index) => index * minuteStep),
+      Math.round(state.goal % UI.minutesPerHour / minuteStep) * minuteStep % UI.minutesPerHour, value => String(value).padStart(2, "0"));
+    const wheels = element("div", "goal-wheels");
+    wheels.append(hours.column, minutes.column);
+    const preview = element("p", "goal-wheel-preview");
+    const total = () => hours.value() * UI.minutesPerHour + minutes.value();
+    const actions = element("div", "goal-actions");
+    const cancel = element("button", "secondary-button", "取消");
+    cancel.type = "button";
+    cancel.addEventListener("click", closeModal);
     const save = element("button", "primary-button", "保存目标");
     save.type = "submit";
-    form.append(save);
+    actions.append(cancel, save);
+    form.addEventListener("change", () => {
+      const goal = total();
+      const valid = integerInRange(goal, LIMITS.minGoalMinutes, LIMITS.maxGoalMinutes);
+      preview.textContent = valid ? `每天 ${durationLabel(goal)}` : "目标需在 30 分钟到 24 小时之间";
+      preview.classList.toggle("invalid", !valid);
+      save.disabled = !valid;
+    });
+    form.append(element("div", "modal-notice", "使用固定的示例数据演示目标进度，不会限制任何应用。"), wheels, preview, actions);
     form.addEventListener("submit", event => {
       event.preventDefault();
-      const goal = new FormData(form).get("goal");
-      if (!integerInRange(goal, LIMITS.minGoalMinutes, LIMITS.maxGoalMinutes)) return toast("请输入 30–1440 的整数分钟。");
-      state.goal = Number(goal);
+      const goal = total();
+      if (!integerInRange(goal, LIMITS.minGoalMinutes, LIMITS.maxGoalMinutes)) return toast("每日目标需在 30 分钟到 24 小时之间。");
+      state.goal = goal;
       closeModal();
       renderUsage();
       toast("目标已更新，仅用于本次演示。");
     });
     showModal("给屏幕时间一点边界", form);
+    hours.select(hours.value());
+    minutes.select(minutes.value());
   }
 
   document.documentElement.style.setProperty("--todo-finish-hold", `${TODO_UI.finishHoldMs}ms`);
@@ -3125,6 +3322,7 @@
   $("add-task").addEventListener("click", () => taskEditor());
   $("add-task-inline").addEventListener("click", () => taskEditor());
   $("edit-goal").addEventListener("click", goalSettings);
+  $("usage-ribbon").addEventListener("click", usageRibbonDetail);
   $("reminder-switch").addEventListener("click", () => {
     state.reminders = !state.reminders;
     $("reminder-switch").setAttribute("aria-checked", String(state.reminders));

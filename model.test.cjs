@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { Timer, LIMITS, MODES, USAGE, CATEGORIES, initialTasks, taskSummary, groupTasks, validateTask, validateSteps, taskAge, taskProgress, nextStep, daysBetween, formatTime } = require("./model.js");
+const { sampleUsageSegments, focusSpans, usageDaySummary } = require("./model.js");
 const { localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv } = require("./model.js");
 const { completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks } = require("./model.js");
 const { execFileSync } = require("node:child_process");
@@ -764,11 +765,58 @@ test("待办列表隔离实例，空列表进度不产生 NaN", () => {
 });
 
 test("示例统计的总时长、图表与应用分项保持一致", () => {
-  for (const data of Object.values(USAGE)) {
+  for (const data of [USAGE.today, USAGE.week]) {
     assert.equal(data.apps.reduce((sum, app) => sum + app.minutes, 0), data.total);
     assert.equal(data.bars.reduce((sum, value) => sum + value, 0), data.total);
   }
   assert.equal(USAGE.week.bars.at(-1), USAGE.today.total);
+});
+
+test("示例用屏片段与今日汇总、两小时分桶和应用分项一致", () => {
+  const now = new Date(2026, 9, 20, 23, 30);
+  const summary = usageDaySummary(sampleUsageSegments(now), [], now);
+  assert.equal(summary.total, USAGE.today.total);
+  assert.deepEqual(summary.apps, USAGE.today.apps.map(({ name, minutes }) => ({ name, minutes })));
+  const dayStart = periodRange("day", now).start.getTime();
+  const bars = Array(12).fill(0);
+  for (const span of summary.spans) for (let time = span.from; time < span.to; time += 60000) bars[Math.floor((time - dayStart) / 7200000)] += 1;
+  assert.deepEqual(bars, USAGE.today.bars);
+});
+
+test("用屏汇总按日历日裁剪跨午夜片段，夜间足迹取前一晚 23 点至 5 点", () => {
+  const anchor = new Date(2026, 9, 20, 12);
+  const at = (day, hour, minute = 0) => new Date(2026, 9, day, hour, minute).toISOString();
+  const segments = [
+    { app: "微信", startedAt: at(19, 23, 50), endedAt: at(20, 0, 20) },
+    { app: "浏览器", startedAt: at(20, 4, 50), endedAt: at(20, 5, 10) },
+    { app: "微信", startedAt: at(20, 22, 0), endedAt: at(20, 23, 30) },
+    { app: "浏览器", startedAt: at(20, 23, 50), endedAt: at(21, 0, 30) },
+  ];
+  const summary = usageDaySummary(segments, [], anchor);
+  assert.equal(summary.total, 20 + 20 + 90 + 10);
+  assert.deepEqual(summary.apps, [{ name: "微信", minutes: 110 }, { name: "浏览器", minutes: 30 }]);
+  assert.equal(summary.nightMinutes, 30 + 10);
+  assert.equal(summary.lastNightUse.getTime(), new Date(2026, 9, 20, 5).getTime());
+  assert.deepEqual(usageDaySummary([], [], anchor), { spans: [], apps: [], total: 0, nightMinutes: 0, lastNightUse: null, overlapCount: 0 });
+});
+
+test("专注片段按活动段裁剪，重叠计数只算与专注相交的用屏片段", () => {
+  const anchor = new Date(2026, 9, 20, 12);
+  const at = (hour, minute = 0) => new Date(2026, 9, 20, hour, minute).toISOString();
+  const { start, end } = periodRange("day", anchor);
+  const records = [
+    { startedAt: at(9), endedAt: at(10), segments: [{ startedAt: at(9), endedAt: at(9, 20) }, { startedAt: at(9, 40), endedAt: at(10) }] },
+    { startedAt: new Date(2026, 9, 19, 23, 50).toISOString(), endedAt: at(0, 10) },
+  ];
+  const spans = focusSpans(records, start, end);
+  assert.deepEqual(spans, [[start.getTime(), Date.parse(at(0, 10))], [Date.parse(at(9)), Date.parse(at(9, 20))], [Date.parse(at(9, 40)), Date.parse(at(10))]]);
+  const segments = [
+    { app: "微信", startedAt: at(9, 10), endedAt: at(9, 12) },
+    { app: "微信", startedAt: at(9, 25), endedAt: at(9, 35) },
+    { app: "微信", startedAt: at(9, 20), endedAt: at(9, 22) },
+    { app: "微信", startedAt: at(9, 55), endedAt: at(10, 5) },
+  ];
+  assert.equal(usageDaySummary(segments, spans, anchor).overlapCount, 2);
 });
 
 test("HTML ID 唯一且 app.js 的固定 ID 引用存在", () => {
