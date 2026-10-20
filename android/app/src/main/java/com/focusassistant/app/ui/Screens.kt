@@ -24,6 +24,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
@@ -137,7 +144,7 @@ private fun todoBorder(todo: Todo, age: TodoAge): Color = when {
     todo.done || todo.archived -> Line
     age.stage == TodoStage.RESTING -> Color(0xFFEFEFEF)
     age.stage == TodoStage.STALE -> Color(0xFFF3F3F3)
-    else -> Color(0xFFE8C4B5)
+    else -> TodoAccentBorder
 }
 
 /**
@@ -152,6 +159,9 @@ private fun todoMetaTags(todo: Todo, groupKey: String): List<Pair<String, Boolea
     }
     return tags
 }
+
+/** 原型 .task-card 的暖橙描边，「查看最近有记录的月份」按钮也用它。 */
+private val TodoAccentBorder = Color(0xFFE8C4B5)
 
 private fun todoListHeading(filter: TodoFilter): String = when (filter) {
     TodoFilter.DONE -> "走过的路，都算数"
@@ -655,17 +665,21 @@ internal fun TodosScreen(
                         ui.undated -> "有明确完成时间的事都在对应月份里。"
                         else -> "可以切换月份回看，或搜索全部时间的完成记录。"
                     }
-                    EmptyMessage(title, detail)
-                    if (history?.latestMonth != null && ui.query.isBlank() && !ui.undated && history.latestMonth != ui.month) {
-                        OutlinedButton(onClick = { ui.selectMonth(history.latestMonth) }, modifier = Modifier.heightIn(min = 48.dp)) {
-                            Text("查看最近有记录的月份", fontSize = 12.sp)
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 35.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
+                        Text(detail, color = Muted, fontSize = 12.sp, lineHeight = 22.sp, textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(top = 8.dp))
+                        if (history?.latestMonth != null && ui.query.isBlank() && !ui.undated && history.latestMonth != ui.month) {
+                            OutlinedButton(onClick = { ui.selectMonth(history.latestMonth) },
+                                modifier = Modifier.padding(top = 16.dp).heightIn(min = 48.dp), shape = RoundedCornerShape(11.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, TodoAccentBorder),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentDark)) {
+                                Text("查看最近有记录的月份", fontSize = 12.sp)
+                            }
                         }
                     }
-                    if (ui.filter == TodoFilter.PENDING) OutlinedButton(enabled = !busy, onClick = onCreate,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), shape = RoundedCornerShape(14.dp)) {
-                        Icon(Icons.Outlined.Add, null, modifier = Modifier.size(16.dp))
-                        Text("添加一个小目标", fontSize = 12.sp, modifier = Modifier.padding(start = 7.dp))
-                    }
+                    if (ui.filter == TodoFilter.PENDING) TodoDashedButton(enabled = !busy, onClick = onCreate)
                 }
             }
             groups.forEach { group ->
@@ -675,7 +689,8 @@ internal fun TodosScreen(
                         if (group.key == TodoGrouping.IMPORTANT_KEY) Text("▲", color = AccentDark, fontSize = 8.sp, modifier = Modifier.padding(end = 5.dp))
                         Text(group.label, fontSize = 12.sp,
                             color = if (group.key == TodoGrouping.IMPORTANT_KEY) AccentDark else Muted,
-                            fontWeight = FontWeight.Medium, modifier = if (history != null) Modifier.weight(1f) else Modifier)
+                            fontWeight = if (history != null) FontWeight.SemiBold else FontWeight.Medium,
+                            modifier = if (history != null) Modifier.weight(1f) else Modifier)
                         Text(if (history != null) "${group.todos.size} 件已展示" else "${group.todos.size}", fontSize = 11.sp, color = Muted,
                             modifier = Modifier.padding(start = 7.dp))
                     }
@@ -700,13 +715,19 @@ internal fun TodosScreen(
         }
         ui.undo.lastOrNull()?.let { entry ->
             Surface(shape = RoundedCornerShape(14.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Line),
+                color = Color.White, shadowElevation = 4.dp,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Row(Modifier.padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("${entry.label} · ${entry.change.before.title}（${ui.undo.size} 条可撤销）", fontSize = 12.sp,
+                Row(Modifier.padding(start = 10.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val more = if (ui.undo.size > 1) "（可依次撤销 ${ui.undo.size} 次）" else ""
+                    Text("${entry.label} · ${entry.change.before.title}$more", fontSize = 12.sp,
                         maxLines = 2, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite })
-                    TextButton(enabled = !busy, onClick = onUndo, modifier = Modifier.heightIn(min = 48.dp)) { Text("撤销", fontSize = 12.sp) }
-                    IconButton(enabled = !busy, onClick = onDismissUndo) { Icon(Icons.Outlined.Close, "关闭撤销提示", modifier = Modifier.size(18.dp)) }
+                    TextButton(enabled = !busy, onClick = onUndo, modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 8.dp)) {
+                        Text("撤销", color = AccentDark, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    TextButton(enabled = !busy, onClick = onDismissUndo, modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 8.dp)) {
+                        Text("关闭提示", color = Muted, fontSize = 11.sp)
+                    }
                 }
             }
         }
@@ -769,20 +790,22 @@ private fun TodoHistoryControls(ui: TodoUiState, history: TodoHistoryResult, tod
                 focusedContainerColor = SoftSurface, unfocusedContainerColor = SoftSurface, cursorColor = Accent),
             modifier = Modifier.fillMaxWidth().semantics { contentDescription = "搜索已完成的事·全部时间" })
         if (!searching && !ui.undated) {
-            Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(enabled = ui.month > YearMonth.of(TodoUiLimits.MIN_YEAR, 1), onClick = { ui.selectMonth(ui.month.minusMonths(1)) }) {
                     Icon(Icons.Outlined.ChevronLeft, "上一月")
                 }
                 TextButton(onClick = onPickMonth, modifier = Modifier.weight(1f).heightIn(min = 48.dp), contentPadding = PaddingValues(0.dp)) {
-                    Text("${ui.month.year}年${ui.month.monthValue}月", color = MaterialTheme.colorScheme.onSurface, fontSize = 15.sp)
-                    Icon(Icons.Outlined.ExpandMore, null, tint = Muted, modifier = Modifier.size(16.dp))
+                    Text("${ui.month.year}年${ui.month.monthValue}月", color = MaterialTheme.colorScheme.onSurface, fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold)
+                    Icon(Icons.Outlined.ExpandMore, null, tint = Muted, modifier = Modifier.padding(start = 4.dp).size(13.dp))
                 }
                 IconButton(enabled = ui.month < current, onClick = { ui.selectMonth(ui.month.plusMonths(1)) }) {
                     Icon(Icons.Outlined.ChevronRight, "下一月")
                 }
-            }
-            if (ui.month != current) TextButton(onClick = { ui.selectMonth(current) }, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text("回到本月", fontSize = 12.sp)
+                if (ui.month != current) TextButton(onClick = { ui.selectMonth(current) }, modifier = Modifier.heightIn(min = 48.dp),
+                    contentPadding = PaddingValues(horizontal = 5.dp)) {
+                    Text("回到本月", color = AccentDark, fontSize = 11.sp, maxLines = 1)
+                }
             }
         }
         Text(when {
@@ -790,10 +813,12 @@ private fun TodoHistoryControls(ui: TodoUiState, history: TodoHistoryResult, tod
             ui.undated -> "完成时间未记录 · ${history.total} 件"
             else -> "${ui.month.year}年${ui.month.monthValue}月 · 完成 ${history.total} 件"
         }, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp).semantics { liveRegion = LiveRegionMode.Polite })
-        if (!searching && ui.undated) TextButton(onClick = { ui.showUndated(false) }, modifier = Modifier.heightIn(min = 48.dp)) {
-            Text("返回按月查看", fontSize = 12.sp)
-        } else if (!searching && history.undatedCount > 0) TextButton(onClick = { ui.showUndated(true) }, modifier = Modifier.heightIn(min = 48.dp)) {
-            Text("时间未记录 · ${history.undatedCount} 件", fontSize = 12.sp)
+        if (!searching && ui.undated) TextButton(onClick = { ui.showUndated(false) }, modifier = Modifier.heightIn(min = 48.dp),
+            contentPadding = PaddingValues(horizontal = 2.dp)) {
+            Text("返回按月查看", color = AccentDark, fontSize = 12.sp, textDecoration = TextDecoration.Underline)
+        } else if (!searching && history.undatedCount > 0) TextButton(onClick = { ui.showUndated(true) }, modifier = Modifier.heightIn(min = 48.dp),
+            contentPadding = PaddingValues(horizontal = 2.dp)) {
+            Text("时间未记录 · ${history.undatedCount} 件", color = AccentDark, fontSize = 12.sp, textDecoration = TextDecoration.Underline)
         }
     }
 }
@@ -845,8 +870,9 @@ private fun TodoCard(
                 }
             }
             Surface(color = if (finish != null) androidx.compose.ui.graphics.lerp(Color(0xFFFFFAF6), AccentSoft, finishGlow * 0.6f) else todoBackground(todo, age), shape = shape,
-                border = if (history) null else androidx.compose.foundation.BorderStroke(1.dp, if (finish != null) Accent else todoBorder(todo, age)),
+                border = if (history || todo.archived) null else androidx.compose.foundation.BorderStroke(1.dp, if (finish != null) Accent else todoBorder(todo, age)),
                 modifier = Modifier.offset { IntOffset(swipe.roundToInt(), 0) }.fillMaxWidth()
+                    .then(if (todo.archived && !history) Modifier.dashedBorder(Line, 15.dp) else Modifier)
                     .pointerInput(todo.id, allowed, swipeWidth) {
                         if (allowed) detectHorizontalDragGestures(
                             onDragStart = { dragOffset = if (currentOpened) -swipeWidth else 0f; dragging = true; ui.openSwipeId = todo.id },
@@ -1000,11 +1026,11 @@ private fun StepPath(todo: Todo, expanded: Boolean, enabled: Boolean, onExpand: 
     val progress = TodoAging.progress(todo)
     Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp)) {
         Column(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp))
-            .clickable(enabled = enabled, onClick = onExpand).semantics { stateDescription = if (expanded) "小步已展开" else "小步已收起" }
+            .clickable(enabled = enabled, onClickLabel = if (expanded) "收起小步" else "展开小步", onClick = onExpand).semantics { stateDescription = if (expanded) "小步已展开" else "小步已收起" }
             .padding(horizontal = 5.dp, vertical = 7.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("小步 ${progress.walked} / ${progress.total}", color = AccentDark, fontSize = 11.sp, modifier = Modifier.weight(1f))
-                Text(if (expanded) "收起小步" else "展开小步", color = Muted, fontSize = 11.sp)
+                Text(if (expanded) "收起" else "展开", color = Muted, fontSize = 11.sp)
             }
             val next = TodoAging.nextStep(todo)
             Text(if (next == null) "每一步都走完了" else "下一步 · ${next.title}", color = Muted, fontSize = 12.sp)
@@ -1040,6 +1066,25 @@ private fun StepPath(todo: Todo, expanded: Boolean, enabled: Boolean, onExpand: 
     }
 }
 
+/** 对应原型 .add-task-inline：虚线框，只在待完成为空时出现。 */
+@Composable
+private fun TodoDashedButton(enabled: Boolean, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(top = 14.dp).heightIn(min = 48.dp).clip(RoundedCornerShape(14.dp))
+        .dashedBorder(Color(0xFFC9C9C9), 14.dp).clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(12.dp),
+        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Outlined.Add, null, tint = AccentDark, modifier = Modifier.size(16.dp))
+        Text("添加一个小目标", color = AccentDark, fontSize = 12.sp, modifier = Modifier.padding(start = 7.dp))
+    }
+}
+
+/** Compose 的 border 不支持虚线，自绘 1dp 圆角虚线描边。 */
+private fun Modifier.dashedBorder(color: Color, radius: Dp): Modifier = drawBehind {
+    val stroke = 1.dp.toPx()
+    drawRoundRect(color, topLeft = Offset(stroke / 2, stroke / 2), size = Size(size.width - stroke, size.height - stroke),
+        cornerRadius = CornerRadius(radius.toPx()),
+        style = Stroke(stroke, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))))
+}
+
 private fun todoFilterName(filter: TodoFilter): String = when (filter) {
     TodoFilter.PENDING -> "待完成"
     TodoFilter.DONE -> "已完成"
@@ -1047,14 +1092,13 @@ private fun todoFilterName(filter: TodoFilter): String = when (filter) {
 }
 
 private fun emptyTodoTitle(filter: TodoFilter): String = when (filter) {
-    TodoFilter.DONE -> "还没有已完成的事"
-    TodoFilter.ARCHIVED -> "还没有放下的事"
-    else -> "把想做的事记下来"
+    TodoFilter.PENDING -> "给下一步，留一点空间"
+    else -> "这里暂时是空的"
 }
 
 private fun emptyTodoDetail(filter: TodoFilter): String = when (filter) {
-    TodoFilter.DONE -> "慢慢来，走一步算一步。"
-    TodoFilter.ARCHIVED -> "放下不是删除，是承认它这阵子不重要。"
+    TodoFilter.DONE -> "可以切换月份回看，或搜索全部时间的完成记录。"
+    TodoFilter.ARCHIVED -> "放下不是删除，需要时还可以找回。"
     TodoFilter.PENDING -> "记下一件想做的事，也可以把它拆成几个小步。"
 }
 
