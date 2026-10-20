@@ -19,6 +19,8 @@
   const TODO_UI = Object.freeze({ swipeWidth: 88, swipeSlop: 10, swipeRatio: 1.25, swipeThreshold: 36,
     finishHoldMs: 680, finishCollapseMs: 240, historyPage: 20, newDraft: "new" });
   const DURATION_PRESETS = [15, 25, 45, 60];
+  const DURATION_STEP = 5;
+  const MODAL_VARIANTS = ["todo-guide-sheet", "focus-item-sheet"];
   const PAGES = ["focus", "timer", "statistics", "tasks", "diary", "usage", "profile"];
   const DIARY_UI = Object.freeze({ visiblePhotos: 3, photoTones: 3, nameLength: 16, pickCounts: [1, 3] });
   const DIARY_VIEWS = ["home", "trash", "drafts", "detail", "editor"];
@@ -75,7 +77,7 @@
   }
 
   function showModal(title, content, variant = "") {
-    $("modal").classList.toggle("todo-guide-sheet", variant === "todo-guide-sheet");
+    MODAL_VARIANTS.forEach(name => $("modal").classList.toggle(name, variant === name));
     $("modal").classList.remove("after-finish");
     state.progressDialogRecord = null;
     state.progressReturnHome = false;
@@ -609,38 +611,97 @@
     validation.setAttribute("role", "alert");
     validation.hidden = true;
     form.append(validation);
-    field(form, "专注项名称", "title", item?.title || "", { maxLength: LIMITS.maxTaskTitle });
-    field(form, "分类", "category", item?.category || CATEGORIES[0], { choices: CATEGORIES });
-    const modeInput = field(form, "计时模式", "timerMode", TIMING_NAMES[item?.timerMode || "countdown"], { choices: Object.values(TIMING_NAMES) });
-    const durationInput = field(form, "时长（分钟）", "durationMinutes", item?.durationMinutes || timer.durations.focus, { type: "number", min: LIMITS.minTimerMinutes, max: LIMITS.maxTimerMinutes });
-    const presets = element("div", "duration-presets");
+    const titleInput = field(form, "专注项名称", "title", item?.title || "", { maxLength: LIMITS.maxTaskTitle });
+    titleInput.parentElement.classList.add("focus-title-field");
+    titleInput.placeholder = "例如：Spring Boot 实战";
+
+    // 分类与计时方式用点选按钮，值写进隐藏字段，提交仍走 FormData。
+    const choiceGroup = (label, name, value, choices, className, onPick) => {
+      form.append(element("p", "focus-field-label", label));
+      const hidden = element("input");
+      hidden.type = "hidden";
+      hidden.name = name;
+      hidden.value = value;
+      const group = element("div", className);
+      group.setAttribute("role", "group");
+      group.setAttribute("aria-label", label);
+      const sync = () => group.querySelectorAll("button").forEach(button => {
+        const selected = button.dataset.choice === hidden.value;
+        button.classList.toggle("selected", selected);
+        button.setAttribute("aria-pressed", String(selected));
+      });
+      choices.forEach(choice => {
+        const button = taskButton(choice, className === "segmented" ? "" : "category-choice", () => {
+          hidden.value = choice;
+          sync();
+          onPick?.();
+          form.dispatchEvent(new Event("input"));
+        });
+        button.dataset.choice = choice;
+        group.append(button);
+      });
+      sync();
+      form.append(hidden, group);
+      return hidden;
+    };
+    choiceGroup("分类", "category", item?.category || CATEGORIES[0], CATEGORIES, "todo-category-choices");
+    const modeInput = choiceGroup("计时方式", "timerMode", TIMING_NAMES[item?.timerMode || "countdown"], Object.values(TIMING_NAMES), "segmented", () => updateHint());
+    const hint = element("p", "data-note focus-mode-hint");
+    form.append(hint);
+
+    const durationLabel = element("p", "focus-field-label");
+    const stepper = element("div", "duration-stepper");
+    const durationInput = element("input");
+    durationInput.type = "number";
+    durationInput.name = "durationMinutes";
+    durationInput.min = LIMITS.minTimerMinutes;
+    durationInput.max = LIMITS.maxTimerMinutes;
+    durationInput.step = "1";
+    durationInput.required = true;
+    durationInput.inputMode = "numeric";
+    durationInput.value = item?.durationMinutes || timer.durations.focus;
+    durationInput.setAttribute("aria-label", "时长（分钟）");
+    const setDuration = minutes => {
+      durationInput.value = Math.min(LIMITS.maxTimerMinutes, Math.max(LIMITS.minTimerMinutes, minutes));
+      updateDuration();
+      form.dispatchEvent(new Event("input"));
+    };
+    // 先对齐到 5 的倍数再步进，7 分钟按「+」得到 10 而不是 12。
+    const minus = taskButton("−", "stepper-button", () => setDuration(Math.ceil(Number(durationInput.value) / DURATION_STEP - 1) * DURATION_STEP));
+    const plus = taskButton("+", "stepper-button", () => setDuration(Math.floor(Number(durationInput.value) / DURATION_STEP + 1) * DURATION_STEP));
+    minus.setAttribute("aria-label", `减少 ${DURATION_STEP} 分钟`);
+    plus.setAttribute("aria-label", `增加 ${DURATION_STEP} 分钟`);
+    const value = element("label", "duration-value");
+    value.append(durationInput, element("span", "", "分钟"));
+    stepper.append(minus, value, plus);
+    const presets = element("div", "todo-category-choices focus-presets");
     DURATION_PRESETS.forEach(minutes => {
-      const preset = element("button", "secondary-button", `${minutes} 分钟`);
-      preset.type = "button";
+      const preset = taskButton(`${minutes} 分钟`, "category-choice", () => setDuration(minutes));
       preset.dataset.minutes = minutes;
-      preset.addEventListener("click", () => { durationInput.value = minutes; updatePresets(); });
       presets.append(preset);
     });
-    const updatePresets = () => presets.querySelectorAll("button").forEach(button => {
-      const selected = Number(button.dataset.minutes) === Number(durationInput.value);
-      button.classList.toggle("selected", selected);
-      button.setAttribute("aria-pressed", String(selected));
-    });
-    durationInput.addEventListener("input", updatePresets);
-    updatePresets();
-    form.append(presets);
-    const hint = element("p", "data-note");
-    const updateHint = () => {
-      const countup = modeInput.value === TIMING_NAMES.countup;
-      durationInput.parentElement.firstChild.textContent = countup ? "目标时长（分钟）" : "倒计时时长（分钟）";
-      hint.textContent = countup ? "从 00:00 累加，达到目标提示后继续。点击「结束并记录」保存实际专注时长，暂停不计时。"
-        : "从设定时长递减，到零后自动完成并记录。可自定义 1–120 分钟。";
+    const updateDuration = () => {
+      const minutes = Number(durationInput.value);
+      minus.disabled = !(minutes > LIMITS.minTimerMinutes);
+      plus.disabled = minutes >= LIMITS.maxTimerMinutes;
+      presets.querySelectorAll("button").forEach(button => {
+        const selected = Number(button.dataset.minutes) === minutes;
+        button.classList.toggle("selected", selected);
+        button.setAttribute("aria-pressed", String(selected));
+      });
     };
+    durationInput.addEventListener("input", updateDuration);
+    updateDuration();
+    form.append(durationLabel, stepper, presets);
+    function updateHint() {
+      const countup = modeInput.value === TIMING_NAMES.countup;
+      durationLabel.textContent = countup ? "目标时长" : "倒计时时长";
+      hint.textContent = countup ? "从 00:00 累加，达到目标只提醒；点「结束并记录」保存实际时长，暂停不计时。"
+        : `到零自动完成并记录，可设 ${LIMITS.minTimerMinutes}–${LIMITS.maxTimerMinutes} 分钟。`;
+    }
     updateHint();
-    modeInput.addEventListener("change", updateHint);
     form.addEventListener("input", () => { validation.hidden = true; });
-    form.append(hint);
-    const actions = element("div", "modal-actions");
+    const actions = element("div", "modal-actions sheet-actions");
     if (item) {
       const remove = element("button", "secondary-button danger-button", "删除专注项");
       remove.type = "button";
@@ -679,10 +740,10 @@
         toast("项目配置已保存，点击项目进入计时。");
       };
       closeModal();
-      if (item?.id === state.selectedFocusItem) guardedTimerChange(saveItem, "修改当前项目配置会重置当前计时。", () => showModal("项目设置", form));
+      if (item?.id === state.selectedFocusItem) guardedTimerChange(saveItem, "修改当前项目配置会重置当前计时。", () => showModal("项目设置", form, "focus-item-sheet"));
       else saveItem();
     });
-    showModal(item ? "项目设置" : "新建学习项目", form);
+    showModal(item ? "项目设置" : "新建学习项目", form, "focus-item-sheet");
   }
 
   function timerSettings() {

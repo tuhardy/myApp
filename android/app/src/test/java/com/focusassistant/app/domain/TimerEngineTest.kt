@@ -172,4 +172,19 @@ class TimerEngineTest {
     }
     @Test(expected = IllegalArgumentException::class) fun blankProgressRejected() { Validation.progress("  ", null) }
     @Test(expected = IllegalArgumentException::class) fun invalidPercentRejected() { Validation.progress("记录", 101) }
+    @Test fun durationStepAlignsToFiveAndClampsToRange() {
+        assertEquals(10, DurationInput.step(7, up = true))
+        assertEquals(5, DurationInput.step(7, up = false))
+        assertEquals(30, DurationInput.step(25, up = true))
+        assertEquals(20, DurationInput.step(25, up = false))
+        assertEquals(Validation.MIN_MINUTES, DurationInput.step(3, up = false))
+        assertEquals(Validation.MAX_MINUTES, DurationInput.step(Validation.MAX_MINUTES - 2, up = true))
+    }
+    @Test fun durationParseKeepsUnlimitedCountupAndRejectsOutOfRange() {
+        assertNull(DurationInput.parse("", TimerMode.COUNTUP, targetEnabled = false).getOrThrow())
+        assertEquals(90, DurationInput.parse(" 90 ", TimerMode.COUNTDOWN, targetEnabled = false).getOrThrow())
+        assertTrue(DurationInput.parse("", TimerMode.COUNTDOWN, targetEnabled = false).isFailure)
+        assertTrue(DurationInput.parse("0", TimerMode.COUNTUP, targetEnabled = true).isFailure)
+        assertTrue(DurationInput.parse("${Validation.MAX_MINUTES + 1}", TimerMode.COUNTDOWN, targetEnabled = false).isFailure)
+    }
 }
