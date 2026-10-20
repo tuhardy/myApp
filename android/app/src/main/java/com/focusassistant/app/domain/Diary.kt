@@ -108,6 +108,15 @@ object DiaryRules {
     fun localDate(entry: DiaryEntry, zone: ZoneId = ZoneId.systemDefault()): LocalDate? =
         entry.occurredAt.takeIf { it in 0..Validation.MAX_TIMESTAMP_MS }?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
 
+    /** 连续写日记的天数：今天写了从今天往前数，否则从昨天起算；回收站里的不算。 */
+    fun streak(entries: List<DiaryEntry>, today: LocalDate, zone: ZoneId = ZoneId.systemDefault()): Int {
+        val days = entries.filter { it.deletedAt == null }.mapNotNull { localDate(it, zone) }.toSet()
+        var day = if (today in days) today else today.minusDays(1)
+        var count = 0
+        while (day in days) { count++; day = day.minusDays(1) }
+        return count
+    }
+
     fun dayLabel(date: LocalDate, today: LocalDate): String {
         val suffix = when (date) { today -> " · 今天"; today.minusDays(1) -> " · 昨天"; else -> "" }
         val year = if (date.year == today.year) "" else "${date.year}年"

@@ -25,7 +25,7 @@ import org.json.JSONObject
 class FocusRepository(context: Context, scope: CoroutineScope) {
     private val appContext = context.applicationContext
     private val database = Room.databaseBuilder(appContext, FocusDatabase::class.java, "focus-assistant.db")
-        .addMigrations(FocusDatabase.MIGRATION_1_2, FocusDatabase.MIGRATION_2_3)
+        .addMigrations(FocusDatabase.MIGRATION_1_2, FocusDatabase.MIGRATION_2_3, FocusDatabase.MIGRATION_3_4)
         .enableMultiInstanceInvalidation().build()
     private val dao = database.dao()
     private val mutex = Mutex()
@@ -221,8 +221,8 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
             BackupCodec.validate(backup)
             mutate { current ->
                 require(current.timer == null) { "请先结束或确认放弃当前计时，再恢复备份" }
-                // 现有备份不含日记：恢复时原样保留本机日记，不能因为备份里没有而清空。
-                AppState(backup.projects.toList(), backup.todos.toList(), backup.sessions.map { it.copy(progressPrompted = true, segments = it.segments.toList()) }, backup.progress.toList(), backup.settings, loading = false, diaries = current.diaries, diaryDrafts = current.diaryDrafts)
+                // 现有备份不含日记与资产：恢复时原样保留本机记录，不能因为备份里没有而清空。
+                AppState(backup.projects.toList(), backup.todos.toList(), backup.sessions.map { it.copy(progressPrompted = true, segments = it.segments.toList()) }, backup.progress.toList(), backup.settings, loading = false, diaries = current.diaries, diaryDrafts = current.diaryDrafts, assets = current.assets)
             }
         }
     }
@@ -298,6 +298,38 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         }
     }
 
+    /** 新建（id 为空，同一事务记下开户余额）或修改账户，返回账户标识。 */
+    suspend fun saveAssetAccount(account: AssetAccount, openingCents: Long? = null): String {
+        val stored = (if (account.id.isBlank()) account.copy(id = id()) else account).let { it.copy(name = it.name.trim()) }
+        val opening = openingCents?.let { AssetSnapshot(id(), stored.id, today().toString(), it) }
+        mutateAssets { book -> book.copy(accounts = upsert(book.accounts, stored) { it.id }, snapshots = book.snapshots + listOfNotNull(opening)) }
+        return stored.id
+    }
+    /** 删除账户会一并删除它的余额记录和关联心愿。 */
+    suspend fun deleteAssetAccount(id: String) = mutateAssets { book ->
+        AssetBook(book.accounts.filterNot { it.id == id }, book.snapshots.filterNot { it.accountId == id }, book.wishes.filterNot { it.accountId == id })
+    }
+    /** 一次记入多条快照（更新余额共用一个备注），日期不能晚于今天。 */
+    suspend fun addAssetSnapshots(entries: List<AssetSnapshot>) {
+        if (entries.isEmpty()) return
+        val stored = entries.map { it.copy(id = id(), note = it.note.trim()) }
+        stored.forEach { AssetRules.validateSnapshot(it, today()) }
+        mutateAssets { book -> book.copy(snapshots = book.snapshots + stored) }
+    }
+    suspend fun deleteAssetSnapshot(id: String) = mutateAssets { book -> book.copy(snapshots = book.snapshots.filterNot { it.id == id }) }
+    suspend fun saveWish(wish: Wish) {
+        val stored = (if (wish.id.isBlank()) wish.copy(id = id()) else wish).let { it.copy(name = it.name.trim()) }
+        mutateAssets { book -> book.copy(wishes = upsert(book.wishes, stored) { it.id }) }
+    }
+    suspend fun deleteWish(id: String) = mutateAssets { book -> book.copy(wishes = book.wishes.filterNot { it.id == id }) }
+    private suspend fun mutateAssets(change: (AssetBook) -> AssetBook) {
+        mutate { current ->
+            val next = change(current.assets)
+            AssetRules.validateBook(next)
+            current.copy(assets = next)
+        }
+    }
+
     private fun complete(current: AppState, timer: ActiveTimer, elapsed: Long, early: Boolean = false): Pair<AppState, TimerEvent> {
         val session = TimerEngine.finish(timer, elapsed, System.currentTimeMillis(), bootCount, early)
         val sessions = if (session != null && current.sessions.none { it.id == session.id }) current.sessions + session else current.sessions
@@ -324,7 +356,10 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         settings = dao.settings()?.let { JsonCodec.readSettings(JSONObject(it.payload)) } ?: AppSettings(),
         timer = dao.timer()?.let { JsonCodec.readTimer(JSONObject(it.payload)) }, loading = false,
         diaries = dao.diaries().map { JsonCodec.readDiary(JSONObject(it.payload)) },
-        diaryDrafts = dao.diaryDrafts().map { JsonCodec.readDiaryDraft(JSONObject(it.payload)) })
+        diaryDrafts = dao.diaryDrafts().map { JsonCodec.readDiaryDraft(JSONObject(it.payload)) },
+        assets = AssetBook(dao.assetAccounts().map { JsonCodec.readAssetAccount(JSONObject(it.payload)) },
+            dao.assetSnapshots().map { JsonCodec.readAssetSnapshot(JSONObject(it.payload)) },
+            dao.wishes().map { JsonCodec.readWish(JSONObject(it.payload)) }))
 
     private suspend fun persist(old: AppState, next: AppState) {
         if (old == next) return
@@ -334,6 +369,9 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         sync(old.progress, next.progress, { it.id }, dao::removeProgress) { changed -> dao.putProgress(changed.map { (index, item) -> ProgressRow(item.id, JsonCodec.progress(item).toString(), index) }) }
         sync(old.diaries, next.diaries, { it.id }, dao::removeDiaries) { changed -> dao.putDiaries(changed.map { (index, item) -> DiaryRow(item.id, JsonCodec.diary(item).toString(), index) }) }
         sync(old.diaryDrafts, next.diaryDrafts, { it.key }, dao::removeDiaryDrafts) { changed -> dao.putDiaryDrafts(changed.map { (index, item) -> DiaryDraftRow(item.key, JsonCodec.diaryDraft(item).toString(), index) }) }
+        sync(old.assets.accounts, next.assets.accounts, { it.id }, dao::removeAssetAccounts) { changed -> dao.putAssetAccounts(changed.map { (index, item) -> AssetAccountRow(item.id, JsonCodec.assetAccount(item).toString(), index) }) }
+        sync(old.assets.snapshots, next.assets.snapshots, { it.id }, dao::removeAssetSnapshots) { changed -> dao.putAssetSnapshots(changed.map { (index, item) -> AssetSnapshotRow(item.id, JsonCodec.assetSnapshot(item).toString(), index) }) }
+        sync(old.assets.wishes, next.assets.wishes, { it.id }, dao::removeWishes) { changed -> dao.putWishes(changed.map { (index, item) -> WishRow(item.id, JsonCodec.wish(item).toString(), index) }) }
         if (old.settings != next.settings) dao.putSettings(SettingsRow(payload = JsonCodec.settings(next.settings).toString()))
         if (old.timer != next.timer) {
             if (next.timer == null) dao.clearTimer() else dao.putTimer(TimerRow(payload = JsonCodec.timer(next.timer).toString()))

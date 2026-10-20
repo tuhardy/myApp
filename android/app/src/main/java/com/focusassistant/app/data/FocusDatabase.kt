@@ -30,6 +30,12 @@ internal data class RevisionRow(@PrimaryKey val id: Int = 1, val revision: Long 
 internal data class DiaryRow(@PrimaryKey val id: String, val payload: String, val position: Int)
 @Entity(tableName = "diary_drafts")
 internal data class DiaryDraftRow(@PrimaryKey val id: String, val payload: String, val position: Int)
+@Entity(tableName = "asset_accounts")
+internal data class AssetAccountRow(@PrimaryKey val id: String, val payload: String, val position: Int)
+@Entity(tableName = "asset_snapshots")
+internal data class AssetSnapshotRow(@PrimaryKey val id: String, val payload: String, val position: Int)
+@Entity(tableName = "wishes")
+internal data class WishRow(@PrimaryKey val id: String, val payload: String, val position: Int)
 
 @Dao
 internal interface FocusDao {
@@ -60,9 +66,18 @@ internal interface FocusDao {
     @Query("SELECT * FROM diary_drafts ORDER BY position") suspend fun diaryDrafts(): List<DiaryDraftRow>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putDiaryDrafts(rows: List<DiaryDraftRow>)
     @Query("DELETE FROM diary_drafts WHERE id IN (:ids)") suspend fun removeDiaryDrafts(ids: List<String>)
+    @Query("SELECT * FROM asset_accounts ORDER BY position") suspend fun assetAccounts(): List<AssetAccountRow>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putAssetAccounts(rows: List<AssetAccountRow>)
+    @Query("DELETE FROM asset_accounts WHERE id IN (:ids)") suspend fun removeAssetAccounts(ids: List<String>)
+    @Query("SELECT * FROM asset_snapshots ORDER BY position") suspend fun assetSnapshots(): List<AssetSnapshotRow>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putAssetSnapshots(rows: List<AssetSnapshotRow>)
+    @Query("DELETE FROM asset_snapshots WHERE id IN (:ids)") suspend fun removeAssetSnapshots(ids: List<String>)
+    @Query("SELECT * FROM wishes ORDER BY position") suspend fun wishes(): List<WishRow>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putWishes(rows: List<WishRow>)
+    @Query("DELETE FROM wishes WHERE id IN (:ids)") suspend fun removeWishes(ids: List<String>)
 }
 
-@Database(entities = [ProjectRow::class, TodoRow::class, SessionRow::class, ProgressRow::class, SettingsRow::class, TimerRow::class, RevisionRow::class, DiaryRow::class, DiaryDraftRow::class], version = 3, exportSchema = false)
+@Database(entities = [ProjectRow::class, TodoRow::class, SessionRow::class, ProgressRow::class, SettingsRow::class, TimerRow::class, RevisionRow::class, DiaryRow::class, DiaryDraftRow::class, AssetAccountRow::class, AssetSnapshotRow::class, WishRow::class], version = 4, exportSchema = false)
 internal abstract class FocusDatabase : RoomDatabase() {
     abstract fun dao(): FocusDao
 
@@ -77,6 +92,14 @@ internal abstract class FocusDatabase : RoomDatabase() {
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `diary_drafts` (`id` TEXT NOT NULL, `payload` TEXT NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+            }
+        }
+        /** v3 → v4 只新增资产账户、余额快照与心愿表，原有数据不动。 */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                listOf("asset_accounts", "asset_snapshots", "wishes").forEach {
+                    db.execSQL("CREATE TABLE IF NOT EXISTS `$it` (`id` TEXT NOT NULL, `payload` TEXT NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+                }
             }
         }
     }

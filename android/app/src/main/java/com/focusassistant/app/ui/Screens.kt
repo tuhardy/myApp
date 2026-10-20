@@ -1119,56 +1119,6 @@ private fun emptyTodoDetail(filter: TodoFilter): String = when (filter) {
 }
 
 @Composable
-internal fun SettingsScreen(
-    state: AppState,
-    notificationAllowed: Boolean,
-    exactAllowed: Boolean,
-    usageAllowed: Boolean,
-    onNotifications: () -> Unit,
-    onUsagePermission: () -> Unit,
-    onExactAlarm: () -> Unit,
-    onBackup: () -> Unit,
-    onRestore: () -> Unit,
-    onRestSettings: () -> Unit,
-    onAutomation: () -> Unit
-) {
-    ScreenBody {
-        PageTitle("我的")
-        SectionTitle("专注助手")
-        Caption("把时间留给重要的事。")
-        SectionTitle("偏好")
-        ActionRow("休息时长", "短休息 ${state.settings.shortBreakMinutes} 分钟 · 长休息 ${state.settings.longBreakMinutes} 分钟", onRestSettings)
-        HorizontalDivider()
-        SectionTitle("系统权限")
-        ActionRow("通知提醒", if (notificationAllowed) "已开启 · 管理系统通知" else "未开启 · 结束与超时提醒可能不可见", onNotifications)
-        ActionRow("精确闹钟", if (exactAllowed) "已允许 · 管理系统授权" else "未允许 · 后台到时提醒可能延迟", onExactAlarm)
-        ActionRow("使用情况访问", if (usageAllowed) "已允许 · 读取应用前台用时" else "未允许 · 无法读取手机用时", onUsagePermission)
-        HorizontalDivider()
-        SectionTitle("数据与备份")
-        Caption("本机保存 ${state.projects.size} 个项目、${state.todos.size} 项待办和 ${state.sessions.size} 次专注。")
-        ActionRow("导出完整备份", "保存项目、待办、专注、进度历史和偏好（暂不含日记）", onBackup)
-        ActionRow("从文件恢复", "恢复前需要确认，当前计时须先结束；不会改动日记", onRestore)
-        Caption("备份文件未加密，请妥善保管。日记及其照片、录音暂无外部备份，卸载应用会清除本机数据。")
-        HorizontalDivider()
-        SectionTitle("隐私与扩展")
-        Text("学习记录保存在本机，不上传到云端。使用时长来自 Android 系统事件，不读取其他应用内容。", style = MaterialTheme.typography.bodyMedium, color = Muted)
-        ActionRow("自动化扩展", "尚未接入脚本引擎 · 不执行手机自动化", onAutomation)
-        Caption("本版本不申请 root 或无障碍控制权限。")
-    }
-}
-
-@Composable
-private fun ActionRow(title: String, detail: String, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(vertical = 12.dp, horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(title, fontWeight = FontWeight.Medium)
-            Caption(detail)
-        }
-        Icon(Icons.Outlined.ChevronRight, "打开$title", tint = Muted, modifier = Modifier.padding(start = 12.dp))
-    }
-}
-
-@Composable
 internal fun ProgressHistoryDialog(
     project: Project?,
     projectId: String,

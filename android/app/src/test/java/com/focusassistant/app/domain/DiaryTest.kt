@@ -21,6 +21,16 @@ class DiaryTest {
         DiaryRules.select(entries, month, query, today, zone)
     private fun ids(selection: DiarySelection) = selection.groups.flatMap { group -> group.entries.map { it.id } }
 
+    @Test fun streakCountsBackFromTodayOrYesterdayAcrossMonthsAndSkipsTrash() {
+        val entries = listOf(entry("a", at(9, 27, 8)), entry("b", at(9, 27, 22)), entry("c", at(9, 26, 9)),
+            entry("d", at(9, 25, 9), deletedAt = at(9, 26, 10)), entry("e", at(9, 24, 9)))
+        assertEquals(2, DiaryRules.streak(entries, today, zone))
+        assertEquals(3, DiaryRules.streak(entries + entry("f", at(9, 28, 7)), today, zone))
+        assertEquals(0, DiaryRules.streak(listOf(entry("g", at(9, 26, 9))), today, zone))
+        val acrossMonths = listOf(entry("h", at(10, 1, 9)), entry("i", at(9, 30, 9)), entry("j", at(9, 29, 9)))
+        assertEquals(3, DiaryRules.streak(acrossMonths, LocalDate.of(2026, 10, 1), zone))
+    }
+
     @Test fun monthViewGroupsSameDayEntriesNewestFirstAndSkipsTrash() {
         val entries = listOf(entry("a", at(9, 27, 8), "早起跑步"), entry("b", at(9, 27, 22), "评审", "第一次"),
             entry("c", at(9, 28, 9), audios = listOf(DiaryAudio("v", "audio-v.m4a", 42_000))),

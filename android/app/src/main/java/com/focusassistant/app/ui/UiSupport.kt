@@ -216,7 +216,7 @@ private fun initialDraft(project: Project?): ProjectDraft {
 
 /** 与原型 `.category-choice` 同款的胶囊：白底灰边，选中暖橙描边与浅底。 */
 @Composable
-private fun ChoicePill(label: String, selected: Boolean, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+internal fun ChoicePill(label: String, selected: Boolean, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(
         modifier.heightIn(min = 40.dp).clip(RoundedCornerShape(11.dp))
             .background(if (selected) AccentSoft else Color.White)

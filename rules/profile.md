@@ -1,6 +1,6 @@
 # 我的页面（资产、心愿、生活概览）
 
-目前只做了浏览器原型；Android 移植时按 `model.js` 里的同名纯函数和单测口径实现。
+浏览器原型在 `model.js`，Android 在 `domain/Assets.kt`（`AssetRules`）与 `ui/ProfileScreens.kt`，两端口径相同、单测对应（`model.test.cjs` ↔ `AssetsTest.kt`）。改规则时两端一起改。
 
 ## 布局
 
@@ -27,3 +27,12 @@
 
 - 专注取本周 `focusSummary`；待办取本月完成数，点进去切到「已完成」；日记连续天数由 `diaryStreak` 计算（今天没写就从昨天往前数，回收站里的不算）；用屏取今日示例 `usageDaySummary`。
 - 原型数据仅在内存，刷新后恢复示例。资产数据不能描述为已经接入银行或真实账户。
+
+## Android 差异
+
+- 只用本机真实记录：没有账户时净资产卡显示「还没有账户，添加一个开始记录」，按钮变「添加账户」；不放示例，也没有「示例」标签。
+- 金额以分（`Long`）存储；账户、快照、心愿各一张 Room 表（v4，`MIGRATION_3_4` 只建表）。写入统一走 `FocusRepository` 的 `saveAssetAccount` / `addAssetSnapshots` / `saveWish` 等，提交前 `AssetRules.validateBook` 整本校验。
+- 资产与日记一样不进完整备份，恢复备份时原样保留；设置行与恢复确认文案要写明这一点。
+- 「隐藏金额」是 `NativeUiModel.hideAmounts`，只在内存，进程重启后恢复显示。
+- 「用屏 · 今日」读真实使用记录：未授权显示「需授权」，读取失败显示「—」；只在打开我的页面时查询。
+- 设置分组保留全部原有入口（休息偏好、三项系统权限、导出/恢复、自动化），旧的 `SettingsScreen` 已删除。

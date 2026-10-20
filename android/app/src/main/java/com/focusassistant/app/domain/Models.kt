@@ -58,7 +58,9 @@ data class AppState(
     val settings: AppSettings = AppSettings(), val timer: ActiveTimer? = null, val loading: Boolean = true,
     /** 日记与草稿不进入现有完整备份，恢复备份时保持不变。 */
     val diaries: List<DiaryEntry> = emptyList(),
-    val diaryDrafts: List<DiaryDraft> = emptyList()
+    val diaryDrafts: List<DiaryDraft> = emptyList(),
+    /** 资产账户、余额快照与心愿同样不进入完整备份，恢复备份时保持不变。 */
+    val assets: AssetBook = AssetBook()
 )
 data class TimerEvent(val kind: TimerEventKind, val projectTitle: String, val sessionId: String? = null)
 data class BackupData(val projects: List<Project>, val todos: List<Todo>, val sessions: List<FocusSession>, val progress: List<ProgressEntry>, val settings: AppSettings)

@@ -171,6 +171,8 @@ class NativeUiModel : ViewModel() {
     var anchor by mutableStateOf(LocalDate.now())
     var recordLimit by mutableIntStateOf(UiLimits.RECORD_PAGE)
     var usageWeek by mutableStateOf(false)
+    /** 「隐藏金额」只影响显示，不写入本机数据；进程重启后恢复显示。 */
+    var hideAmounts by mutableStateOf(false)
     var pendingProject by mutableStateOf<Project?>(null)
     var pendingBackup by mutableStateOf<BackupData?>(null)
     var pendingExport: String? = null
@@ -253,6 +255,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
     var usageReport by remember { mutableStateOf<UsageReport?>(null) }
     var usageError by remember { mutableStateOf<String?>(null) }
     var usageLoading by remember { mutableStateOf(false) }
+    var profileUsage by remember { mutableStateOf<Long?>(null) }
     val notificationAllowed = remember(refresh) { NotificationManagerCompat.from(context).areNotificationsEnabled() }
     val usageAllowed = remember(refresh) { usageMonitor.hasPermission() }
     val exactAllowed = remember(refresh) { TimerAlarmScheduler.canScheduleExactAlarms(context) }
@@ -416,6 +419,13 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
         catch (error: Exception) { usageError = error.message ?: "无法读取使用统计" }
         finally { usageLoading = false }
     }
+    // 生活概览的「用屏 · 今日」只在打开我的页面且已授权时读取，失败就显示「—」，不拿示例顶替。
+    LaunchedEffect(ui.screen, refresh, usageAllowed, today) {
+        if (ui.screen != Screen.SETTINGS || !usageAllowed) { profileUsage = null; return@LaunchedEffect }
+        profileUsage = try { usageMonitor.queryOverview(today, false, System.currentTimeMillis()).todayMillis }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { null }
+    }
     BackHandler(enabled = ui.dialog.isEmpty() && ui.screen !in setOf(Screen.PROJECTS, Screen.TODOS, Screen.DIARY, Screen.USAGE, Screen.SETTINGS)) { ui.screen = Screen.PROJECTS }
 
     FocusTheme {
@@ -510,13 +520,22 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                             if (enabled && !usageAllowed) ui.message("请先授予使用情况访问权限。")
                             else ui.perform { repository.saveSettings(state.settings.copy(usageReminders = enabled)); if (enabled && !notificationAllowed) ui.message("请在我的页面授权通知，否则超时提醒不可见。") }
                         }, { ui.open("usage-help") }, today)
-                    Screen.SETTINGS -> SettingsScreen(state, notificationAllowed, exactAllowed, usageAllowed, ::requestNotifications,
-                        { context.startActivity(usageMonitor.permissionIntent()) }, { context.startActivity(TimerAlarmScheduler.permissionIntent(context)) }, {
-                            ui.perform { ui.pendingExport = repository.exportBackup(); jsonLauncher.launch("专注助手备份_${LocalDate.now()}.json") }
-                        }, {
-                            if (state.timer != null) ui.message("请先结束或放弃当前计时，再恢复备份。")
-                            else importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
-                        }, { ui.open("rest-settings") }, { ui.open("automation") })
+                    Screen.SETTINGS -> ProfileScreen(state, today, ui.hideAmounts, lifeOverview(state, today, profileUsage, usageAllowed),
+                        notificationAllowed, exactAllowed,
+                        onToggleHide = { ui.hideAmounts = !ui.hideAmounts }, onAssets = { ui.open("assets") },
+                        onUpdate = { ui.open("asset-update") }, onAddAccount = { ui.open("asset-account") },
+                        onWish = { id ->
+                            if (state.assets.accounts.none { !it.kind.liability }) ui.message("先添加一个资产账户，再用它来攒心愿。")
+                            else ui.open("wish", id)
+                        },
+                        onLife = { page -> if (page == Screen.TODOS) ui.todos.setFilter(TodoFilter.DONE); ui.screen = page },
+                        actions = ProfileActions(::requestNotifications, { context.startActivity(usageMonitor.permissionIntent()) },
+                            { context.startActivity(TimerAlarmScheduler.permissionIntent(context)) }, {
+                                ui.perform { ui.pendingExport = repository.exportBackup(); jsonLauncher.launch("专注助手备份_${LocalDate.now()}.json") }
+                            }, {
+                                if (state.timer != null) ui.message("请先结束或放弃当前计时，再恢复备份。")
+                                else importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+                            }, { ui.open("rest-settings") }, { ui.open("automation") }))
                 }
                 if (ui.busy) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
             }
@@ -639,6 +658,52 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                 usageReport?.warning ?: "Android 使用事件有保留期限和记录延迟，多窗口应用时长合计不等于严格的亮屏时间。",
                 "每日超时提醒约每 15 分钟检查一次，可能受系统省电和后台限制延迟。每天最多提醒一次，需要通知权限。"
             ), { ui.close() })
+            "assets" -> AssetListSheet(state.assets, today, ui.hideAmounts, ui.busy, { ui.close() }, { ui.open("asset-detail", it) },
+                { ui.open("asset-account") }, { ui.open("asset-update") })
+            "asset-account" -> {
+                val account = state.assets.accounts.find { it.id == ui.dialogId }
+                AccountEditorSheet(account, ui.busy, { if (account != null) ui.open("asset-detail", account.id) else ui.open("assets") }) { name, kind, opening ->
+                    ui.perform {
+                        val id = repository.saveAssetAccount(account?.copy(name = name, kind = kind) ?: AssetAccount("", name, kind), opening)
+                        if (account != null) ui.open("asset-detail", id) else ui.open("assets")
+                        ui.message(if (account != null) "账户已更新" else "账户已添加")
+                    }
+                }
+            }
+            "asset-detail" -> {
+                val account = state.assets.accounts.find { it.id == ui.dialogId }
+                if (account == null) InformationDialog("这个账户已不存在", listOf("可能已在其他窗口删除。"), { ui.open("assets") })
+                else AccountDetailSheet(account, state.assets, today, ui.hideAmounts, ui.busy, { ui.close() }, { ui.open("assets") },
+                    onRecord = { snapshot -> ui.perform { repository.addAssetSnapshots(listOf(snapshot)); ui.message("余额已记下") } },
+                    onDeleteSnapshot = { snapshot -> ui.perform { repository.deleteAssetSnapshot(snapshot.id); ui.message("已删除这条记录") } },
+                    onEdit = { ui.open("asset-account", account.id) }, onDelete = { ui.open("asset-delete", account.id) })
+            }
+            "asset-delete" -> {
+                val account = state.assets.accounts.find { it.id == ui.dialogId }
+                // 不在组合阶段直接改状态，交给副作用关闭。
+                if (account == null) LaunchedEffect(Unit) { ui.close() }
+                else {
+                    val linked = state.assets.wishes.any { it.accountId == account.id }
+                    ConfirmDialog("删除账户", "删除「${account.name}」和它的全部余额记录？${if (linked) "关联的心愿也会一并移除。" else ""}此操作无法撤销。", ui.busy,
+                        { ui.open("asset-detail", account.id) }) {
+                        ui.perform { repository.deleteAssetAccount(account.id); ui.open("assets"); ui.message("账户已删除") }
+                    }
+                }
+            }
+            "asset-update" -> BalanceUpdateSheet(state.assets, today, ui.busy, { ui.close() }) { snapshots ->
+                if (snapshots.isEmpty()) ui.close()
+                else ui.perform { repository.addAssetSnapshots(snapshots); ui.close(); ui.message("已更新 ${snapshots.size} 个账户") }
+            }
+            "wish" -> {
+                val wish = state.assets.wishes.find { it.id == ui.dialogId }
+                val accounts = state.assets.accounts.filterNot { it.kind.liability }
+                if (accounts.isEmpty()) LaunchedEffect(Unit) { ui.close() }
+                else WishEditorSheet(wish, accounts, today, ui.busy, { ui.close() }, onSave = { value ->
+                    ui.perform { repository.saveWish(value); ui.close(); ui.message(if (wish != null) "心愿已更新" else "心愿已添加") }
+                }, onArchive = {
+                    if (wish != null) ui.perform { repository.saveWish(wish.copy(archived = true)); ui.close(); ui.message("心愿已归档") }
+                })
+            }
             "automation" -> InformationDialog("自动化扩展", listOf("此版本仅预留自动化入口，尚未接入任何脚本引擎。", "后续根据你的具体手机脚本和工具确定接入方式，不默认申请 root、无障碍或其他应用控制权限。"), { ui.close() })
             "export" -> AlertDialog(onDismissRequest = { if (!ui.busy) ui.close() }, title = { Text(if (ui.statsAll) "导出全部记录" else "导出当前周期") }, text = { Text("CSV 适合 Excel，JSON 包含活动片段、进度历史及累计总览。仅导出当前周期的完整记录，不受分页限制。") },
                 confirmButton = { TextButton(enabled = !ui.busy, onClick = { exportStatistics(false) }) { Text("JSON") } }, dismissButton = { TextButton(enabled = !ui.busy, onClick = { exportStatistics(true) }) { Text("CSV") } })
@@ -652,7 +717,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             "restore-confirm" -> {
                 val backup = ui.pendingBackup
                 if (backup == null) InformationDialog("重新选择备份", listOf("备份预览已失效，请重新选择文件。未修改任何本地数据。"), { ui.close() })
-                else ConfirmDialog("确认覆盖本机数据？", "备份包含 ${backup.projects.size} 个项目、${backup.todos.size} 个待办、${backup.sessions.size} 次专注和 ${backup.progress.size} 条进度。恢复会替换当前数据，不合并。建议先导出当前备份。日记不在备份范围内，恢复不会改动日记。", ui.busy, { ui.pendingBackup = null; ui.close() }) {
+                else ConfirmDialog("确认覆盖本机数据？", "备份包含 ${backup.projects.size} 个项目、${backup.todos.size} 个待办、${backup.sessions.size} 次专注和 ${backup.progress.size} 条进度。恢复会替换当前数据，不合并。建议先导出当前备份。日记与资产不在备份范围内，恢复不会改动它们。", ui.busy, { ui.pendingBackup = null; ui.close() }) {
                     ui.perform { repository.restoreBackup(backup); ProgressDrafts.clear(appContext); ProjectDrafts.clear(); ui.clearTodoUi(); ui.pendingBackup = null; ui.projectId = null; ui.close(); ui.message("备份已恢复。"); refresh++ }
                 }
             }
