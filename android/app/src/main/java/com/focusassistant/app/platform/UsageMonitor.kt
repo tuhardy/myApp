@@ -14,7 +14,9 @@ import android.os.UserManager
 import android.provider.Settings
 import com.focusassistant.app.domain.TimeSegment
 import com.focusassistant.app.domain.UsageAggregation
+import com.focusassistant.app.domain.UsageInsights
 import com.focusassistant.app.domain.UsageOverviewRange
+import com.focusassistant.app.domain.UsageSpan
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +32,10 @@ data class UsageReport(
     val warning: String?,
     val buckets: List<UsageBucket> = emptyList(),
     val todayMillis: Long? = null,
-    val hasData: Boolean = false
+    val hasData: Boolean = false,
+    /** 查询范围内的前台片段，起点向前延伸到首日前一晚 23 点，供刻度尺与夜间足迹使用。 */
+    val spans: List<UsageSpan> = emptyList(),
+    val spansFrom: Long = 0L
 )
 
 class UsageMonitor(context: Context) {
@@ -50,24 +55,27 @@ class UsageMonitor(context: Context) {
     suspend fun query(start: Long, end: Long): UsageReport = queryRange(start, end)
 
     suspend fun queryOverview(today: LocalDate, week: Boolean, end: Long): UsageReport {
-        val overview = UsageOverviewRange(today, week, ZoneId.systemDefault())
-        return queryRange(overview.start, overview.end, overview, end)
+        val zone = ZoneId.systemDefault()
+        val overview = UsageOverviewRange(today, week, zone)
+        val nightStart = UsageInsights.nightWindow(java.time.Instant.ofEpochMilli(overview.start).atZone(zone).toLocalDate(), zone).first
+        return queryRange(overview.start, overview.end, overview, end, nightStart)
     }
 
     private suspend fun queryRange(
         start: Long,
         end: Long,
         overview: UsageOverviewRange? = null,
-        cutoff: Long = end
+        cutoff: Long = end,
+        spanStart: Long = start
     ): UsageReport = withContext(Dispatchers.IO) {
         require(start >= 0 && end > start && cutoff >= 0) { "请选择有效的用时统计时间范围" }
         check(hasPermission()) { "尚未授予使用情况访问权限，无法读取应用用时" }
         check(context.getSystemService(UserManager::class.java).isUserUnlocked) { "请先解锁设备后读取应用用时" }
         val rangeEnd = minOf(end, cutoff, System.currentTimeMillis())
-        val aggregation = UsageAggregation(start, rangeEnd, overview)
+        val aggregation = UsageAggregation(start, rangeEnd, overview, spanStart)
         if (rangeEnd <= start) return@withContext report(aggregation, "所选时间尚未开始。$LIMITATION")
         val manager = context.getSystemService(UsageStatsManager::class.java)
-        val events = manager.queryEvents((start - CARRYOVER_MS).coerceAtLeast(0), rangeEnd)
+        val events = manager.queryEvents((spanStart - CARRYOVER_MS).coerceAtLeast(0), rangeEnd)
             ?: return@withContext report(aggregation, "系统暂未提供使用事件，无法确认实际用时。$LIMITATION")
         val active = mutableMapOf<String, MutableSet<String>>()
         val openedAt = mutableMapOf<String, Long>()
@@ -155,7 +163,7 @@ class UsageMonitor(context: Context) {
             .sortedWith(compareByDescending<AppUsage> { it.durationMillis }.thenBy { it.packageName })
         return UsageReport(apps, apps.sumOf { it.durationMillis }, warning,
             aggregation.buckets.map { UsageBucket(it.label, it.durationMillis, it.available) },
-            aggregation.todayMillis, aggregation.hasData)
+            aggregation.todayMillis, aggregation.hasData, aggregation.spans, aggregation.spanStart)
     }
 
     private fun label(packageName: String): String = try {

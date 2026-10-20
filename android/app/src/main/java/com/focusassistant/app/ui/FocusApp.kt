@@ -505,8 +505,8 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                         onBack = { ui.screen = Screen.PROJECTS }, onHelp = { ui.open("statistics-help") }, onExport = { ui.open("export") },
                         onMoreRecords = { ui.recordLimit += UiLimits.RECORD_PAGE }, onProgress = { ui.open("progress-edit", it.id) },
                         onSelectDay = { ui.anchor = it; ui.period = Period.DAY; ui.statsAll = false; ui.recordLimit = UiLimits.RECORD_PAGE })
-                    Screen.USAGE -> UsageScreen(usageReport, usageAllowed, usageLoading, usageError, ui.usageWeek, state.settings,
-                        { context.startActivity(usageMonitor.permissionIntent()) }, { refresh++ }, { ui.usageWeek = it }, { ui.open("usage-goal") }, { enabled ->
+                    Screen.USAGE -> UsageScreen(usageReport, usageAllowed, usageLoading, usageError, ui.usageWeek, state.settings, state.sessions,
+                        { context.startActivity(usageMonitor.permissionIntent()) }, { refresh++ }, { ui.usageWeek = it }, { ui.open("usage-goal") }, { ui.open("usage-zoom") }, { enabled ->
                             if (enabled && !usageAllowed) ui.message("请先授予使用情况访问权限。")
                             else ui.perform { repository.saveSettings(state.settings.copy(usageReminders = enabled)); if (enabled && !notificationAllowed) ui.message("请在我的页面授权通知，否则超时提醒不可见。") }
                         }, { ui.open("usage-help") }, today)
@@ -642,9 +642,10 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             "automation" -> InformationDialog("自动化扩展", listOf("此版本仅预留自动化入口，尚未接入任何脚本引擎。", "后续根据你的具体手机脚本和工具确定接入方式，不默认申请 root、无障碍或其他应用控制权限。"), { ui.close() })
             "export" -> AlertDialog(onDismissRequest = { if (!ui.busy) ui.close() }, title = { Text(if (ui.statsAll) "导出全部记录" else "导出当前周期") }, text = { Text("CSV 适合 Excel，JSON 包含活动片段、进度历史及累计总览。仅导出当前周期的完整记录，不受分页限制。") },
                 confirmButton = { TextButton(enabled = !ui.busy, onClick = { exportStatistics(false) }) { Text("JSON") } }, dismissButton = { TextButton(enabled = !ui.busy, onClick = { exportStatistics(true) }) { Text("CSV") } })
-            "usage-goal" -> NumberSettingsDialog("每日使用目标", listOf("目标分钟数" to state.settings.dailyGoalMinutes), ui.busy, { ui.close() }) { values ->
-                if (values.single() !in 1..1440) ui.message("请输入 1–1440 分钟。") else ui.perform { repository.saveSettings(state.settings.copy(dailyGoalMinutes = values.single())); ui.close() }
+            "usage-goal" -> GoalWheelSheet(state.settings.dailyGoalMinutes, ui.busy, { ui.close() }) { minutes ->
+                ui.perform { repository.saveSettings(state.settings.copy(dailyGoalMinutes = minutes)); ui.close() }
             }
+            "usage-zoom" -> UsageZoomSheet(usageReport.takeIf { usageAllowed && usageError == null }, state.sessions, today) { ui.close() }
             "rest-settings" -> NumberSettingsDialog("休息偏好", listOf("短休息（分钟）" to state.settings.shortBreakMinutes, "长休息（分钟）" to state.settings.longBreakMinutes), ui.busy, { ui.close() }) { values ->
                 if (values.any { it !in 1..120 }) ui.message("休息时长需为 1–120 分钟。") else ui.perform { repository.saveSettings(state.settings.copy(shortBreakMinutes = values[0], longBreakMinutes = values[1])); ui.close() }
             }

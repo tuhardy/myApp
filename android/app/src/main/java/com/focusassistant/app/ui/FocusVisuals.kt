@@ -148,13 +148,13 @@ internal fun HourAxis(modifier: Modifier = Modifier, firstLabel: String = "0") {
 
 /** 20 格完成度刻度条，与首页项目卡片一致。 */
 @Composable
-internal fun TickGauge(percent: Int, modifier: Modifier = Modifier, height: Dp = 12.dp) {
+internal fun TickGauge(percent: Int, modifier: Modifier = Modifier, height: Dp = 12.dp, color: Color = Accent, gap: Dp = 3.dp) {
     val filled = (percent.coerceIn(0, UiLimits.MAX_PERCENT) * VisualLimits.GAUGE_TICKS + UiLimits.MAX_PERCENT / 2) / UiLimits.MAX_PERCENT
     Canvas(modifier.height(height).clearAndSetSemantics { }) {
-        val gap = 3.dp.toPx()
-        val cell = (size.width - gap * (VisualLimits.GAUGE_TICKS - 1)) / VisualLimits.GAUGE_TICKS
+        val gapPx = gap.toPx()
+        val cell = (size.width - gapPx * (VisualLimits.GAUGE_TICKS - 1)) / VisualLimits.GAUGE_TICKS
         repeat(VisualLimits.GAUGE_TICKS) { index ->
-            drawRoundRect(if (index < filled) Accent else BarEmpty, Offset(index * (cell + gap), 0f),
+            drawRoundRect(if (index < filled) color else BarEmpty, Offset(index * (cell + gapPx), 0f),
                 androidx.compose.ui.geometry.Size(cell, size.height), androidx.compose.ui.geometry.CornerRadius(1.5.dp.toPx()))
         }
     }

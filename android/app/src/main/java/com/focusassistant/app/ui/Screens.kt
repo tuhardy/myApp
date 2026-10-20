@@ -79,26 +79,14 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.focusassistant.app.domain.*
-import com.focusassistant.app.platform.AppUsage
-import com.focusassistant.app.platform.UsageBucket
-import com.focusassistant.app.platform.UsageReport
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
-private const val DAYS_PER_WEEK = 7
 private const val HOURS_PER_DAY = 24
-private const val USAGE_HOURS_PER_BUCKET = 2
-private val USAGE_WEEK_LABELS = listOf("一", "二", "三", "四", "五", "六", "日")
-
-private fun usageBucketLabel(index: Int, week: Boolean): String = if (week) "周${USAGE_WEEK_LABELS[index]}" else {
-    val start = (index * USAGE_HOURS_PER_BUCKET).toString().padStart(2, '0')
-    val end = ((index + 1) * USAGE_HOURS_PER_BUCKET).toString().padStart(2, '0')
-    "$start:00–$end:00"
-}
 
 @Composable
-private fun ScreenBody(content: @Composable ColumnScope.() -> Unit) {
+internal fun ScreenBody(content: @Composable ColumnScope.() -> Unit) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -112,7 +100,7 @@ private fun SectionTitle(text: String) {
 }
 
 @Composable
-private fun Caption(text: String) {
+internal fun Caption(text: String) {
     Text(text, color = Muted, style = MaterialTheme.typography.bodySmall)
 }
 
@@ -239,8 +227,7 @@ private fun TodayPanel(sessions: List<FocusSession>, today: LocalDate, reduceMot
     val dayEnd = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
     val dayMs = (dayEnd - dayStart).toFloat()
     val spans = remember(sessions, dayStart) {
-        sessions.flatMap { it.segments }.map { maxOf(dayStart, it.startedAt) to minOf(dayEnd, it.endedAt) }
-            .filter { it.second > it.first }.sortedBy { it.first }
+        UsageInsights.focusSpans(sessions, dayStart, dayEnd)
     }
     val rise = remember(spans) { Animatable(if (reduceMotion) 1f else 0f) }
     LaunchedEffect(spans, reduceMotion) { if (reduceMotion) rise.snapTo(1f) else rise.animateTo(1f, tween(VisualLimits.RISE_MS)) }
@@ -1129,190 +1116,6 @@ private fun emptyTodoDetail(filter: TodoFilter): String = when (filter) {
     TodoFilter.DONE -> "可以切换月份回看，或搜索全部时间的完成记录。"
     TodoFilter.ARCHIVED -> "放下不是删除，需要时还可以找回。"
     TodoFilter.PENDING -> "记下一件想做的事，也可以把它拆成几个小步。"
-}
-
-@Composable
-internal fun UsageScreen(
-    report: UsageReport?,
-    permissionGranted: Boolean,
-    loading: Boolean,
-    error: String?,
-    week: Boolean,
-    settings: AppSettings,
-    onGrant: () -> Unit,
-    onRefresh: () -> Unit,
-    onWeek: (Boolean) -> Unit,
-    onGoal: () -> Unit,
-    onReminders: (Boolean) -> Unit,
-    onHelp: () -> Unit,
-    today: LocalDate
-) {
-    val reading = permissionGranted && error == null && (loading || report == null)
-    val visibleReport = report.takeIf { permissionGranted && !reading && error == null }
-    ScreenBody {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Caption("了解习惯，而不是责备自己")
-                Text(buildAnnotatedString {
-                    append("时间足迹")
-                    withStyle(SpanStyle(color = Accent)) { append(".") }
-                }, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
-            }
-            IconButton(onClick = onRefresh, enabled = permissionGranted && !loading) {
-                Icon(Icons.Outlined.Refresh, "刷新使用时长", tint = Muted)
-            }
-        }
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(SoftSurface).padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Outlined.Shield, null, tint = Muted, modifier = Modifier.size(16.dp))
-            Text(if (permissionGranted) "已授权 · 本机真实使用统计" else "需授权「使用情况访问权限」", color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
-            TextButton(onClick = if (permissionGranted) onHelp else onGrant) { Text(if (permissionGranted) "说明" else "授权") }
-        }
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(SoftSurface).padding(4.dp).selectableGroup()) {
-            listOf("今日", "本周").forEachIndexed { index, label ->
-                val selected = week == (index == 1)
-                Box(Modifier.weight(1f).clip(RoundedCornerShape(9.dp)).background(if (selected) Color.White else Color.Transparent)
-                    .selectable(selected = selected, role = Role.Tab, onClick = { onWeek(index == 1) }).heightIn(min = 44.dp).padding(10.dp), contentAlignment = Alignment.Center) {
-                    Text(label, color = if (selected) Accent else Muted, fontSize = 14.sp, fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal)
-                }
-            }
-        }
-        Column(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Caption(if (week) "本周应用使用" else "今日应用使用")
-            if (visibleReport?.hasData == true) UsageTotal(visibleReport.totalMillis)
-            else Text("—", fontSize = 36.sp, color = Muted)
-            Caption(when {
-                !permissionGranted -> "授权后展示，不使用示例数据"
-                reading -> "正在读取系统使用事件…"
-                error != null -> "读取失败，请刷新重试"
-                visibleReport?.hasData != true -> "暂无可确认数据，不代表用时为零"
-                week -> "周一至今 · 根据系统前台事件统计"
-                else -> "根据系统前台事件统计 · 不含专注助手"
-            })
-        }
-        UsageChart(visibleReport?.buckets.orEmpty(), week, today)
-        if (reading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if (error != null && permissionGranted) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        if (!permissionGranted) OutlinedButton(onClick = onGrant, modifier = Modifier.fillMaxWidth()) { Text("授予使用情况访问权限") }
-        if (visibleReport?.hasData == true) Text("系统记录可能不完整，统计口径见说明。", color = Muted, fontSize = 12.sp)
-        UsageGoalCard(settings.dailyGoalMinutes, visibleReport?.todayMillis, onGoal)
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("时间花在哪里", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Caption("按使用时长")
-        }
-        if (visibleReport?.apps.isNullOrEmpty()) Caption(if (permissionGranted) "暂无可展示的应用记录" else "授权后查看应用用时分布")
-        visibleReport?.apps?.forEachIndexed { index, app -> UsageAppRow(app, visibleReport.totalMillis, index) }
-        HorizontalDivider(color = Color(0xFFEEEEEE))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f).padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("每日超时提醒", fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                Caption("接近生活，而不是被屏幕占满")
-            }
-            Switch(checked = settings.usageReminders, onCheckedChange = onReminders)
-        }
-        Caption("约每 15 分钟检查，每天最多提醒一次；需要通知权限，省电限制可能造成延迟。")
-    }
-}
-
-@Composable
-private fun UsageTotal(millis: Long) {
-    val minutes = millis / UiLimits.MILLIS_PER_SECOND / UiLimits.SECONDS_PER_MINUTE
-    Text(buildAnnotatedString {
-        withStyle(SpanStyle(fontSize = 36.sp, color = MaterialTheme.colorScheme.onSurface)) { append((minutes / UiLimits.MINUTES_PER_HOUR).toString()) }
-        append(" 小时 ")
-        withStyle(SpanStyle(fontSize = 36.sp, color = MaterialTheme.colorScheme.onSurface)) { append((minutes % UiLimits.MINUTES_PER_HOUR).toString()) }
-        append(" 分钟")
-    }, color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-}
-
-@Composable
-private fun UsageChart(buckets: List<UsageBucket>, week: Boolean, today: LocalDate) {
-    var selected by remember(week, today) { mutableIntStateOf(-1) }
-    val count = if (week) DAYS_PER_WEEK else HOURS_PER_DAY / USAGE_HOURS_PER_BUCKET
-    val maximum = buckets.maxOfOrNull { it.durationMillis }?.coerceAtLeast(1L) ?: 1L
-    val highlighted = if (selected >= 0) selected else if (week) today.dayOfWeek.value - 1 else buckets.indexOfFirst { it.durationMillis == maximum }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(Modifier.fillMaxWidth().height(120.dp)) {
-            Canvas(Modifier.fillMaxSize()) {
-                val gridLines = 3
-                repeat(gridLines + 1) { index ->
-                    val y = size.height * index / gridLines
-                    drawLine(Color(0xFFEDEDED), Offset(0f, y), Offset(size.width, y), 1.dp.toPx())
-                }
-            }
-            Row(Modifier.fillMaxSize().selectableGroup()) {
-                repeat(count) { index ->
-                    val bucket = buckets.getOrNull(index)
-                    val label = usageBucketLabel(index, week)
-                    val available = bucket?.available == true
-                    val description = "$label：${if (available) durationText(bucket!!.durationMillis / UiLimits.MILLIS_PER_SECOND) else "暂无数据或时段尚未开始"}"
-                    Box(Modifier.weight(1f).fillMaxHeight().selectable(selected == index, role = Role.Tab, onClick = { selected = index })
-                        .semantics { contentDescription = description }, contentAlignment = Alignment.BottomCenter) {
-                        if (available && bucket!!.durationMillis > 0) Box(Modifier.padding(horizontal = 3.dp).widthIn(max = 24.dp).fillMaxWidth()
-                            .height((110f * bucket.durationMillis.toFloat() / maximum).coerceAtLeast(2f).dp)
-                            .clip(RoundedCornerShape(topStart = 5.dp, topEnd = 5.dp)).background(if (index == highlighted) Accent else Color(0xFFBDBDBD)))
-                        else Text(if (available) "0" else "—", fontSize = 10.sp, color = Muted, modifier = Modifier.padding(bottom = 4.dp))
-                    }
-                }
-            }
-        }
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
-            val compact = maxWidth / fontScale < 300.dp
-            val labels = if (week) USAGE_WEEK_LABELS else if (compact) listOf("00", "06", "12", "18", "24") else listOf("00:00", "06:00", "12:00", "18:00", "24:00")
-            Row(Modifier.fillMaxWidth()) {
-                labels.forEachIndexed { index, label ->
-                    Text(label, color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        textAlign = if (week) TextAlign.Center else when (index) { 0 -> TextAlign.Start; labels.lastIndex -> TextAlign.End; else -> TextAlign.Center }, modifier = Modifier.weight(1f))
-                }
-            }
-        }
-        val bucket = buckets.getOrNull(selected)
-        Text(if (bucket == null) "点击柱形查看用时 · — 表示暂无数据或尚未开始"
-            else "${usageBucketLabel(selected, week)} · ${if (bucket.available) durationText(bucket.durationMillis / UiLimits.MILLIS_PER_SECOND) else "暂无数据或时段尚未开始"}",
-            color = Muted, fontSize = 11.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-    }
-}
-
-@Composable
-private fun UsageGoalCard(goalMinutes: Int, todayMillis: Long?, onGoal: () -> Unit) {
-    val goalSeconds = goalMinutes * UiLimits.SECONDS_PER_MINUTE
-    val seconds = todayMillis?.div(UiLimits.MILLIS_PER_SECOND)
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(SoftSurface).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Outlined.TrackChanges, null, tint = Muted, modifier = Modifier.size(16.dp))
-            Text("每日使用目标", modifier = Modifier.weight(1f).padding(start = 6.dp), fontSize = 13.sp)
-            TextButton(onClick = onGoal, contentPadding = PaddingValues(start = 6.dp)) {
-                Text(durationText(goalSeconds), fontSize = 12.sp)
-                Icon(Icons.Outlined.ChevronRight, null, modifier = Modifier.size(18.dp))
-            }
-        }
-        if (seconds != null) LinearProgressIndicator(progress = { (seconds.toFloat() / goalSeconds.coerceAtLeast(1L)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(4.dp), trackColor = Color(0xFFDEDEDE))
-        Caption(when {
-            seconds == null -> "今日暂无可确认数据，稍后刷新查看目标进度。"
-            seconds > goalSeconds -> "今天已超出目标 ${durationText(seconds - goalSeconds)}，给眼睛一点休息。"
-            seconds == goalSeconds -> "今天已达到目标时长，休息一下吧。"
-            else -> "今天还剩 ${durationText(goalSeconds - seconds)}，留一点时间给生活。"
-        })
-    }
-}
-
-@Composable
-private fun UsageAppRow(app: AppUsage, totalMillis: Long, index: Int) {
-    val colors = listOf(Color(0xFFF5E8DC) to Color(0xFF995C2C), Color(0xFFF4E5E7) to Color(0xFF9B6070), Color(0xFFE9E7F2) to Color(0xFF71608F), Color(0xFFE5EBF3) to Color(0xFF536F92))
-    val (background, ink) = colors[index % colors.size]
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Box(Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(background), contentAlignment = Alignment.Center) {
-            Text(app.label.take(1), color = ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-        }
-        Column(Modifier.weight(1f).semantics { contentDescription = app.packageName }, verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(app.label, modifier = Modifier.weight(1f), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(durationText(app.durationMillis / UiLimits.MILLIS_PER_SECOND), color = Muted, fontSize = 11.sp, textAlign = TextAlign.End, modifier = Modifier.widthIn(max = 140.dp))
-            }
-            LinearProgressIndicator(progress = { if (totalMillis > 0L) (app.durationMillis.toFloat() / totalMillis).coerceIn(0f, 1f) else 0f },
-                modifier = Modifier.fillMaxWidth().height(3.dp), color = Color(0xFFA3A3A3), trackColor = Color(0xFFEDEDED))
-        }
-    }
 }
 
 @Composable
