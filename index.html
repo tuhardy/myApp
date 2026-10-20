@@ -203,11 +203,25 @@
           <section class="page" id="page-profile" aria-labelledby="profile-heading" hidden>
             <header class="page-header"><div><p class="overline">一个更适合你的专注空间</p><h2 id="profile-heading">我的空间<span class="heading-dot">.</span></h2></div><svg class="icon profile-leaf"><use href="#i-leaf"/></svg></header>
             <div class="profile-card"><div class="avatar">我</div><div><h3>生活的掌舵人</h3><p>不必登录，从自己开始。</p></div><span class="local-badge">本地优先</span></div>
-            <div class="privacy-card"><svg class="icon"><use href="#i-shield"/></svg><div><strong>你的时间，只属于你</strong><p>正式版计划在本机保存个人数据。<br>本原型仅使用内存，刷新即恢复示例。</p></div></div>
-            <div class="section-heading"><h3>数据与偏好</h3></div>
-            <div class="settings-group"><button class="settings-row" id="backup-button"><span class="setting-icon"><svg class="icon"><use href="#i-backup"/></svg></span><div><strong>备份与恢复</strong><small>JSON 文件 · 流程预览</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button><button class="settings-row" id="permissions-button"><span class="setting-icon"><svg class="icon"><use href="#i-shield"/></svg></span><div><strong>权限管理</strong><small>按需授权，始终由你掌控</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button><button class="settings-row" id="preferences-button"><span class="setting-icon"><svg class="icon"><use href="#i-settings"/></svg></span><div><strong>休息偏好</strong><small id="preferences-caption">短休息 5 分钟 / 长休息 15 分钟</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button></div>
-            <div class="section-heading"><h3>探索更多可能</h3><span class="sample-tag">规划中</span></div>
-            <button class="automation-card" id="automation-button"><div class="automation-top"><span class="code-icon"><svg class="icon"><use href="#i-code"/></svg></span><span class="coming-soon">COMING NEXT</span></div><h3>让日常，自动一点</h3><p>为你自己的手机自动化脚本，<br>留一个位置。</p><div class="automation-bottom"><span>自动化扩展</span><span>尚未接入 <svg class="icon"><use href="#i-arrow"/></svg></span></div></button>
+            <div class="asset-card" id="asset-card">
+              <div class="asset-top"><span>净资产 <span class="sample-tag">示例</span></span><button class="asset-hide" id="asset-hide" type="button" aria-pressed="false">隐藏金额</button></div>
+              <button class="asset-main" id="asset-open" type="button" aria-label="查看资产详情"><strong id="asset-net"></strong><small id="asset-change"></small></button>
+              <div class="asset-sparkline" id="asset-sparkline" role="img"></div>
+              <div class="asset-labels" id="asset-labels" aria-hidden="true"></div>
+              <div class="asset-foot"><small id="asset-split"></small><button class="secondary-button" id="asset-update" type="button">更新余额</button></div>
+            </div>
+            <div class="section-heading"><h3>心愿</h3><small id="wish-caption">用一个账户，攒一件想要的事</small></div>
+            <div class="wish-list" id="wish-list"></div>
+            <div class="section-heading"><h3>生活概览</h3><small>点开看详情</small></div>
+            <div class="life-grid" id="life-grid">
+              <button type="button" data-life-page="statistics"><small>专注 · 本周</small><strong id="life-focus"></strong></button>
+              <button type="button" data-life-page="tasks"><small>待办 · 本月完成</small><strong id="life-tasks"></strong></button>
+              <button type="button" data-life-page="diary"><small>日记 · 连续</small><strong id="life-diary"></strong></button>
+              <button type="button" data-life-page="usage"><small>用屏 · 今日示例</small><strong id="life-usage"></strong></button>
+            </div>
+            <div class="section-heading"><h3>设置</h3></div>
+            <div class="settings-group"><button class="settings-row" id="backup-button"><span class="setting-icon"><svg class="icon"><use href="#i-backup"/></svg></span><div><strong>备份与恢复</strong><small>JSON 文件 · 流程预览</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button><button class="settings-row" id="permissions-button"><span class="setting-icon"><svg class="icon"><use href="#i-shield"/></svg></span><div><strong>权限管理</strong><small>按需授权，始终由你掌控</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button><button class="settings-row" id="preferences-button"><span class="setting-icon"><svg class="icon"><use href="#i-settings"/></svg></span><div><strong>休息偏好</strong><small id="preferences-caption">短休息 5 分钟 / 长休息 15 分钟</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button><button class="settings-row" id="automation-button"><span class="setting-icon"><svg class="icon"><use href="#i-code"/></svg></span><div><strong>自动化扩展</strong><small>为手机自动化脚本留一个位置</small></div><span class="sample-tag">规划中</span><svg class="icon arrow"><use href="#i-arrow"/></svg></button></div>
+            <p class="privacy-note">你的时间与资产，只属于你。正式版计划在本机保存个人数据；本原型仅使用内存，刷新即恢复示例。</p>
             <p class="version-note">专注助手 · 界面原型 V0.4<br>更少打扰，更多属于你的时间</p>
           </section>
         </div>

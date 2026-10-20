@@ -1787,6 +1787,69 @@ def alltime_snapshot(page):
     return snapshot
 
 
+def check_profile_assets(browser, errors):
+    page = fresh_timer_page(browser, errors)
+    page.locator('.bottom-nav [data-page="profile"]').click()
+    expected = page.evaluate("FocusModel.assetSummary(FocusModel.initialAssetAccounts(), FocusModel.initialAssetSnapshots(), new Date()).net")
+    net = page.locator("#asset-net")
+    assert float(net.inner_text().replace("¥", "").replace(",", "")) == expected, (net.inner_text(), expected)
+    expect(page.locator("#asset-sparkline polyline")).to_have_count(1)
+    expect(page.locator("#asset-labels span")).to_have_count(6)
+    expect(page.locator(".wish-card:not(.wish-add)")).to_have_count(1)
+
+    page.locator("#asset-hide").click()
+    expect(page.locator("#asset-hide")).to_have_attribute("aria-pressed", "true")
+    expect(net).to_have_text("¥ ••••")
+    expect(page.locator(".wish-amount")).to_have_text("¥ •••• / ¥ ••••")
+    page.locator("#asset-hide").click()
+
+    page.locator("#asset-update").click()
+    expect(page.locator("#modal.asset-sheet")).to_be_visible()
+    bank = page.locator('#modal input[name="asset-sample-bank"]')
+    bank.fill("abc")
+    page.get_by_role("button", name="保存", exact=True).click()
+    expect(page.locator('#modal [role="alert"]')).to_contain_text("工资卡")
+    bank.fill(str(float(bank.input_value()) + 1000))
+    page.get_by_role("button", name="保存", exact=True).click()
+    expect(page.locator("#modal")).not_to_be_visible()
+    assert float(net.inner_text().replace("¥", "").replace(",", "")) == expected + 1000
+
+    page.locator("#asset-open").click()
+    page.locator(".asset-row", has_text="旅行基金").click()
+    page.locator('#modal input[name="amount"]').fill("12000")
+    page.locator('#modal input[name="note"]').fill("攒够了")
+    page.get_by_role("button", name="记下这笔", exact=True).click()
+    expect(page.locator(".asset-history-row").first).to_contain_text("攒够了")
+    page.keyboard.press("Escape")
+    expect(page.locator(".wish-card.reached")).to_have_count(1)
+
+    page.locator(".wish-add").click()
+    page.locator('#modal input[name="name"]').fill("新相机")
+    page.locator('#modal input[name="target"]').fill("0")
+    page.get_by_role("button", name="添加心愿", exact=True).click()
+    expect(page.locator('#modal [role="alert"]')).to_contain_text("大于 0")
+    page.locator('#modal input[name="target"]').fill("<b>8000</b>")
+    page.get_by_role("button", name="添加心愿", exact=True).click()
+    expect(page.locator('#modal [role="alert"]')).to_be_visible()
+    page.locator('#modal input[name="name"]').fill("<b>相机</b>")
+    page.locator('#modal input[name="target"]').fill("8000")
+    page.get_by_role("button", name="添加心愿", exact=True).click()
+    expect(page.locator(".wish-card strong", has_text="<b>相机</b>")).to_have_count(1)
+
+    page.locator('[data-life-page="tasks"]').click()
+    expect(page.locator("#page-tasks")).to_be_visible()
+    expect(page.locator('[data-filter="done"]')).to_have_attribute("aria-pressed", "true")
+    for width in MOBILE_WIDTHS:
+        page.set_viewport_size({"width": width, "height": MOBILE_HEIGHT})
+        page.locator('.bottom-nav [data-page="profile"]').click()
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (width, "profile overflow")
+    page.reload()
+    page.locator('.bottom-nav [data-page="profile"]').click()
+    assert float(net.inner_text().replace("¥", "").replace(",", "")) == expected
+    page.close()
+    print("PASS: profile assets, wishes, hiding and life overview stay in memory.", flush=True)
+
+
 def check_alltime_statistics(browser, errors):
     page = fresh_timer_page(browser, errors)
     open_statistics(page)
@@ -2253,6 +2316,7 @@ def run_checks():
         check_cancelled_settings_drafts(browser, errors)
         check_progress_workflow(browser, errors)
         check_progress_queue(browser, errors)
+        check_profile_assets(browser, errors)
         check_alltime_statistics(browser, errors)
         assert not errors, errors
         browser.close()

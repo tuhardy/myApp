@@ -972,6 +972,182 @@
     return { ...entry, deletedAt: null };
   }
 
+  /** 资产按账户记余额快照；负债也记正数，汇总时计为负值。 */
+  const ASSET_KINDS = Object.freeze([
+    { id: "cash", label: "现金" }, { id: "bank", label: "储蓄卡" }, { id: "fund", label: "理财 / 基金" },
+    { id: "stock", label: "股票" }, { id: "property", label: "房产车辆" }, { id: "other", label: "其他资产" },
+    { id: "debt", label: "负债", liability: true },
+  ]);
+  const ASSET_LIMITS = Object.freeze({ maxName: 16, maxNote: 40, maxAmount: 1e10, maxAccounts: 20, maxWishes: 3,
+    maxWishName: 16, trendMonths: 6 });
+
+  function assetKind(id) {
+    return ASSET_KINDS.find(kind => kind.id === id) ?? null;
+  }
+
+  function validateAssetAccount(input) {
+    const name = String(input?.name ?? "").trim();
+    if (!name || name.length > ASSET_LIMITS.maxName) throw new Error(`账户名称需为 1–${ASSET_LIMITS.maxName} 个字符。`);
+    if (!assetKind(input?.kind)) throw new Error("请选择有效的账户类型。");
+    return { name, kind: input.kind };
+  }
+
+  function validateAmount(value, label) {
+    const text = String(value ?? "").trim();
+    const amount = Number(text);
+    if (!text || !Number.isFinite(amount) || amount < 0 || amount > ASSET_LIMITS.maxAmount) {
+      throw new Error(`${label}需为 0–100 亿之间的数字。`);
+    }
+    if (Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-6) {
+      throw new Error(`${label}最多保留两位小数。`);
+    }
+    return Math.round(amount * 100) / 100;
+  }
+
+  function validateAssetSnapshot(input, now = new Date()) {
+    const amount = validateAmount(input?.amount, "余额");
+    const date = String(input?.date ?? "");
+    if (!parseDateKey(date)) throw new Error("请选择有效的日期。");
+    if (date > localDateKey(now)) throw new Error("日期不能晚于今天。");
+    const note = String(input?.note ?? "").trim();
+    if (note.length > ASSET_LIMITS.maxNote) throw new Error(`备注最多 ${ASSET_LIMITS.maxNote} 字。`);
+    return { amount, date, note };
+  }
+
+  function validateWish(input) {
+    const name = String(input?.name ?? "").trim();
+    if (!name || name.length > ASSET_LIMITS.maxWishName) throw new Error(`心愿名称需为 1–${ASSET_LIMITS.maxWishName} 个字符。`);
+    const target = validateAmount(input?.target, "目标金额");
+    if (target <= 0) throw new Error("目标金额需大于 0。");
+    const deadline = String(input?.deadline ?? "").trim() || null;
+    if (deadline && !parseDateKey(deadline)) throw new Error("请选择有效的截止日期。");
+    const accountId = String(input?.accountId ?? "").trim();
+    if (!accountId) throw new Error("请选择用来攒钱的账户。");
+    return { name, target, deadline, accountId };
+  }
+
+  /** 同一天多条快照时取最后记录的一条（数组顺序靠后者）。 */
+  function latestSnapshot(snapshots, accountId, atKey) {
+    let latest = null;
+    (Array.isArray(snapshots) ? snapshots : []).forEach(snapshot => {
+      if (snapshot.accountId !== accountId || (atKey && snapshot.date > atKey)) return;
+      if (!latest || snapshot.date >= latest.date) latest = snapshot;
+    });
+    return latest;
+  }
+
+  function latestBalance(snapshots, accountId, atKey) {
+    return latestSnapshot(snapshots, accountId, atKey)?.amount ?? 0;
+  }
+
+  function roundMoney(value) {
+    return Math.round(value * 100) / 100;
+  }
+
+  function netWorthAt(accounts, snapshots, atKey) {
+    let assets = 0;
+    let debts = 0;
+    let known = false;
+    (Array.isArray(accounts) ? accounts : []).forEach(account => {
+      const snapshot = latestSnapshot(snapshots, account.id, atKey);
+      if (!snapshot) return;
+      known = true;
+      if (assetKind(account.kind)?.liability) debts += snapshot.amount;
+      else assets += snapshot.amount;
+    });
+    return { assets: roundMoney(assets), debts: roundMoney(debts), net: roundMoney(assets - debts), known };
+  }
+
+  function monthEndKey(now, monthsAgo) {
+    return localDateKey(new Date(now.getFullYear(), now.getMonth() - monthsAgo + 1, 0));
+  }
+
+  /** 本月变化对比上月月末；上月月末前还没有任何快照时百分比为 null。 */
+  function assetSummary(accounts, snapshots, now = new Date()) {
+    const current = netWorthAt(accounts, snapshots, localDateKey(now));
+    const previous = netWorthAt(accounts, snapshots, monthEndKey(now, 1));
+    const monthChange = previous.known ? roundMoney(current.net - previous.net) : null;
+    const monthPct = previous.known && previous.net !== 0 ? monthChange / Math.abs(previous.net) : null;
+    return { assets: current.assets, debts: current.debts, net: current.net, monthChange, monthPct };
+  }
+
+  /** 每月取月末净值（本月取今天），各账户沿用该时点前最近一次快照；附当月带备注的快照。 */
+  function netWorthSeries(accounts, snapshots, months = ASSET_LIMITS.trendMonths, now = new Date()) {
+    const todayKey = localDateKey(now);
+    return Array.from({ length: months }, (_, index) => {
+      const monthsAgo = months - 1 - index;
+      const endKey = monthsAgo === 0 ? todayKey : monthEndKey(now, monthsAgo);
+      const month = endKey.slice(0, 7);
+      const point = netWorthAt(accounts, snapshots, endKey);
+      const notes = (Array.isArray(snapshots) ? snapshots : [])
+        .filter(snapshot => snapshot.note && snapshot.date.slice(0, 7) === month && snapshot.date <= todayKey)
+        .sort((a, b) => a.date.localeCompare(b.date));
+      return { month, net: point.net, known: point.known, notes };
+    });
+  }
+
+  function wishProgress(wish, snapshots, now = new Date()) {
+    const todayKey = localDateKey(now);
+    const saved = latestBalance(snapshots, wish.accountId, todayKey);
+    const remaining = roundMoney(Math.max(0, wish.target - saved));
+    const reached = remaining === 0;
+    const daysLeft = wish.deadline ? daysBetween(todayKey, wish.deadline) : null;
+    const monthsLeft = daysLeft === null || daysLeft < 0 ? null : Math.max(1, Math.ceil(daysLeft / 30));
+    return { saved, percent: Math.min(1, saved / wish.target), remaining, reached, daysLeft,
+      overdue: !reached && daysLeft !== null && daysLeft < 0,
+      monthlyNeeded: reached || monthsLeft === null ? null : Math.ceil(remaining / monthsLeft) };
+  }
+
+  /** 连续写日记天数：今天写了从今天数，没写从昨天数；回收站里的不算。 */
+  function diaryStreak(entries, now = new Date()) {
+    const days = new Set((Array.isArray(entries) ? entries : []).filter(entry => entry && !entry.deletedAt)
+      .map(diaryEntryDate).filter(Boolean).map(localDateKey));
+    let cursor = days.has(localDateKey(now)) ? now : addDays(now, -1);
+    let streak = 0;
+    while (days.has(localDateKey(cursor))) {
+      streak += 1;
+      cursor = addDays(cursor, -1);
+    }
+    return streak;
+  }
+
+  function initialAssetAccounts() {
+    return [
+      { id: "asset-sample-bank", name: "工资卡", kind: "bank" },
+      { id: "asset-sample-cash", name: "零钱", kind: "cash" },
+      { id: "asset-sample-fund", name: "指数基金", kind: "fund" },
+      { id: "asset-sample-trip", name: "旅行基金", kind: "bank" },
+      { id: "asset-sample-card", name: "信用卡", kind: "debt" },
+    ];
+  }
+
+  function initialAssetSnapshots(now = new Date()) {
+    const day = (monthsAgo, date) => {
+      const last = new Date(now.getFullYear(), now.getMonth() - monthsAgo + 1, 0).getDate();
+      const key = localDateKey(new Date(now.getFullYear(), now.getMonth() - monthsAgo, Math.min(date, last)));
+      const today = localDateKey(now);
+      return key > today ? today : key;
+    };
+    const rows = [
+      ["bank", 7, 10, 18200, ""], ["cash", 7, 10, 800, ""], ["fund", 7, 10, 30000, ""], ["trip", 7, 10, 2000, ""], ["card", 7, 10, 3200, ""],
+      ["bank", 6, 10, 24600, "发工资"], ["card", 6, 25, 1800, "还信用卡"],
+      ["bank", 5, 10, 21500, "买基金"], ["fund", 5, 10, 36100, "买基金"], ["trip", 5, 15, 3500, ""],
+      ["bank", 4, 10, 27800, "发工资"], ["fund", 4, 28, 35200, "市场回调"], ["card", 4, 25, 4100, ""],
+      ["bank", 3, 10, 30100, "发工资"], ["trip", 3, 15, 5000, ""], ["cash", 3, 20, 600, ""],
+      ["bank", 2, 10, 26300, "交房租"], ["fund", 2, 28, 38900, ""], ["card", 2, 25, 2600, "还信用卡"],
+      ["bank", 1, 10, 32400, "发工资"], ["trip", 1, 15, 6500, ""], ["fund", 1, 28, 40200, ""],
+      ["bank", 0, 1, 33800, "年终奖"], ["card", 0, 1, 2900, ""],
+    ];
+    return rows.map(([account, monthsAgo, date, amount, note], index) => ({
+      id: `asset-sample-snap-${index + 1}`, accountId: `asset-sample-${account}`, date: day(monthsAgo, date), amount, note,
+    }));
+  }
+
+  function initialWishes(now = new Date()) {
+    const deadline = localDateKey(new Date(now.getFullYear(), now.getMonth() + 4, 1));
+    return [{ id: "wish-sample-trip", name: "去云南旅行", target: 12000, deadline, accountId: "asset-sample-trip", archived: false }];
+  }
+
   const api = Object.freeze({
     LIMITS, MODES, CATEGORIES, USAGE, sampleUsageSegments, focusSpans, usageDaySummary, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, daysBetween, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
@@ -979,6 +1155,8 @@
     allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,
     completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks,
     DIARY_LIMITS, initialDiaryEntries, diaryEntryDate, parseDiaryDateQuery, validateDiaryEntry, selectDiaryEntries, trashedDiaryEntries, listDiaryDrafts, moveDiaryToTrash, restoreDiaryEntry,
+    diaryStreak, ASSET_KINDS, ASSET_LIMITS, assetKind, validateAssetAccount, validateAssetSnapshot, validateWish,
+    latestSnapshot, latestBalance, assetSummary, netWorthSeries, wishProgress, initialAssetAccounts, initialAssetSnapshots, initialWishes,
   });
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.FocusModel = api;

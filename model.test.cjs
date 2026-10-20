@@ -1384,3 +1384,83 @@ test("周期平移按日周月年整段移动，环比与上一周期对比且�
   assert.deepEqual(comparePeriods(records, { period: "week", anchor, includeSamples: false }), { current: 40, previous: 0, difference: 40 });
   assert.deepEqual(comparePeriods(records, { period: "day", anchor }), { current: 0, previous: 0, difference: 0 });
 });
+
+const { diaryStreak, validateAssetAccount, validateAssetSnapshot, validateWish, latestBalance, assetSummary, netWorthSeries, wishProgress,
+  initialAssetAccounts, initialAssetSnapshots, initialWishes } = require("./model.js");
+
+test("资产汇总：负债计负，本月变化对比上月月末，上月无数据时百分比为 null", () => {
+  const now = new Date(2026, 9, 21, 12);
+  const accounts = [{ id: "a", kind: "bank" }, { id: "d", kind: "debt" }];
+  const snaps = [
+    { accountId: "a", date: "2026-09-10", amount: 10000 }, { accountId: "d", date: "2026-09-12", amount: 2000 },
+    { accountId: "a", date: "2026-10-10", amount: 12000 }, { accountId: "a", date: "2026-10-30", amount: 99999 },
+  ];
+  assert.deepEqual(assetSummary(accounts, snaps, now), { assets: 12000, debts: 2000, net: 10000, monthChange: 2000, monthPct: 0.25 });
+  const fresh = assetSummary(accounts, snaps.slice(2, 3), now);
+  assert.equal(fresh.monthChange, null);
+  assert.equal(fresh.monthPct, null);
+  assert.equal(latestBalance(snaps, "a", "2026-09-30"), 10000);
+  assert.equal(latestBalance(snaps, "missing", "2026-10-21"), 0);
+});
+
+test("净值曲线按月末沿用最近快照，附当月备注", () => {
+  const now = new Date(2026, 9, 21, 12);
+  const accounts = [{ id: "a", kind: "bank" }];
+  const snaps = [{ accountId: "a", date: "2026-07-05", amount: 100, note: "" }, { accountId: "a", date: "2026-09-10", amount: 300, note: "发工资" }];
+  const series = netWorthSeries(accounts, snaps, 4, now);
+  assert.deepEqual(series.map(point => [point.month, point.net, point.known]),
+    [["2026-07", 100, true], ["2026-08", 100, true], ["2026-09", 300, true], ["2026-10", 300, true]]);
+  assert.deepEqual(series[2].notes.map(note => note.note), ["发工资"]);
+  assert.equal(netWorthSeries(accounts, snaps, 6, now)[0].known, false);
+});
+
+test("心愿进度：达成、过期与每月还需", () => {
+  const now = new Date(2026, 9, 21, 12);
+  const snaps = [{ accountId: "t", date: "2026-10-01", amount: 6000 }];
+  const wish = { target: 12000, deadline: "2027-01-19", accountId: "t" };
+  assert.deepEqual(wishProgress(wish, snaps, now), { saved: 6000, percent: 0.5, remaining: 6000, reached: false, daysLeft: 90, overdue: false, monthlyNeeded: 2000 });
+  const done = wishProgress({ ...wish, target: 5000 }, snaps, now);
+  assert.equal(done.reached, true);
+  assert.equal(done.percent, 1);
+  assert.equal(done.monthlyNeeded, null);
+  const late = wishProgress({ ...wish, deadline: "2026-10-01" }, snaps, now);
+  assert.equal(late.overdue, true);
+  assert.equal(late.monthlyNeeded, null);
+  assert.equal(wishProgress({ ...wish, deadline: null }, snaps, now).daysLeft, null);
+});
+
+test("日记连续天数：今天没写从昨天数，跨月连续，回收站不算", () => {
+  const now = new Date(2026, 10, 2, 9);
+  const at = (m, d) => ({ occurredAt: new Date(2026, m, d, 20).toISOString(), deletedAt: null });
+  assert.equal(diaryStreak([at(10, 1), at(9, 31), at(9, 30), at(9, 28)], now), 3);
+  assert.equal(diaryStreak([at(10, 2), at(10, 1)], now), 2);
+  assert.equal(diaryStreak([{ ...at(10, 1), deletedAt: "x" }], now), 0);
+  assert.equal(diaryStreak(undefined, now), 0);
+});
+
+test("资产校验：金额范围与小数位、未来日期、备注长度、心愿必填", () => {
+  const now = new Date(2026, 9, 21, 12);
+  assert.deepEqual(validateAssetSnapshot({ amount: " 12.5 ", date: "2026-10-21", note: " 发工资 " }, now), { amount: 12.5, date: "2026-10-21", note: "发工资" });
+  assert.equal(validateAssetSnapshot({ amount: "0.07", date: "2026-10-01" }, now).amount, 0.07);
+  for (const amount of ["", "-1", "1.234", "abc", "10000000001"]) {
+    assert.throws(() => validateAssetSnapshot({ amount, date: "2026-10-01" }, now));
+  }
+  assert.throws(() => validateAssetSnapshot({ amount: 1, date: "2026-10-22" }, now), /晚于今天/);
+  assert.throws(() => validateAssetSnapshot({ amount: 1, date: "2026-10-01", note: "字".repeat(41) }, now), /40/);
+  assert.throws(() => validateAssetAccount({ name: "", kind: "bank" }));
+  assert.throws(() => validateAssetAccount({ name: "x", kind: "gold" }));
+  assert.deepEqual(validateWish({ name: " 相机 ", target: "8000", deadline: "", accountId: "a" }), { name: "相机", target: 8000, deadline: null, accountId: "a" });
+  assert.throws(() => validateWish({ name: "相机", target: "0", accountId: "a" }), /大于 0/);
+  assert.throws(() => validateWish({ name: "相机", target: "1", accountId: "" }), /账户/);
+});
+
+test("资产示例数据相对今天生成，不出现未来快照，心愿指向已有账户", () => {
+  for (const now of [new Date(2026, 9, 21, 12), new Date(2026, 2, 1, 8), new Date(2024, 1, 29, 8)]) {
+    const accounts = initialAssetAccounts();
+    const snaps = initialAssetSnapshots(now);
+    const ids = new Set(accounts.map(account => account.id));
+    assert.ok(snaps.every(snap => ids.has(snap.accountId) && snap.date <= localDateKey(now)));
+    assert.ok(initialWishes(now).every(wish => ids.has(wish.accountId)));
+    assert.ok(assetSummary(accounts, snaps, now).net > 0);
+  }
+});
