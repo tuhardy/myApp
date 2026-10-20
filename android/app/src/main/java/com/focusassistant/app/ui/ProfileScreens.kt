@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -139,21 +140,23 @@ private fun SectionHeading(title: String, caption: String?) {
 
 @Composable
 private fun NetWorthCard(book: AssetBook, today: LocalDate, hide: Boolean, onToggleHide: () -> Unit, onAssets: () -> Unit, onUpdate: () -> Unit, onAdd: () -> Unit) {
-    var annual by remember { mutableStateOf(false) }
-    var year by remember(today.year) { mutableIntStateOf(today.year) }
-    var selectedMonth by remember(annual, year, today) { mutableStateOf<YearMonth?>(null) }
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    var annual by rememberSaveable { mutableStateOf(false) }
+    var year by rememberSaveable(today.year) { mutableIntStateOf(today.year) }
+    var selectedMonthKey by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedMonth = selectedMonthKey?.let { runCatching { YearMonth.parse(it) }.getOrNull() }
     val summary = AssetRules.summary(book, today)
     val yearSummary = AssetRules.yearSummary(book, year, today)
     val series = if (annual) yearSummary.points else AssetRules.series(book, today)
+    val miniSeries = AssetRules.series(book, today)
     val selected = series.firstOrNull { it.month == selectedMonth && it.known } ?: series.lastOrNull { it.known }
     val knownCount = series.count { it.known }
     val empty = book.accounts.isEmpty()
     val change = summary.monthChangeCents
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(AccentSoft).padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 14.dp)) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(AccentSoft).padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("净资产", fontSize = 12.sp, color = Muted, modifier = Modifier.weight(1f))
-            val periodSummary = if (annual) when { yearSummary.changeCents == null -> "年度变化 · 暂无年初对比"; hide -> "年度变化 · 金额已隐藏"; else -> "年度变化 ${AssetRules.money(yearSummary.changeCents, sign = true)}" } else "余额历史 · 非收支统计"
-            Text(periodSummary, fontSize = 10.sp, color = Muted, modifier = Modifier.clearAndSetSemantics { contentDescription = if (annual && hide && yearSummary.changeCents != null) "年度变化，金额已隐藏" else periodSummary })
+            Text("手动记录 · 非收支统计", fontSize = 10.sp, color = Muted)
         }
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClickLabel = "查看资产详情", onClick = onAssets)) {
             Text(shownMoney(summary.netCents, hide), fontSize = 30.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp, color = Ink, modifier = Modifier.clearAndSetSemantics { contentDescription = if (hide) "金额已隐藏" else AssetRules.money(summary.netCents) })
@@ -162,31 +165,55 @@ private fun NetWorthCard(book: AssetBook, today: LocalDate, hide: Boolean, onTog
                 fontSize = 12.sp, color = if ((change ?: 0L) < 0L || empty) Muted else AccentDark,
                 modifier = Modifier.padding(top = 6.dp).clearAndSetSemantics { contentDescription = when { empty -> "还没有账户，添加一个开始记录"; change == null -> "本月暂无对比"; hide -> "本月变化，金额已隐藏"; else -> "本月变化 ${AssetRules.money(change, sign = true)}" } })
         }
-        Row(Modifier.padding(top = 10.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = .65f)).padding(3.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            listOf(false to "近 6 个月", true to "年度").forEach { (isYear, label) ->
-                FilterChip(selected = annual == isYear, onClick = { annual = isYear; selectedMonth = null }, label = { Text(label, fontSize = 11.sp) }, modifier = Modifier.height(34.dp))
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp).heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (miniSeries.any { it.known }) {
+                Sparkline(miniSeries, Modifier.weight(1f).height(28.dp)
+                    .clearAndSetSemantics { contentDescription = "近 6 个月净资产迷你趋势" })
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.heightIn(min = 44.dp)) {
+                Text(if (expanded) "收起趋势" else "查看趋势", color = AccentDark, fontSize = 12.sp)
             }
         }
-        if (annual) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-            TextButton(onClick = { year--; selectedMonth = null }) { Text("‹") }
-            Text("$year 年", fontSize = 12.sp, fontWeight = FontWeight.Medium)
-            TextButton(enabled = year < today.year, onClick = { year++; selectedMonth = null }) { Text("›") }
+        if (expanded) {
+            Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                Text(if (annual) when { yearSummary.changeCents == null -> "年度变化 · 暂无年初对比"; hide -> "年度变化 · 金额已隐藏"; else -> "年度变化 ${AssetRules.money(yearSummary.changeCents, sign = true)}" } else "余额历史 · 非收支统计", fontSize = 10.sp, color = Muted)
+                Row(Modifier.clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = .65f)).padding(3.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(false to "近 6 个月", true to "年度").forEach { (isYear, label) ->
+                        FilterChip(selected = annual == isYear, onClick = { annual = isYear; selectedMonthKey = null }, label = { Text(label, fontSize = 11.sp) }, modifier = Modifier.height(34.dp))
+                    }
+                }
+                if (annual) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    TextButton(onClick = { year--; selectedMonthKey = null }) { Text("‹") }
+                    Text("$year 年", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    TextButton(enabled = year < today.year, onClick = { year++; selectedMonthKey = null }) { Text("›") }
+                }
+                val trend = series.filter { it.known }.joinToString("，") { "${it.month.monthValue}月 ${AssetRules.money(it.netCents)}" }
+                Sparkline(series, Modifier.fillMaxWidth().padding(top = 4.dp).height(48.dp)
+                    .clearAndSetSemantics { contentDescription = "${if (annual) "$year 年" else "近 6 个月"}净资产走势${if (hide || trend.isEmpty()) "" else "：$trend"}" })
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    series.forEach { point ->
+                        Box(
+                            Modifier.weight(1f).heightIn(min = 44.dp).clickable(enabled = point.known, role = Role.Button) {
+                                selectedMonthKey = point.month.toString()
+                            }.semantics { contentDescription = "${point.month.year}年${point.month.monthValue}月" },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("${point.month.monthValue}月", fontSize = 9.sp, color = if (point.month == selected?.month) AccentDark else Muted, maxLines = 1)
+                        }
+                    }
+                }
+                Text(selected?.let { "${it.month.year}年${it.month.monthValue}月 · ${shownMoney(it.netCents, hide)}" } ?: "还没有余额记录。添加账户并记下余额后，这里会显示历史。", fontSize = 11.sp, color = Ink,
+                    modifier = Modifier.padding(top = 2.dp).clearAndSetSemantics {
+                        liveRegion = LiveRegionMode.Polite
+                        contentDescription = selected?.let { "${it.month.year}年${it.month.monthValue}月 · ${if (hide) "金额已隐藏" else AssetRules.money(it.netCents)}" }
+                            ?: "还没有余额记录。添加账户并记下余额后，这里会显示历史。"
+                    })
+                Text(if (knownCount == 0) "记下余额后即可开始查看历史。" else if (knownCount == 1) "目前只有一个月份的记录，已显示单点；积累更多月份后可查看变化趋势。" else "点选月份查看余额；实心点表示当月记录含备注。", fontSize = 10.sp, color = Muted, modifier = Modifier.padding(top = 2.dp))
+            }
         }
-        val trend = series.filter { it.known }.joinToString("，") { "${it.month.monthValue}月 ${AssetRules.money(it.netCents)}" }
-        Sparkline(series, Modifier.fillMaxWidth().padding(top = 6.dp).height(72.dp)
-            .clearAndSetSemantics { contentDescription = "${if (annual) "$year 年" else "近 6 个月"}净资产走势${if (hide || trend.isEmpty()) "" else "：$trend"}" })
-        Row(Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            series.forEach { point -> TextButton(enabled = point.known, onClick = { selectedMonth = point.month }, modifier = Modifier.weight(1f).heightIn(min = 34.dp)) { Text("${point.month.monthValue}月", fontSize = 9.sp, color = if (point.month == selected?.month) AccentDark else Muted, maxLines = 1) } }
-        }
-        Text(selected?.let { "${it.month.year}年${it.month.monthValue}月 · ${shownMoney(it.netCents, hide)}" } ?: "还没有余额记录。添加账户并记下余额后，这里会显示历史。", fontSize = 11.sp, color = Ink,
-            modifier = Modifier.padding(top = 4.dp).clearAndSetSemantics {
-                liveRegion = LiveRegionMode.Polite
-                contentDescription = selected?.let { "${it.month.year}年${it.month.monthValue}月 · ${if (hide) "金额已隐藏" else AssetRules.money(it.netCents)}" }
-                    ?: "还没有余额记录。添加账户并记下余额后，这里会显示历史。"
-            })
-        Text(if (knownCount == 0) "记下余额后即可开始查看历史。" else if (knownCount == 1) "目前只有一个月份的记录，已显示单点；积累更多月份后可查看变化趋势。" else "点选月份查看余额；实心点表示当月记录含备注。", fontSize = 10.sp, color = Muted, modifier = Modifier.padding(top = 2.dp))
-        HorizontalDivider(Modifier.padding(top = 10.dp), color = CardLine)
-        Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().padding(top = if (expanded) 8.dp else 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("资产 ${shownMoney(summary.assetsCents, hide)} · 负债 ${shownMoney(summary.debtsCents, hide)}", fontSize = 11.sp, color = Muted,
                 modifier = Modifier.weight(1f).clearAndSetSemantics { contentDescription = if (hide) "资产与负债金额已隐藏" else "资产 ${AssetRules.money(summary.assetsCents)} · 负债 ${AssetRules.money(summary.debtsCents)}" })
             SoftButton("历史明细", onClick = onAssets)
@@ -203,9 +230,12 @@ private fun Sparkline(series: List<NetWorthPoint>, modifier: Modifier) {
         if (known.isEmpty()) return@Canvas
         val pad = 6.dp.toPx()
         val min = known.minOf { it.value.netCents }
-        val span = (known.maxOf { it.value.netCents } - min).takeIf { it > 0 } ?: 1L
+        val max = known.maxOf { it.value.netCents }
+        val span = (max - min).takeIf { it > 0 } ?: 1L
         val points = known.map { (index, point) ->
-            Offset(pad + index * (size.width - pad * 2) / maxOf(1, series.size - 1), size.height - pad - (point.netCents - min).toFloat() / span * (size.height - pad * 2)) to point
+            val x = (index + 0.5f) * size.width / series.size
+            val y = if (max == min) size.height / 2 else size.height - pad - (point.netCents - min).toFloat() / span * (size.height - pad * 2)
+            Offset(x, y) to point
         }
         if (points.size > 1) {
             val path = Path().apply { points.forEachIndexed { i, (offset, _) -> if (i == 0) moveTo(offset.x, offset.y) else lineTo(offset.x, offset.y) } }

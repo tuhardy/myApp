@@ -44,7 +44,7 @@
     diaryView: "home", diaryHomeScroll: 0, diaryDetailId: null, diaryEditor: null, diaryDrafts: new Map(),
     diaryRecording: null, micPermission: MIC.prompt, nextDiaryId: 1, nextDiaryAttachmentId: 1, nextDiaryDraftId: 1,
     assetAccounts: FocusModel.initialAssetAccounts(), assetSnapshots: FocusModel.initialAssetSnapshots(), wishes: FocusModel.initialWishes(),
-    hideAmounts: false, assetPeriod: "six", assetYear: new Date().getFullYear(), assetSelection: null, nextAssetId: 1,
+    hideAmounts: false, assetPeriod: "six", assetYear: new Date().getFullYear(), assetSelection: null, assetTrendOpen: false, nextAssetId: 1,
   };
   state.progressEntries = initialProgressEntries(state.records).map(entry => ({ ...entry, sample: true }));
   state.records.forEach(record => {
@@ -3187,10 +3187,10 @@
     return actions;
   }
 
-  function sparkline(series, selectedIndex) {
+  function sparkline(series, selectedIndex, compact = false) {
     const ns = "http://www.w3.org/2000/svg";
     const width = 360;
-    const height = 80;
+    const height = compact ? 32 : 80;
     const pad = 8;
     const svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -3246,6 +3246,10 @@
     const chart = $("asset-sparkline");
     chart.hidden = !known.length;
     chart.replaceChildren(sparkline(series, selected));
+    const miniSeries = FocusModel.netWorthSeries(state.assetAccounts, state.assetSnapshots, FocusModel.ASSET_LIMITS.trendMonths, now);
+    const mini = $("asset-mini-trend");
+    mini.replaceChildren(sparkline(miniSeries, null, true));
+    mini.hidden = !miniSeries.some(item => item.known);
     chart.setAttribute("aria-valuemax", String(Math.max(0, series.length - 1)));
     chart.setAttribute("aria-valuenow", String(selected ?? 0));
     const point = selected === null ? null : series[selected];
@@ -3255,6 +3259,7 @@
     readout.textContent = point ? `${point.month.slice(0, 4)}年${label} · ${value}` : "还没有余额记录。添加账户并记下余额后，这里会显示历史。";
     chart.setAttribute("aria-valuetext", readout.textContent);
     chart.setAttribute("aria-label", `${state.assetPeriod === "year" ? `${state.assetYear}年` : "近 6 个月"}净资产走势。${readout.textContent}`);
+    chart.tabIndex = state.assetTrendOpen && known.length ? 0 : -1;
     $("asset-chart-note").textContent = !known.length ? "记下余额后即可开始查看历史。" : known.length === 1 ? "目前只有一个月份的记录，已显示单点；积累更多月份后可查看变化趋势。" : "点选图表或月份查看净资产；实心点表示当月记录含备注。";
     const labels = $("asset-labels");
     labels.replaceChildren(...series.map((item, index) => {
@@ -3298,6 +3303,13 @@
       ? annual.yearChange === null ? "年度变化 · 暂无年初对比" : state.hideAmounts ? "年度变化 · 金额已隐藏" : `年度变化 ${money(annual.yearChange, { sign: true })}`
       : "余额历史 · 非收支统计";
     $("asset-period-summary").setAttribute("aria-label", $("asset-period-summary").textContent);
+    const trendDetail = $("asset-trend-detail");
+    const trendToggle = $("asset-trend-toggle");
+    $("asset-card").classList.toggle("expanded", state.assetTrendOpen);
+    trendDetail.hidden = !state.assetTrendOpen;
+    trendToggle.setAttribute("aria-expanded", String(state.assetTrendOpen));
+    trendToggle.textContent = state.assetTrendOpen ? "收起趋势" : "查看趋势";
+    trendToggle.setAttribute("aria-label", state.assetTrendOpen ? "收起资产趋势" : "查看资产趋势");
     document.querySelectorAll("[data-asset-period]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.assetPeriod === state.assetPeriod)));
     renderAssetChart(now);
     renderWishes(now);
@@ -3738,6 +3750,13 @@
   $("preferences-button").addEventListener("click", timerSettings);
   $("asset-open").addEventListener("click", assetSheet);
   $("asset-open-history").addEventListener("click", assetSheet);
+  $("asset-trend-toggle").addEventListener("click", () => {
+    const detail = $("asset-trend-detail");
+    const collapsing = state.assetTrendOpen;
+    if (collapsing && detail.contains(document.activeElement)) $("asset-trend-toggle").focus({ preventScroll: true });
+    state.assetTrendOpen = !state.assetTrendOpen;
+    renderProfile();
+  });
   $("asset-update").addEventListener("click", balanceUpdater);
   $("asset-hide").addEventListener("click", () => { state.hideAmounts = !state.hideAmounts; renderProfile(); });
   document.querySelectorAll("[data-asset-period]").forEach(button => button.addEventListener("click", () => {

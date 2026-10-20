@@ -203,14 +203,18 @@
           <section class="page" id="page-profile" aria-labelledby="profile-heading" hidden>
             <header class="page-header profile-header"><div><p class="overline">PERSONAL SPACE</p><h2 id="profile-heading">我的</h2></div><button class="asset-hide" id="asset-hide" type="button" aria-pressed="false">隐藏金额</button></header>
             <div class="asset-card" id="asset-card">
-              <div class="asset-top"><span>净资产 <span class="sample-tag">示例</span></span><small id="asset-period-summary"></small></div>
+              <div class="asset-top"><span>净资产 <span class="sample-tag">示例</span></span><small>手动记录 · 非收支统计</small></div>
               <button class="asset-main" id="asset-open" type="button" aria-label="查看资产详情"><strong id="asset-net"></strong><small id="asset-change"></small></button>
-              <div class="asset-period-tabs" role="group" aria-label="资产走势周期"><button type="button" data-asset-period="six" aria-pressed="true">近 6 个月</button><button type="button" data-asset-period="year" aria-pressed="false">年度</button></div>
-              <div class="asset-year-control" id="asset-year-control" hidden><button type="button" id="asset-year-prev" aria-label="上一年">‹</button><strong id="asset-year"></strong><button type="button" id="asset-year-next" aria-label="下一年">›</button></div>
-              <div class="asset-sparkline" id="asset-sparkline" role="slider" tabindex="0" aria-label="净资产历史走势"></div>
-              <p class="asset-chart-note" id="asset-chart-note"></p>
-              <div class="asset-labels" id="asset-labels"></div>
-              <p class="asset-chart-readout" id="asset-chart-readout" aria-live="polite"></p>
+              <div class="asset-summary-trend"><div class="asset-mini-trend" id="asset-mini-trend" aria-hidden="true"></div><button class="asset-trend-toggle" id="asset-trend-toggle" type="button" aria-expanded="false" aria-controls="asset-trend-detail">查看趋势 <span aria-hidden="true">⌄</span></button></div>
+              <div class="asset-trend-detail" id="asset-trend-detail" hidden>
+                <div class="asset-period-summary" id="asset-period-summary"></div>
+                <div class="asset-period-tabs" role="group" aria-label="资产走势周期"><button type="button" data-asset-period="six" aria-pressed="true">近 6 个月</button><button type="button" data-asset-period="year" aria-pressed="false">年度</button></div>
+                <div class="asset-year-control" id="asset-year-control" hidden><button type="button" id="asset-year-prev" aria-label="上一年">‹</button><strong id="asset-year"></strong><button type="button" id="asset-year-next" aria-label="下一年">›</button></div>
+                <div class="asset-sparkline" id="asset-sparkline" role="slider" tabindex="0" aria-label="净资产历史走势"></div>
+                <p class="asset-chart-note" id="asset-chart-note"></p>
+                <div class="asset-labels" id="asset-labels"></div>
+                <p class="asset-chart-readout" id="asset-chart-readout" aria-live="polite"></p>
+              </div>
               <div class="asset-foot"><small id="asset-split"></small><div><button class="text-button" id="asset-open-history" type="button">历史明细</button><button class="secondary-button" id="asset-update" type="button">更新余额</button></div></div>
             </div>
             <div class="section-heading"><h3>心愿</h3><small id="wish-caption">单个账户或所有资产</small></div>
