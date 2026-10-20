@@ -58,6 +58,13 @@ class AssetsTest {
     }
 
     @Test
+    fun singleKnownMonthIsAvailableToRenderAsPoint() {
+        val series = AssetRules.series(AssetBook(accounts, listOf(snap("1", "bank", "2026-06-02", 500))), today)
+        assertEquals(1, series.count { it.known })
+        assertEquals(50_000L, series.last().netCents)
+    }
+
+    @Test
     fun seriesUsesMonthEndsAndAttachesNotes() {
         val book = AssetBook(accounts, listOf(
             snap("1", "bank", "2026-03-31", 800),
@@ -76,30 +83,63 @@ class AssetsTest {
     }
 
     @Test
+    fun yearSeriesKeepsUnknownMonthsAndYearChangeNeedsJanuaryBaseline() {
+        val book = AssetBook(accounts, listOf(snap("1", "bank", "2026-03-10", 800), snap("2", "bank", "2026-06-05", 1200)))
+        val points = AssetRules.yearSeries(book, 2026, today)
+        assertEquals(12, points.size)
+        assertFalse(points.first().known)
+        assertEquals(80_000L, points[2].netCents)
+        assertEquals(120_000L, AssetRules.yearSummary(book, 2026, today).netCents)
+        assertNull(AssetRules.yearSummary(book, 2026, today).changeCents)
+        val withBaseline = AssetBook(accounts, listOf(
+            snap("1", "bank", "2025-12-31", 700), snap("2", "bank", "2026-01-05", 800), snap("3", "bank", "2026-06-05", 1200)
+        ))
+        assertEquals(50_000L, AssetRules.yearSummary(withBaseline, 2026, today).changeCents)
+    }
+
+    @Test
     fun wishProgressHandlesMonthlyNeedReachedAndOverdue() {
         val snapshots = listOf(snap("1", "bank", "2026-06-01", 4000))
         val wish = Wish("w", "旅行", 1_000_000, "2026-09-12", "bank")
-        val progress = AssetRules.wishProgress(wish, snapshots, today)
+        val progress = AssetRules.wishProgress(wish, AssetBook(accounts, snapshots), today)
         assertEquals(400_000L, progress.savedCents)
         assertEquals(0.4, progress.ratio, 1e-9)
         assertEquals(89L, progress.daysLeft)
         // 剩余 6000 元，89 天按 3 个月计。
         assertEquals(200_000L, progress.monthlyNeededCents)
 
-        val odd = AssetRules.wishProgress(wish.copy(targetCents = 1_000_001), snapshots, today)
+        val odd = AssetRules.wishProgress(wish.copy(targetCents = 1_000_001), AssetBook(accounts, snapshots), today)
         assertEquals(200_100L, odd.monthlyNeededCents)
 
-        val overdue = AssetRules.wishProgress(wish.copy(deadline = "2026-06-01"), snapshots, today)
+        val overdue = AssetRules.wishProgress(wish.copy(deadline = "2026-06-01"), AssetBook(accounts, snapshots), today)
         assertTrue(overdue.overdue)
         assertNull(overdue.monthlyNeededCents)
 
-        val reached = AssetRules.wishProgress(wish.copy(targetCents = 300_000), snapshots, today)
+        val reached = AssetRules.wishProgress(wish.copy(targetCents = 300_000), AssetBook(accounts, snapshots), today)
         assertTrue(reached.reached)
         assertEquals(1.0, reached.ratio, 1e-9)
         assertNull(reached.monthlyNeededCents)
 
-        assertNull(AssetRules.wishProgress(wish.copy(deadline = null), snapshots, today).monthlyNeededCents)
-        assertEquals(600_000L, AssetRules.wishProgress(wish.copy(deadline = "2026-06-15"), snapshots, today).monthlyNeededCents)
+        assertNull(AssetRules.wishProgress(wish.copy(deadline = null), AssetBook(accounts, snapshots), today).monthlyNeededCents)
+        assertEquals(600_000L, AssetRules.wishProgress(wish.copy(deadline = "2026-06-15"), AssetBook(accounts, snapshots), today).monthlyNeededCents)
+    }
+
+    @Test
+    fun allAssetsWishSumsNonDebtAccountsAndSurvivesAccountRemoval() {
+        val assets = listOf(AssetAccount("bank", "储蓄卡", AssetKind.BANK), AssetAccount("cash", "现金", AssetKind.CASH), AssetAccount("debt", "负债", AssetKind.DEBT))
+        val snapshots = listOf(snap("1", "bank", "2026-06-01", 4000), snap("2", "cash", "2026-06-02", 500), snap("3", "debt", "2026-06-03", 9000))
+        val wish = Wish("all", "旅行", 1_000_000, null, null, scope = WishScope.ALL)
+        val book = AssetBook(assets, snapshots, listOf(wish))
+        assertEquals(450_000L, AssetRules.wishProgress(wish, book, today).savedCents)
+        AssetRules.validateBook(book)
+        val remaining = book.copy(accounts = assets.drop(1), snapshots = snapshots.filterNot { it.accountId == "bank" })
+        AssetRules.validateBook(remaining)
+        assertEquals(50_000L, AssetRules.wishProgress(wish, remaining, today).savedCents)
+        val withNewAccount = remaining.copy(
+            accounts = remaining.accounts + AssetAccount("new", "新账户", AssetKind.CASH),
+            snapshots = remaining.snapshots + snap("4", "new", "2026-06-10", 250)
+        )
+        assertEquals(75_000L, AssetRules.wishProgress(wish, withNewAccount, today).savedCents)
     }
 
     @Test
@@ -125,6 +165,8 @@ class AssetsTest {
         val base = AssetBook(accounts, listOf(snap("1", "bank", "2026-06-01", 1)), listOf(Wish("w", "旅行", 100, null, "bank")))
         AssetRules.validateBook(base)
         assertTrue(runCatching { AssetRules.validateBook(base.copy(wishes = listOf(Wish("w", "还款", 100, null, "card")))) }.isFailure)
+        assertTrue(runCatching { AssetRules.validateBook(base.copy(wishes = listOf(Wish("w", "坏数据", 100, null, null)))) }.isFailure)
+        assertEquals(100L, AssetRules.wishProgress(Wish("w", "相机", 100, null, "bank"), base, today).savedCents)
         assertTrue(runCatching { AssetRules.validateBook(base.copy(snapshots = listOf(snap("1", "gone", "2026-06-01", 1)))) }.isFailure)
         val four = (1..4).map { Wish("w$it", "心愿$it", 100, null, "bank") }
         assertTrue(runCatching { AssetRules.validateBook(base.copy(wishes = four)) }.isFailure)

@@ -100,8 +100,12 @@
   function parseDateKey(key) {
     const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(key ?? ""));
     if (!parts) return null;
-    const date = new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
-    return Number.isNaN(date.getTime()) ? null : date;
+    const year = Number(parts[1]);
+    const month = Number(parts[2]);
+    const day = Number(parts[3]);
+    const date = new Date(year, month - 1, day);
+    return !year || month < 1 || month > 12 || day < 1 || Number.isNaN(date.getTime())
+      || date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day ? null : date;
   }
 
   function initialFocusItems() {
@@ -1021,9 +1025,10 @@
     if (target <= 0) throw new Error("目标金额需大于 0。");
     const deadline = String(input?.deadline ?? "").trim() || null;
     if (deadline && !parseDateKey(deadline)) throw new Error("请选择有效的截止日期。");
+    const scope = input?.scope === "all" ? "all" : "account";
     const accountId = String(input?.accountId ?? "").trim();
-    if (!accountId) throw new Error("请选择用来攒钱的账户。");
-    return { name, target, deadline, accountId };
+    if (scope === "account" && !accountId) throw new Error("请选择用来攒钱的账户。");
+    return { name, target, deadline, scope, accountId: scope === "all" ? null : accountId };
   }
 
   /** 同一天多条快照时取最后记录的一条（数组顺序靠后者）。 */
@@ -1086,9 +1091,37 @@
     });
   }
 
-  function wishProgress(wish, snapshots, now = new Date()) {
+  function netWorthYearSummary(accounts, snapshots, year, now = new Date()) {
+    if (!Number.isInteger(Number(year)) || Number(year) < 1 || Number(year) > now.getFullYear()) throw new Error("请选择有效的统计年份。");
+    year = Number(year);
+    const points = Array.from({ length: 12 }, (_, index) => {
+      const month = `${year}-${String(index + 1).padStart(2, "0")}`;
+      const monthDate = new Date(Number(year), index, 1);
+      if (monthDate > new Date(now.getFullYear(), now.getMonth(), 1)) return { month, net: 0, known: false, notes: [] };
+      const end = index === now.getMonth() && year === now.getFullYear()
+        ? localDateKey(now)
+        : localDateKey(new Date(Number(year), index + 1, 0));
+      const point = netWorthAt(accounts, snapshots, end);
+      const notes = (Array.isArray(snapshots) ? snapshots : [])
+        .filter(snapshot => snapshot.note && snapshot.date.slice(0, 7) === month && snapshot.date <= localDateKey(now))
+        .sort((a, b) => a.date.localeCompare(b.date));
+      return { month, net: point.net, known: point.known, notes };
+    });
+    const current = year === now.getFullYear() ? netWorthAt(accounts, snapshots, localDateKey(now)) : netWorthAt(accounts, snapshots, `${year}-12-31`);
+    const baseline = netWorthAt(accounts, snapshots, localDateKey(new Date(Number(year), 0, 0)));
+    return { year, points, net: current.net, known: current.known, yearChange: baseline.known && current.known ? roundMoney(current.net - baseline.net) : null };
+  }
+
+  function assetBalanceAt(accounts, snapshots, atKey) {
+    return roundMoney((Array.isArray(accounts) ? accounts : []).reduce((sum, account) =>
+      assetKind(account.kind)?.liability ? sum : sum + (latestSnapshot(snapshots, account.id, atKey)?.amount ?? 0), 0));
+  }
+
+  function wishProgress(wish, snapshots, now = new Date(), accounts = []) {
     const todayKey = localDateKey(now);
-    const saved = latestBalance(snapshots, wish.accountId, todayKey);
+    const saved = wish.scope === "all"
+      ? assetBalanceAt(accounts, snapshots, todayKey)
+      : latestBalance(snapshots, wish.accountId, todayKey);
     const remaining = roundMoney(Math.max(0, wish.target - saved));
     const reached = remaining === 0;
     const daysLeft = wish.deadline ? daysBetween(todayKey, wish.deadline) : null;
@@ -1156,7 +1189,7 @@
     completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks,
     DIARY_LIMITS, initialDiaryEntries, diaryEntryDate, parseDiaryDateQuery, validateDiaryEntry, selectDiaryEntries, trashedDiaryEntries, listDiaryDrafts, moveDiaryToTrash, restoreDiaryEntry,
     diaryStreak, ASSET_KINDS, ASSET_LIMITS, assetKind, validateAssetAccount, validateAssetSnapshot, validateWish,
-    latestSnapshot, latestBalance, assetSummary, netWorthSeries, wishProgress, initialAssetAccounts, initialAssetSnapshots, initialWishes,
+    latestSnapshot, latestBalance, assetSummary, netWorthSeries, netWorthYearSummary, assetBalanceAt, wishProgress, initialAssetAccounts, initialAssetSnapshots, initialWishes,
   });
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.FocusModel = api;

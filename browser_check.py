@@ -1788,20 +1788,99 @@ def alltime_snapshot(page):
 
 
 def check_profile_assets(browser, errors):
+    def assert_chart_alignment(page):
+        geometry = page.locator("#asset-sparkline").evaluate("""chart => {
+            const box = chart.getBoundingClientRect();
+            const svg = chart.querySelector("svg");
+            const viewWidth = svg.viewBox.baseVal.width;
+            const labels = [...document.querySelectorAll("#asset-labels button")];
+            const knownIndexes = labels.flatMap((label, index) => label.disabled ? [] : [index]);
+            const dotXs = [...chart.querySelectorAll(".asset-dot")].map(dot =>
+                box.left + Number(dot.getAttribute("cx")) / viewWidth * box.width);
+            const labelXs = knownIndexes.map(index => {
+                const label = labels[index].getBoundingClientRect();
+                return label.left + label.width / 2;
+            });
+            return {knownIndexes, dotXs, labelXs};
+        }""")
+        assert len(geometry["dotXs"]) == len(geometry["knownIndexes"]), geometry
+        for dot_x, label_x in zip(geometry["dotXs"], geometry["labelXs"]):
+            assert abs(dot_x - label_x) <= 1.5, (dot_x, label_x, geometry)
+
     page = fresh_timer_page(browser, errors)
     page.locator('.bottom-nav [data-page="profile"]').click()
     expected = page.evaluate("FocusModel.assetSummary(FocusModel.initialAssetAccounts(), FocusModel.initialAssetSnapshots(), new Date()).net")
     net = page.locator("#asset-net")
     assert float(net.inner_text().replace("¥", "").replace(",", "")) == expected, (net.inner_text(), expected)
     expect(page.locator("#asset-sparkline polyline")).to_have_count(1)
-    expect(page.locator("#asset-labels span")).to_have_count(6)
+    expect(page.locator("#asset-labels button")).to_have_count(6)
+    expect(page.locator("#asset-chart-readout")).to_contain_text("2026年10月")
+    assert_chart_alignment(page)
+    assert page.locator("#asset-sparkline").evaluate("el => el.getBoundingClientRect().height") == 48
+    chart_box = page.locator("#asset-sparkline").bounding_box()
+    page.mouse.click(chart_box["x"] + chart_box["width"] / 12, chart_box["y"] + chart_box["height"] / 2)
+    expect(page.locator("#asset-labels button").first).to_have_attribute("aria-pressed", "true")
+    page.mouse.click(chart_box["x"] + chart_box["width"] * 11 / 12, chart_box["y"] + chart_box["height"] / 2)
+    expect(page.locator("#asset-labels button").last).to_have_attribute("aria-pressed", "true")
+    page.set_viewport_size({"width": 320, "height": MOBILE_HEIGHT})
+    assert_chart_alignment(page)
+    page.set_viewport_size(DESKTOP_VIEWPORT)
+    page.locator('[data-asset-period="year"]').click()
+    expect(page.locator("#asset-labels button")).to_have_count(12)
+    expect(page.locator("#asset-year-control")).to_be_visible()
+    expect(page.locator("#asset-sparkline polyline")).to_have_count(1)
+    assert_chart_alignment(page)
+    page.locator("#asset-sparkline").press("Home")
+    expect(page.locator("#asset-labels button:not(:disabled)").first).to_have_attribute("aria-pressed", "true")
+    page.locator("#asset-sparkline").press("End")
+    expect(page.locator("#asset-labels button:not(:disabled)").last).to_have_attribute("aria-pressed", "true")
+    page.locator('[data-asset-period="six"]').click()
     expect(page.locator(".wish-card:not(.wish-add)")).to_have_count(1)
+
+    sparse_page = browser.new_page(viewport={"width": 375, "height": MOBILE_HEIGHT}, reduced_motion="reduce", timezone_id="Asia/Shanghai")
+    sparse_page.on("pageerror", lambda error: errors.append(str(error)))
+    sparse_page.clock.install(time=datetime(2026, 9, 26, 8, 59, 39, tzinfo=timezone.utc))
+    sparse_page.clock.pause_at(datetime(2026, 9, 26, 8, 59, 40, tzinfo=timezone.utc))
+
+    def seed_single_snapshot(route):
+        response = route.fetch()
+        body, replacements = re.subn(
+            r"const rows = \[.*?\n    \];\n    return rows\.map",
+            'const rows = [["bank", 0, 10, 10000, ""]];\n    return rows.map',
+            response.text(), count=1, flags=re.S)
+        assert replacements == 1
+        route.fulfill(response=response, body=body)
+
+    sparse_page.route("**/model.js", seed_single_snapshot)
+    sparse_page.goto(BASE_URL)
+    sparse_page.locator('.bottom-nav [data-page="profile"]').click()
+    expect(sparse_page.locator("#asset-sparkline .asset-dot")).to_have_count(1)
+    expect(sparse_page.locator("#asset-sparkline polyline")).to_have_count(0)
+    expect(sparse_page.locator("#asset-chart-note")).to_contain_text("只有一个月份")
+    single_dot = sparse_page.locator("#asset-sparkline .asset-dot").evaluate("dot => ({x: Number(dot.getAttribute('cx')), y: Number(dot.getAttribute('cy'))})")
+    assert abs(single_dot["x"] - 330) < 0.1 and abs(single_dot["y"] - 40) < 0.1, single_dot
+    assert_chart_alignment(sparse_page)
+    sparse_page.close()
 
     page.locator("#asset-hide").click()
     expect(page.locator("#asset-hide")).to_have_attribute("aria-pressed", "true")
-    expect(net).to_have_text("¥ ••••")
-    expect(page.locator(".wish-amount")).to_have_text("¥ •••• / ¥ ••••")
+    expect(net).to_have_text("金额已隐藏")
+    expect(net).to_have_attribute("aria-label", "净资产金额已隐藏")
+    expect(page.locator("#asset-change")).to_contain_text("金额已隐藏")
+    expect(page.locator("#asset-split")).to_contain_text("金额已隐藏")
+    expect(page.locator("#asset-chart-readout")).to_contain_text("金额已隐藏")
+    expect(page.locator("#asset-labels button").first).to_have_attribute("aria-label", re.compile("金额已隐藏"))
+    expect(page.locator(".wish-amount")).to_have_text("金额已隐藏 / 金额已隐藏")
+    expect(page.locator(".wish-card:not(.wish-add)")).to_have_attribute("aria-label", re.compile("进度金额已隐藏"))
+    page.locator("#asset-open").click()
+    expect(page.locator(".asset-month-row strong").first).to_have_text("金额已隐藏")
+    expect(page.locator(".asset-row-amount").first).to_have_text("金额已隐藏")
+    expect(page.locator(".asset-row-amount").first).to_have_attribute("aria-label", "金额已隐藏")
+    page.keyboard.press("Escape")
     page.locator("#asset-hide").click()
+    page.locator("[data-asset-period='year']").click()
+    expect(page.locator("#asset-period-summary")).to_have_text("年度变化 · 金额已隐藏")
+    page.locator("[data-asset-period='six']").click()
 
     page.locator("#asset-update").click()
     expect(page.locator("#modal.asset-sheet")).to_be_visible()
@@ -1815,6 +1894,12 @@ def check_profile_assets(browser, errors):
     assert float(net.inner_text().replace("¥", "").replace(",", "")) == expected + 1000
 
     page.locator("#asset-open").click()
+    expect(page.locator(".asset-month-row").first).to_contain_text("2026年10月")
+    assert page.locator(".asset-month-row").count() > 0
+    page.locator(".asset-sheet-body").get_by_role("button", name="上一年").click()
+    expect(page.locator(".asset-month-row")).to_have_count(0)
+    expect(page.locator(".asset-sheet-body")).to_contain_text("暂无历史余额")
+    page.locator(".asset-sheet-body").get_by_role("button", name="下一年").click()
     page.locator(".asset-row", has_text="旅行基金").click()
     page.locator('#modal input[name="amount"]').fill("12000")
     page.locator('#modal input[name="note"]').fill("攒够了")

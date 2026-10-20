@@ -201,16 +201,19 @@
             <div class="reminder-row"><div><strong>每日超时提醒</strong><small id="reminder-caption">仅演示开关，不发送系统通知</small></div><button class="switch" id="reminder-switch" role="switch" aria-checked="false" aria-label="每日超时提醒演示"><span></span></button></div>
           </section>
           <section class="page" id="page-profile" aria-labelledby="profile-heading" hidden>
-            <header class="page-header"><div><p class="overline">一个更适合你的专注空间</p><h2 id="profile-heading">我的空间<span class="heading-dot">.</span></h2></div><svg class="icon profile-leaf"><use href="#i-leaf"/></svg></header>
-            <div class="profile-card"><div class="avatar">我</div><div><h3>生活的掌舵人</h3><p>不必登录，从自己开始。</p></div><span class="local-badge">本地优先</span></div>
+            <header class="page-header profile-header"><div><p class="overline">PERSONAL SPACE</p><h2 id="profile-heading">我的</h2></div><button class="asset-hide" id="asset-hide" type="button" aria-pressed="false">隐藏金额</button></header>
             <div class="asset-card" id="asset-card">
-              <div class="asset-top"><span>净资产 <span class="sample-tag">示例</span></span><button class="asset-hide" id="asset-hide" type="button" aria-pressed="false">隐藏金额</button></div>
+              <div class="asset-top"><span>净资产 <span class="sample-tag">示例</span></span><small id="asset-period-summary"></small></div>
               <button class="asset-main" id="asset-open" type="button" aria-label="查看资产详情"><strong id="asset-net"></strong><small id="asset-change"></small></button>
-              <div class="asset-sparkline" id="asset-sparkline" role="img"></div>
-              <div class="asset-labels" id="asset-labels" aria-hidden="true"></div>
-              <div class="asset-foot"><small id="asset-split"></small><button class="secondary-button" id="asset-update" type="button">更新余额</button></div>
+              <div class="asset-period-tabs" role="group" aria-label="资产走势周期"><button type="button" data-asset-period="six" aria-pressed="true">近 6 个月</button><button type="button" data-asset-period="year" aria-pressed="false">年度</button></div>
+              <div class="asset-year-control" id="asset-year-control" hidden><button type="button" id="asset-year-prev" aria-label="上一年">‹</button><strong id="asset-year"></strong><button type="button" id="asset-year-next" aria-label="下一年">›</button></div>
+              <div class="asset-sparkline" id="asset-sparkline" role="slider" tabindex="0" aria-label="净资产历史走势"></div>
+              <p class="asset-chart-note" id="asset-chart-note"></p>
+              <div class="asset-labels" id="asset-labels"></div>
+              <p class="asset-chart-readout" id="asset-chart-readout" aria-live="polite"></p>
+              <div class="asset-foot"><small id="asset-split"></small><div><button class="text-button" id="asset-open-history" type="button">历史明细</button><button class="secondary-button" id="asset-update" type="button">更新余额</button></div></div>
             </div>
-            <div class="section-heading"><h3>心愿</h3><small id="wish-caption">用一个账户，攒一件想要的事</small></div>
+            <div class="section-heading"><h3>心愿</h3><small id="wish-caption">单个账户或所有资产</small></div>
             <div class="wish-list" id="wish-list"></div>
             <div class="section-heading"><h3>生活概览</h3><small>点开看详情</small></div>
             <div class="life-grid" id="life-grid">

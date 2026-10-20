@@ -524,10 +524,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                         notificationAllowed, exactAllowed,
                         onToggleHide = { ui.hideAmounts = !ui.hideAmounts }, onAssets = { ui.open("assets") },
                         onUpdate = { ui.open("asset-update") }, onAddAccount = { ui.open("asset-account") },
-                        onWish = { id ->
-                            if (state.assets.accounts.none { !it.kind.liability }) ui.message("先添加一个资产账户，再用它来攒心愿。")
-                            else ui.open("wish", id)
-                        },
+                        onWish = { id -> ui.open("wish", id) },
                         onLife = { page -> if (page == Screen.TODOS) ui.todos.setFilter(TodoFilter.DONE); ui.screen = page },
                         actions = ProfileActions(::requestNotifications, { context.startActivity(usageMonitor.permissionIntent()) },
                             { context.startActivity(TimerAlarmScheduler.permissionIntent(context)) }, {
@@ -683,8 +680,9 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                 // 不在组合阶段直接改状态，交给副作用关闭。
                 if (account == null) LaunchedEffect(Unit) { ui.close() }
                 else {
-                    val linked = state.assets.wishes.any { it.accountId == account.id }
-                    ConfirmDialog("删除账户", "删除「${account.name}」和它的全部余额记录？${if (linked) "关联的心愿也会一并移除。" else ""}此操作无法撤销。", ui.busy,
+                    val linked = state.assets.wishes.any { it.scope == WishScope.ACCOUNT && it.accountId == account.id }
+                    val allWish = state.assets.wishes.any { it.scope == WishScope.ALL }
+                    ConfirmDialog("删除账户", "删除「${account.name}」和它的全部余额记录？${if (linked) "关联该账户的单账户心愿也会一并移除。" else ""}${if (allWish) "按所有资产计算的心愿会保留，并按剩余账户计算。" else ""}此操作无法撤销。", ui.busy,
                         { ui.open("asset-detail", account.id) }) {
                         ui.perform { repository.deleteAssetAccount(account.id); ui.open("assets"); ui.message("账户已删除") }
                     }
@@ -697,8 +695,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             "wish" -> {
                 val wish = state.assets.wishes.find { it.id == ui.dialogId }
                 val accounts = state.assets.accounts.filterNot { it.kind.liability }
-                if (accounts.isEmpty()) LaunchedEffect(Unit) { ui.close() }
-                else WishEditorSheet(wish, accounts, today, ui.busy, { ui.close() }, onSave = { value ->
+                WishEditorSheet(wish, accounts, today, ui.busy, { ui.close() }, onSave = { value ->
                     ui.perform { repository.saveWish(value); ui.close(); ui.message(if (wish != null) "心愿已更新" else "心愿已添加") }
                 }, onArchive = {
                     if (wish != null) ui.perform { repository.saveWish(wish.copy(archived = true)); ui.close(); ui.message("心愿已归档") }

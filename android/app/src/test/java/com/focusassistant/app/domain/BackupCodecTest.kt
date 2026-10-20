@@ -68,6 +68,17 @@ class BackupCodecTest {
             }
         }
     }
+    @Test fun wishJsonRoundTripsAllAssetScopeAndReadsLegacyAccountWish() {
+        val all = Wish("all", "旅行", 800_000, null, null, scope = WishScope.ALL)
+        val encoded = JsonCodec.wish(all)
+        assertEquals(all, JsonCodec.readWish(JSONObject(encoded.toString())))
+        val legacy = JSONObject().put("id", "legacy").put("name", "相机").put("targetCents", 500_000)
+            .put("deadline", JSONObject.NULL).put("accountId", "bank").put("archived", false)
+        assertEquals(Wish("legacy", "相机", 500_000, null, "bank"), JsonCodec.readWish(legacy))
+        val noAccount = JSONObject(legacy.toString()).apply { remove("accountId") }
+        assertThrows(IllegalArgumentException::class.java) { JsonCodec.readWish(noAccount) }
+    }
+
     @Test fun activeTimerJsonRoundTripPreservesTimerStateWithoutLegacyFields() {
         val timer = TimerEngine.pause(TimerEngine.start(project, "active", 1000, 1000, 1), 6000)
             .copy(targetNotified = true, recoveryPending = true)

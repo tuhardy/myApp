@@ -9,7 +9,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -20,7 +19,6 @@ import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material.icons.outlined.Eco
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.QueryStats
 import androidx.compose.material.icons.outlined.Restore
@@ -46,13 +44,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.focusassistant.app.domain.*
@@ -113,28 +108,14 @@ internal fun ProfileScreen(
 ) {
     ScreenBody {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Caption("一个更适合你的专注空间")
-                Text(buildAnnotatedString {
-                    append("我的空间")
-                    withStyle(SpanStyle(color = Accent)) { append(".") }
-                }, fontSize = 28.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Caption("PERSONAL SPACE")
+                Text("我的", fontSize = 26.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
             }
-            Icon(Icons.Outlined.Eco, null, tint = Accent, modifier = Modifier.size(30.dp))
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Box(Modifier.size(48.dp).clip(RoundedCornerShape(17.dp)).background(AccentSoft), contentAlignment = Alignment.Center) {
-                Text("我", color = AccentDark, fontSize = 17.sp)
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("生活的掌舵人", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Text("不必登录，从自己开始。", fontSize = 12.sp, color = Muted)
-            }
-            Text("本地优先", fontSize = 11.sp, color = Muted,
-                modifier = Modifier.border(1.dp, Line, RoundedCornerShape(5.dp)).padding(horizontal = 6.dp, vertical = 4.dp))
+            TextButton(onClick = onToggleHide) { Text(if (hideAmounts) "显示金额" else "隐藏金额", color = Muted, fontSize = 12.sp) }
         }
         NetWorthCard(state.assets, today, hideAmounts, onToggleHide, onAssets, onUpdate, onAddAccount)
-        SectionHeading("心愿", "用一个账户，攒一件想要的事")
+        SectionHeading("心愿", "单个账户或所有资产")
         WishRow(state.assets, today, hideAmounts, onWish)
         SectionHeading("生活概览", "点开看详情")
         LifeGrid(life, onLife)
@@ -158,59 +139,78 @@ private fun SectionHeading(title: String, caption: String?) {
 
 @Composable
 private fun NetWorthCard(book: AssetBook, today: LocalDate, hide: Boolean, onToggleHide: () -> Unit, onAssets: () -> Unit, onUpdate: () -> Unit, onAdd: () -> Unit) {
+    var annual by remember { mutableStateOf(false) }
+    var year by remember(today.year) { mutableIntStateOf(today.year) }
+    var selectedMonth by remember(annual, year, today) { mutableStateOf<YearMonth?>(null) }
     val summary = AssetRules.summary(book, today)
-    val series = AssetRules.series(book, today)
+    val yearSummary = AssetRules.yearSummary(book, year, today)
+    val series = if (annual) yearSummary.points else AssetRules.series(book, today)
+    val selected = series.firstOrNull { it.month == selectedMonth && it.known } ?: series.lastOrNull { it.known }
+    val knownCount = series.count { it.known }
     val empty = book.accounts.isEmpty()
     val change = summary.monthChangeCents
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(AccentSoft).padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp)) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(AccentSoft).padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("净资产", fontSize = 12.sp, color = Muted, modifier = Modifier.weight(1f))
-            Box(
-                Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp))
-                    .toggleable(value = hide, role = Role.Switch, onValueChange = { onToggleHide() }).padding(horizontal = 4.dp),
-                contentAlignment = Alignment.Center
-            ) { Text(if (hide) "显示金额" else "隐藏金额", fontSize = 11.sp, color = Muted) }
+            val periodSummary = if (annual) when { yearSummary.changeCents == null -> "年度变化 · 暂无年初对比"; hide -> "年度变化 · 金额已隐藏"; else -> "年度变化 ${AssetRules.money(yearSummary.changeCents, sign = true)}" } else "余额历史 · 非收支统计"
+            Text(periodSummary, fontSize = 10.sp, color = Muted, modifier = Modifier.clearAndSetSemantics { contentDescription = if (annual && hide && yearSummary.changeCents != null) "年度变化，金额已隐藏" else periodSummary })
         }
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClickLabel = "查看资产详情", onClick = onAssets)) {
-            Text(shownMoney(summary.netCents, hide), fontSize = 30.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp, color = Ink)
+            Text(shownMoney(summary.netCents, hide), fontSize = 30.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp, color = Ink, modifier = Modifier.clearAndSetSemantics { contentDescription = if (hide) "金额已隐藏" else AssetRules.money(summary.netCents) })
             val pct = summary.monthRatio?.takeIf { !hide }?.let { String.format(Locale.ROOT, " · %.1f%%", it * 100) }.orEmpty()
-            Text(
-                when {
-                    empty -> "还没有账户，添加一个开始记录"
-                    change == null -> "本月暂无对比"
-                    else -> "本月 ${if (change >= 0) "↑" else "↓"} ${shownMoney(change, hide, sign = true)}$pct"
-                },
-                fontSize = 12.sp, color = if ((change ?: 0L) < 0L || empty) Muted else AccentDark, modifier = Modifier.padding(top = 6.dp)
-            )
+            Text(when { empty -> "还没有账户，添加一个开始记录"; change == null -> "本月暂无对比"; hide -> "本月变化 · 金额已隐藏"; else -> "本月 ${if (change >= 0) "↑" else "↓"} ${shownMoney(change, hide, sign = true)}$pct" },
+                fontSize = 12.sp, color = if ((change ?: 0L) < 0L || empty) Muted else AccentDark,
+                modifier = Modifier.padding(top = 6.dp).clearAndSetSemantics { contentDescription = when { empty -> "还没有账户，添加一个开始记录"; change == null -> "本月暂无对比"; hide -> "本月变化，金额已隐藏"; else -> "本月变化 ${AssetRules.money(change, sign = true)}" } })
+        }
+        Row(Modifier.padding(top = 10.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = .65f)).padding(3.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf(false to "近 6 个月", true to "年度").forEach { (isYear, label) ->
+                FilterChip(selected = annual == isYear, onClick = { annual = isYear; selectedMonth = null }, label = { Text(label, fontSize = 11.sp) }, modifier = Modifier.height(34.dp))
+            }
+        }
+        if (annual) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+            TextButton(onClick = { year--; selectedMonth = null }) { Text("‹") }
+            Text("$year 年", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            TextButton(enabled = year < today.year, onClick = { year++; selectedMonth = null }) { Text("›") }
         }
         val trend = series.filter { it.known }.joinToString("，") { "${it.month.monthValue}月 ${AssetRules.money(it.netCents)}" }
-        Sparkline(series, Modifier.fillMaxWidth().padding(top = 12.dp).height(64.dp)
-            .clearAndSetSemantics { contentDescription = "近 ${series.size} 个月净资产走势${if (hide || trend.isEmpty()) "" else "：$trend"}" })
-        Row(Modifier.fillMaxWidth().padding(top = 4.dp).clearAndSetSemantics {}, horizontalArrangement = Arrangement.SpaceBetween) {
-            series.forEach { Text("${it.month.monthValue}月", fontSize = 10.sp, color = Muted) }
+        Sparkline(series, Modifier.fillMaxWidth().padding(top = 6.dp).height(72.dp)
+            .clearAndSetSemantics { contentDescription = "${if (annual) "$year 年" else "近 6 个月"}净资产走势${if (hide || trend.isEmpty()) "" else "：$trend"}" })
+        Row(Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            series.forEach { point -> TextButton(enabled = point.known, onClick = { selectedMonth = point.month }, modifier = Modifier.weight(1f).heightIn(min = 34.dp)) { Text("${point.month.monthValue}月", fontSize = 9.sp, color = if (point.month == selected?.month) AccentDark else Muted, maxLines = 1) } }
         }
-        HorizontalDivider(Modifier.padding(top = 12.dp), color = CardLine)
-        Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("资产 ${shownMoney(summary.assetsCents, hide)} · 负债 ${shownMoney(summary.debtsCents, hide)}", fontSize = 11.sp, color = Muted, modifier = Modifier.weight(1f))
+        Text(selected?.let { "${it.month.year}年${it.month.monthValue}月 · ${shownMoney(it.netCents, hide)}" } ?: "还没有余额记录。添加账户并记下余额后，这里会显示历史。", fontSize = 11.sp, color = Ink,
+            modifier = Modifier.padding(top = 4.dp).clearAndSetSemantics {
+                liveRegion = LiveRegionMode.Polite
+                contentDescription = selected?.let { "${it.month.year}年${it.month.monthValue}月 · ${if (hide) "金额已隐藏" else AssetRules.money(it.netCents)}" }
+                    ?: "还没有余额记录。添加账户并记下余额后，这里会显示历史。"
+            })
+        Text(if (knownCount == 0) "记下余额后即可开始查看历史。" else if (knownCount == 1) "目前只有一个月份的记录，已显示单点；积累更多月份后可查看变化趋势。" else "点选月份查看余额；实心点表示当月记录含备注。", fontSize = 10.sp, color = Muted, modifier = Modifier.padding(top = 2.dp))
+        HorizontalDivider(Modifier.padding(top = 10.dp), color = CardLine)
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("资产 ${shownMoney(summary.assetsCents, hide)} · 负债 ${shownMoney(summary.debtsCents, hide)}", fontSize = 11.sp, color = Muted,
+                modifier = Modifier.weight(1f).clearAndSetSemantics { contentDescription = if (hide) "资产与负债金额已隐藏" else "资产 ${AssetRules.money(summary.assetsCents)} · 负债 ${AssetRules.money(summary.debtsCents)}" })
+            SoftButton("历史明细", onClick = onAssets)
             SoftButton(if (empty) "添加账户" else "更新余额", onClick = if (empty) onAdd else onUpdate)
         }
     }
 }
 
-/** 已知点连线；当月有带备注的快照时画成实心点。少于两个已知点时不画线。 */
+/** 已知点连线；单个已知月份也绘制为实心/空心点。 */
 @Composable
 private fun Sparkline(series: List<NetWorthPoint>, modifier: Modifier) {
     Canvas(modifier) {
         val known = series.withIndex().filter { it.value.known }
-        if (known.size < 2) return@Canvas
+        if (known.isEmpty()) return@Canvas
         val pad = 6.dp.toPx()
         val min = known.minOf { it.value.netCents }
         val span = (known.maxOf { it.value.netCents } - min).takeIf { it > 0 } ?: 1L
         val points = known.map { (index, point) ->
-            Offset(pad + index * (size.width - pad * 2) / (series.size - 1), size.height - pad - (point.netCents - min).toFloat() / span * (size.height - pad * 2)) to point
+            Offset(pad + index * (size.width - pad * 2) / maxOf(1, series.size - 1), size.height - pad - (point.netCents - min).toFloat() / span * (size.height - pad * 2)) to point
         }
-        val path = Path().apply { points.forEachIndexed { i, (offset, _) -> if (i == 0) moveTo(offset.x, offset.y) else lineTo(offset.x, offset.y) } }
-        drawPath(path, Accent, style = Stroke(width = 2.dp.toPx(), join = StrokeJoin.Round))
+        if (points.size > 1) {
+            val path = Path().apply { points.forEachIndexed { i, (offset, _) -> if (i == 0) moveTo(offset.x, offset.y) else lineTo(offset.x, offset.y) } }
+            drawPath(path, Accent, style = Stroke(width = 2.dp.toPx(), join = StrokeJoin.Round))
+        }
         points.forEach { (offset, point) ->
             val noted = point.notes.isNotEmpty()
             val radius = (if (noted) 3.5f else 2.5f) * density
@@ -234,7 +234,7 @@ private fun WishRow(book: AssetBook, today: LocalDate, hide: Boolean, onWish: (S
     val wishes = book.wishes.filterNot { it.archived }
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         wishes.forEach { wish ->
-            val progress = AssetRules.wishProgress(wish, book.snapshots, today)
+            val progress = AssetRules.wishProgress(wish, book, today)
             val status = when {
                 progress.reached -> "已达成"
                 progress.overdue -> "已过截止日期"
@@ -245,12 +245,12 @@ private fun WishRow(book: AssetBook, today: LocalDate, hide: Boolean, onWish: (S
             Column(
                 Modifier.width(158.dp).clip(RoundedCornerShape(16.dp)).background(Color.White).border(1.dp, Line, RoundedCornerShape(16.dp))
                     .clickable(onClickLabel = "编辑心愿") { onWish(wish.id) }.padding(14.dp)
-                    .clearAndSetSemantics { contentDescription = "${wish.name}，已存 $percent%，$status" },
+                    .clearAndSetSemantics { contentDescription = "${wish.name}，${if (wish.scope == WishScope.ALL) "所有资产" else "单个账户"}，${if (hide) "进度金额已隐藏" else "已存 $percent%"}，$status" },
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(wish.name, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(SoftSurface)) {
-                    Box(Modifier.fillMaxWidth(progress.ratio.toFloat()).fillMaxHeight().clip(RoundedCornerShape(3.dp)).background(Accent))
+                    if (!hide) Box(Modifier.fillMaxWidth(progress.ratio.toFloat()).fillMaxHeight().clip(RoundedCornerShape(3.dp)).background(Accent))
                 }
                 Text("${shownMoney(progress.savedCents, hide)} / ${shownMoney(wish.targetCents, hide)}", fontSize = 12.sp, color = Ink)
                 Text(status, fontSize = 11.sp, lineHeight = 17.sp, color = if (progress.reached) AccentDark else Muted)
@@ -432,11 +432,30 @@ private fun DateRow(label: String, value: LocalDate?, enabled: Boolean, min: Loc
 @Composable
 internal fun AssetListSheet(book: AssetBook, today: LocalDate, hide: Boolean, busy: Boolean, onDismiss: () -> Unit, onAccount: (String) -> Unit, onAdd: () -> Unit, onUpdate: () -> Unit) {
     val summary = AssetRules.summary(book, today)
+    var historyYear by remember(today.year) { mutableIntStateOf(today.year) }
     ProfileSheet("我的资产", busy, onDismiss, footer = {
         SoftButton("＋ 添加账户", Modifier.weight(1f).heightIn(min = 52.dp), enabled = !busy && book.accounts.size < AssetRules.MAX_ACCOUNTS, onClick = onAdd)
         PrimaryButton("更新余额", !busy && book.accounts.isNotEmpty(), Modifier.weight(1f), onUpdate)
     }) {
-        SheetNotice("净资产 ${shownMoney(summary.netCents, hide)} = 资产 ${shownMoney(summary.assetsCents, hide)} − 负债 ${shownMoney(summary.debtsCents, hide)}。余额由你手动记下，只保存在本机。")
+        Text("净资产 ${shownMoney(summary.netCents, hide)} = 资产 ${shownMoney(summary.assetsCents, hide)} − 负债 ${shownMoney(summary.debtsCents, hide)}。余额由你手动记下，只保存在本机。", color = Muted, fontSize = 12.sp, lineHeight = 19.sp,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(12.dp)).background(SoftSurface).padding(12.dp)
+                .clearAndSetSemantics { contentDescription = if (hide) "净资产、资产与负债金额已隐藏。余额由你手动记下，只保存在本机。" else "净资产 ${AssetRules.money(summary.netCents)} = 资产 ${AssetRules.money(summary.assetsCents)} − 负债 ${AssetRules.money(summary.debtsCents)}。余额由你手动记下，只保存在本机。" })
+        Row(Modifier.fillMaxWidth().padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("净资产月度历史", fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f).semantics { heading() })
+            TextButton(enabled = historyYear > 1, onClick = { historyYear-- }) { Text("‹") }
+            Text("$historyYear 年", fontSize = 12.sp)
+            TextButton(enabled = historyYear < today.year, onClick = { historyYear++ }) { Text("›") }
+        }
+        val history = AssetRules.yearSeries(book, historyYear, today)
+        if (history.none { it.known }) Text("暂无历史余额", fontSize = 12.sp, color = Muted, modifier = Modifier.padding(vertical = 8.dp))
+        history.filter { it.known }.asReversed().forEach { point ->
+            Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("${point.month.year}年${point.month.monthValue}月", fontSize = 12.sp, color = Muted, modifier = Modifier.weight(1f))
+                val amountLabel = if (hide) "金额已隐藏" else AssetRules.money(point.netCents)
+                Text(shownMoney(point.netCents, hide), fontSize = 12.sp, color = Ink, modifier = Modifier.clearAndSetSemantics { contentDescription = amountLabel })
+            }
+            HorizontalDivider(color = RowLine)
+        }
         if (book.accounts.isEmpty()) Text("还没有账户。添加储蓄卡、现金或负债账户，记下当前余额就能开始看走势。", color = Muted, fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 16.dp))
         listOf("资产" to false, "负债" to true).forEach { (label, liability) ->
             val accounts = book.accounts.filter { it.kind.liability == liability }
@@ -453,7 +472,7 @@ internal fun AssetListSheet(book: AssetBook, today: LocalDate, hide: Boolean, bu
                         Text(account.name, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                         Text("${account.kind.label} · ${latest?.let { "${it.date} 更新" } ?: "还没有记录"}", fontSize = 12.sp, color = Muted)
                     }
-                    Text(shownMoney(latest?.amountCents ?: 0, hide), fontSize = 14.sp, color = Ink)
+                    Text(shownMoney(latest?.amountCents ?: 0, hide), fontSize = 14.sp, color = Ink, modifier = Modifier.clearAndSetSemantics { contentDescription = if (hide) "金额已隐藏" else AssetRules.money(latest?.amountCents ?: 0) })
                     Icon(Icons.Outlined.ChevronRight, null, tint = Muted, modifier = Modifier.size(16.dp))
                 }
             }
@@ -523,8 +542,8 @@ internal fun AccountDetailSheet(
             HorizontalDivider(color = RowLine)
             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(shownMoney(snapshot.amountCents, hide), fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Text(listOf(snapshot.date, change, snapshot.note).filter { it.isNotBlank() }.joinToString(" · "), fontSize = 12.sp, color = Muted)
+                    Text(shownMoney(snapshot.amountCents, hide), fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.clearAndSetSemantics { contentDescription = if (hide) "金额已隐藏" else AssetRules.money(snapshot.amountCents) })
+                    Text(listOf(snapshot.date, change, snapshot.note).filter { it.isNotBlank() }.joinToString(" · "), fontSize = 12.sp, color = Muted, modifier = Modifier.clearAndSetSemantics { contentDescription = listOf(snapshot.date, if (hide && previous != null) "金额已隐藏" else change, snapshot.note).filter { it.isNotBlank() }.joinToString(" · ") })
                 }
                 IconButton(enabled = !busy, onClick = { onDeleteSnapshot(snapshot) }) {
                     Icon(Icons.Outlined.DeleteOutline, "删除 ${snapshot.date} 的记录", tint = Muted, modifier = Modifier.size(18.dp))
@@ -564,14 +583,15 @@ internal fun BalanceUpdateSheet(book: AssetBook, today: LocalDate, busy: Boolean
     }
 }
 
-/** 心愿进度按所选资产账户的最新余额计算；负债账户不可选。 */
+/** 心愿进度按单个资产账户或全部非负债资产计算。 */
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
 internal fun WishEditorSheet(wish: Wish?, accounts: List<AssetAccount>, today: LocalDate, busy: Boolean, onDismiss: () -> Unit, onSave: (Wish) -> Unit, onArchive: () -> Unit) {
     var name by remember(wish?.id) { mutableStateOf(wish?.name.orEmpty()) }
     var target by remember(wish?.id) { mutableStateOf(wish?.let { AssetRules.amountText(it.targetCents) }.orEmpty()) }
     var deadline by remember(wish?.id) { mutableStateOf(wish?.deadline?.let(AssetRules::parseDate)) }
-    var accountId by remember(wish?.id) { mutableStateOf(wish?.accountId?.takeIf { id -> accounts.any { it.id == id } } ?: accounts.first().id) }
+    var scope by remember(wish?.id, accounts.isEmpty()) { mutableStateOf(wish?.scope ?: if (accounts.isEmpty()) WishScope.ALL else WishScope.ACCOUNT) }
+    var accountId by remember(wish?.id) { mutableStateOf(wish?.accountId?.takeIf { id -> accounts.any { it.id == id } } ?: accounts.firstOrNull()?.id.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     ProfileSheet(if (wish == null) "新心愿" else "编辑心愿", busy, onDismiss, footer = {
         if (wish != null) SoftButton("归档", Modifier.weight(1f).heightIn(min = 52.dp), enabled = !busy, onClick = onArchive)
@@ -580,17 +600,25 @@ internal fun WishEditorSheet(wish: Wish?, accounts: List<AssetAccount>, today: L
             if (name.isBlank()) { error = "请输入心愿名称。"; return@PrimaryButton }
             val cents = AssetRules.parseAmount(target, "目标金额").getOrElse { error = it.message; return@PrimaryButton }
             if (cents <= 0) { error = "目标金额需大于 0。"; return@PrimaryButton }
-            onSave(Wish(wish?.id.orEmpty(), name.trim(), cents, deadline?.toString(), accountId, wish?.archived ?: false))
+            if (scope == WishScope.ACCOUNT && accountId.isBlank()) { error = "请选择用来攒钱的账户。"; return@PrimaryButton }
+            onSave(Wish(wish?.id.orEmpty(), name.trim(), cents, deadline?.toString(), if (scope == WishScope.ALL) null else accountId, wish?.archived ?: false, scope))
         }
     }) {
-        SheetNotice("进度按所选账户的最新余额计算，建议给心愿单独开一个账户。")
+        SheetNotice("所有资产按全部非负债账户的余额合计计算，不扣除负债；之后新增的资产账户也会自动计入。")
         SheetError(error)
         SheetField(name, { name = it; error = null }, "心愿", !busy, "例如：旅行基金", max = AssetRules.MAX_NAME)
         SheetField(target, { target = it; error = null }, "目标金额（元）", !busy, decimal = true)
         DateRow("截止日期（可空）", deadline, !busy, min = today, onPick = { deadline = it; error = null }, onClear = { deadline = null })
-        FieldCaption("攒在哪个账户")
+        FieldCaption("攒钱范围")
         FlowRow(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            accounts.forEach { account -> ChoicePill(account.name, accountId == account.id, !busy) { accountId = account.id; error = null } }
+            ChoicePill("单个账户", scope == WishScope.ACCOUNT, !busy) { scope = WishScope.ACCOUNT; error = null }
+            ChoicePill("所有资产", scope == WishScope.ALL, !busy) { scope = WishScope.ALL; error = null }
+        }
+        if (scope == WishScope.ACCOUNT) {
+            FieldCaption("攒在哪个账户")
+            FlowRow(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                accounts.forEach { account -> ChoicePill(account.name, accountId == account.id, !busy) { accountId = account.id; error = null } }
+            }
         }
     }
 }

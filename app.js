@@ -44,7 +44,7 @@
     diaryView: "home", diaryHomeScroll: 0, diaryDetailId: null, diaryEditor: null, diaryDrafts: new Map(),
     diaryRecording: null, micPermission: MIC.prompt, nextDiaryId: 1, nextDiaryAttachmentId: 1, nextDiaryDraftId: 1,
     assetAccounts: FocusModel.initialAssetAccounts(), assetSnapshots: FocusModel.initialAssetSnapshots(), wishes: FocusModel.initialWishes(),
-    hideAmounts: false, nextAssetId: 1,
+    hideAmounts: false, assetPeriod: "six", assetYear: new Date().getFullYear(), assetSelection: null, nextAssetId: 1,
   };
   state.progressEntries = initialProgressEntries(state.records).map(entry => ({ ...entry, sample: true }));
   state.records.forEach(record => {
@@ -3159,6 +3159,10 @@
     return `${prefix}¥${MONEY.format(Math.abs(value))}`;
   }
 
+  function shownAssetMoney(value, { sign = false } = {}) {
+    return state.hideAmounts ? "金额已隐藏" : money(value, { sign });
+  }
+
   function assetAccount(id) {
     return state.assetAccounts.find(account => account.id === id);
   }
@@ -3183,54 +3187,119 @@
     return actions;
   }
 
-  function sparkline(series) {
+  function sparkline(series, selectedIndex) {
     const ns = "http://www.w3.org/2000/svg";
-    const width = 300;
-    const height = 64;
-    const pad = 6;
+    const width = 360;
+    const height = 80;
+    const pad = 8;
     const svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
     svg.setAttribute("preserveAspectRatio", "none");
     svg.setAttribute("aria-hidden", "true");
-    const known = series.filter(point => point.known);
-    if (known.length < 2) return svg;
-    const values = known.map(point => point.net);
+    const known = series.map((point, index) => ({ point, index })).filter(item => item.point.known);
+    if (!known.length) return svg;
+    const values = known.map(item => item.point.net);
     const min = Math.min(...values);
-    const span = Math.max(...values) - min || 1;
-    const x = index => pad + index * (width - pad * 2) / (series.length - 1);
-    const y = value => height - pad - (value - min) / span * (height - pad * 2);
-    const points = series.map((point, index) => point.known ? [x(index), y(point.net), point] : null).filter(Boolean);
-    const line = document.createElementNS(ns, "polyline");
-    line.setAttribute("points", points.map(([px, py]) => `${px.toFixed(1)},${py.toFixed(1)}`).join(" "));
-    line.setAttribute("class", "asset-line");
-    svg.append(line);
-    points.forEach(([px, py, point]) => {
+    const max = Math.max(...values);
+    const span = max - min || 1;
+    const x = index => (index + 0.5) * width / series.length;
+    const y = value => max === min
+      ? height / 2
+      : height - pad - (value - min) / span * (height - pad * 2);
+    const points = known.map(({ point, index }) => [x(index), y(point.net), point, index]);
+    if (points.length > 1) {
+      const line = document.createElementNS(ns, "polyline");
+      line.setAttribute("points", points.map(([px, py]) => `${px.toFixed(1)},${py.toFixed(1)}`).join(" "));
+      line.setAttribute("class", "asset-line");
+      svg.append(line);
+    }
+    points.forEach(([px, py, point, index]) => {
+      if (index === selectedIndex) {
+        const halo = document.createElementNS(ns, "circle");
+        halo.setAttribute("cx", px.toFixed(1));
+        halo.setAttribute("cy", py.toFixed(1));
+        halo.setAttribute("r", "8");
+        halo.setAttribute("class", "asset-dot-halo");
+        svg.append(halo);
+      }
       const dot = document.createElementNS(ns, "circle");
       dot.setAttribute("cx", px.toFixed(1));
       dot.setAttribute("cy", py.toFixed(1));
-      dot.setAttribute("r", point.notes.length ? "3.5" : "2.5");
+      dot.setAttribute("r", point.notes.length ? "4" : "3");
       dot.setAttribute("class", point.notes.length ? "asset-dot noted" : "asset-dot");
       svg.append(dot);
     });
     return svg;
   }
 
+  function activeAssetSeries(now = new Date()) {
+    if (state.assetPeriod === "year") return FocusModel.netWorthYearSummary(state.assetAccounts, state.assetSnapshots, state.assetYear, now).points;
+    return FocusModel.netWorthSeries(state.assetAccounts, state.assetSnapshots, FocusModel.ASSET_LIMITS.trendMonths, now);
+  }
+
+  function renderAssetChart(now = new Date()) {
+    const series = activeAssetSeries(now);
+    const known = series.map((point, index) => ({ point, index })).filter(item => item.point.known);
+    let selected = state.assetSelection;
+    if (selected === null || !series[selected]?.known) selected = known.at(-1)?.index ?? null;
+    state.assetSelection = selected;
+    const chart = $("asset-sparkline");
+    chart.hidden = !known.length;
+    chart.replaceChildren(sparkline(series, selected));
+    chart.setAttribute("aria-valuemax", String(Math.max(0, series.length - 1)));
+    chart.setAttribute("aria-valuenow", String(selected ?? 0));
+    const point = selected === null ? null : series[selected];
+    const label = point ? `${Number(point.month.slice(5))}月` : "暂无记录";
+    const value = point && !state.hideAmounts ? money(point.net) : state.hideAmounts && point ? "金额已隐藏" : "暂无记录";
+    const readout = $("asset-chart-readout");
+    readout.textContent = point ? `${point.month.slice(0, 4)}年${label} · ${value}` : "还没有余额记录。添加账户并记下余额后，这里会显示历史。";
+    chart.setAttribute("aria-valuetext", readout.textContent);
+    chart.setAttribute("aria-label", `${state.assetPeriod === "year" ? `${state.assetYear}年` : "近 6 个月"}净资产走势。${readout.textContent}`);
+    $("asset-chart-note").textContent = !known.length ? "记下余额后即可开始查看历史。" : known.length === 1 ? "目前只有一个月份的记录，已显示单点；积累更多月份后可查看变化趋势。" : "点选图表或月份查看净资产；实心点表示当月记录含备注。";
+    const labels = $("asset-labels");
+    labels.replaceChildren(...series.map((item, index) => {
+      const button = taskButton("", `asset-label${index === selected ? " selected" : ""}`, () => chooseAssetPoint(index));
+      button.textContent = `${Number(item.month.slice(5))}月`;
+      button.disabled = !item.known;
+      button.setAttribute("aria-pressed", String(index === selected));
+      button.setAttribute("aria-label", `${item.month}，${item.known ? state.hideAmounts ? "金额已隐藏" : money(item.net) : "暂无记录"}`);
+      return button;
+    }));
+  }
+
+  function chooseAssetPoint(index) {
+    const series = activeAssetSeries();
+    if (!series[index]?.known) return;
+    state.assetSelection = index;
+    renderAssetChart();
+  }
+
   function renderProfile() {
     const now = new Date();
     const summary = FocusModel.assetSummary(state.assetAccounts, state.assetSnapshots, now);
-    const series = FocusModel.netWorthSeries(state.assetAccounts, state.assetSnapshots, FocusModel.ASSET_LIMITS.trendMonths, now);
+    if (state.assetYear > now.getFullYear()) state.assetYear = now.getFullYear();
+    const annual = state.assetPeriod === "year" ? FocusModel.netWorthYearSummary(state.assetAccounts, state.assetSnapshots, state.assetYear, now) : null;
     const pct = summary.monthPct === null || state.hideAmounts ? "" : ` · ${(summary.monthPct * 100).toFixed(1)}%`;
-    $("asset-net").textContent = money(summary.net);
+    $("asset-net").textContent = shownAssetMoney(summary.net);
     $("asset-change").textContent = summary.monthChange === null ? "本月暂无对比"
-      : `本月 ${summary.monthChange >= 0 ? "↑" : "↓"} ${money(summary.monthChange, { sign: true })}${pct}`;
+      : state.hideAmounts ? "本月变化 · 金额已隐藏"
+        : `本月 ${summary.monthChange >= 0 ? "↑" : "↓"} ${shownAssetMoney(summary.monthChange, { sign: true })}${pct}`;
     $("asset-change").classList.toggle("down", (summary.monthChange ?? 0) < 0);
-    $("asset-split").textContent = `资产 ${money(summary.assets)} · 负债 ${money(summary.debts)}`;
+    $("asset-split").textContent = `资产 ${shownAssetMoney(summary.assets)} · 负债 ${shownAssetMoney(summary.debts)}`;
+    $("asset-net").setAttribute("aria-label", state.hideAmounts ? "净资产金额已隐藏" : `净资产 ${money(summary.net)}`);
+    $("asset-change").setAttribute("aria-label", state.hideAmounts ? "本月变化金额已隐藏" : $("asset-change").textContent);
+    $("asset-split").setAttribute("aria-label", state.hideAmounts ? "资产与负债金额已隐藏" : $("asset-split").textContent);
     $("asset-hide").textContent = state.hideAmounts ? "显示金额" : "隐藏金额";
     $("asset-hide").setAttribute("aria-pressed", String(state.hideAmounts));
-    $("asset-sparkline").replaceChildren(sparkline(series));
-    const trend = series.filter(point => point.known).map(point => `${Number(point.month.slice(5))}月 ${money(point.net)}`).join("，");
-    $("asset-sparkline").setAttribute("aria-label", `近 ${series.length} 个月净资产走势${state.hideAmounts ? "" : `：${trend}`}`);
-    $("asset-labels").replaceChildren(...series.map(point => element("span", "", `${Number(point.month.slice(5))}月`)));
+    $("asset-year-control").hidden = state.assetPeriod !== "year";
+    $("asset-year").textContent = `${state.assetYear} 年`;
+    $("asset-year-next").disabled = state.assetYear >= now.getFullYear();
+    $("asset-period-summary").textContent = annual
+      ? annual.yearChange === null ? "年度变化 · 暂无年初对比" : state.hideAmounts ? "年度变化 · 金额已隐藏" : `年度变化 ${money(annual.yearChange, { sign: true })}`
+      : "余额历史 · 非收支统计";
+    $("asset-period-summary").setAttribute("aria-label", $("asset-period-summary").textContent);
+    document.querySelectorAll("[data-asset-period]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.assetPeriod === state.assetPeriod)));
+    renderAssetChart(now);
     renderWishes(now);
     const week = focusSummary(selectFocusRecords(state.records, { period: "week", anchor: now }));
     $("life-focus").textContent = durationLabel(week.minutes);
@@ -3248,18 +3317,19 @@
   function renderWishes(now) {
     const wishes = state.wishes.filter(wish => !wish.archived);
     const cards = wishes.map(wish => {
-      const progress = FocusModel.wishProgress(wish, state.assetSnapshots, now);
+      const progress = FocusModel.wishProgress(wish, state.assetSnapshots, now, state.assetAccounts);
       const card = taskButton("", `wish-card${progress.reached ? " reached" : ""}`, () => wishEditor(wish.id));
       const bar = element("span", "wish-bar");
       const fill = element("i");
-      fill.style.width = `${Math.round(progress.percent * 100)}%`;
+      fill.style.width = state.hideAmounts ? "0%" : `${Math.round(progress.percent * 100)}%`;
       bar.append(fill);
       const status = progress.reached ? "已达成"
         : progress.overdue ? "已过截止日期"
-          : progress.monthlyNeeded !== null ? `还剩 ${progress.daysLeft} 天 · 每月还需 ${money(progress.monthlyNeeded)}`
-            : `还差 ${money(progress.remaining)}`;
-      card.append(element("strong", "", wish.name), bar, element("span", "wish-amount", `${money(progress.saved)} / ${money(wish.target)}`), element("small", "", status));
-      card.setAttribute("aria-label", `${wish.name}，已存 ${Math.round(progress.percent * 100)}%，${status}`);
+          : progress.monthlyNeeded !== null ? `还剩 ${progress.daysLeft} 天 · 每月还需 ${shownAssetMoney(progress.monthlyNeeded)}`
+            : `还差 ${shownAssetMoney(progress.remaining)}`;
+      card.append(element("strong", "", wish.name), element("small", "wish-scope", wish.scope === "all" ? "所有资产" : `攒在${assetAccount(wish.accountId)?.name ?? "账户"}`), bar,
+        element("span", "wish-amount", `${shownAssetMoney(progress.saved)} / ${shownAssetMoney(wish.target)}`), element("small", "", status));
+      card.setAttribute("aria-label", `${wish.name}，${state.hideAmounts ? "进度金额已隐藏" : `已存 ${Math.round(progress.percent * 100)}%`}，${status}`);
       return card;
     });
     const add = taskButton("＋ 新心愿", "wish-card wish-add", () => wishEditor());
@@ -3272,15 +3342,40 @@
     const row = taskButton("", "asset-row", () => accountDetail(account.id));
     const info = element("div");
     info.append(element("strong", "", account.name), element("small", "", `${FocusModel.assetKind(account.kind).label} · ${latest ? `${latest.date} 更新` : "还没有记录"}`));
-    row.append(info, element("span", "asset-row-amount", money(latest?.amount ?? 0)), icon("arrow"));
+    const amount = element("span", "asset-row-amount", shownAssetMoney(latest?.amount ?? 0));
+    amount.setAttribute("aria-label", state.hideAmounts ? "金额已隐藏" : money(latest?.amount ?? 0));
+    row.append(info, amount, icon("arrow"));
     return row;
   }
 
-  function assetSheet() {
+  function assetSheet(historyYear = new Date().getFullYear()) {
     const now = new Date();
     const content = element("div", "asset-sheet-body");
     const summary = FocusModel.assetSummary(state.assetAccounts, state.assetSnapshots, now);
-    content.append(element("div", "modal-notice", `净资产 ${money(summary.net)} = 资产 ${money(summary.assets)} − 负债 ${money(summary.debts)}。示例数据只在本页内存，刷新恢复。`));
+    const notice = element("div", "modal-notice", `净资产 ${shownAssetMoney(summary.net)} = 资产 ${shownAssetMoney(summary.assets)} − 负债 ${shownAssetMoney(summary.debts)}。示例数据只在本页内存，刷新恢复。`);
+    if (state.hideAmounts) notice.setAttribute("aria-label", "净资产、资产与负债金额已隐藏。示例数据只在本页内存，刷新恢复。");
+    content.append(notice);
+    const history = FocusModel.netWorthYearSummary(state.assetAccounts, state.assetSnapshots, historyYear, now).points;
+    const historyGroup = element("div", "asset-group");
+    const historyHeader = element("div", "asset-history-year");
+    const previousYear = taskButton("‹", "secondary-button", () => assetSheet(historyYear - 1));
+    previousYear.setAttribute("aria-label", "上一年");
+    previousYear.disabled = historyYear <= 1;
+    const nextYear = taskButton("›", "secondary-button", () => assetSheet(historyYear + 1));
+    nextYear.setAttribute("aria-label", "下一年");
+    nextYear.disabled = historyYear >= now.getFullYear();
+    historyHeader.append(previousYear, element("h3", "", `${historyYear} 年净资产`), nextYear);
+    historyGroup.append(historyHeader);
+    const knownHistory = history.filter(point => point.known).reverse();
+    if (!knownHistory.length) historyGroup.append(element("p", "modal-copy", "暂无历史余额"));
+    knownHistory.forEach(point => {
+      const row = element("div", "asset-month-row");
+      const amount = element("strong", "", shownAssetMoney(point.net));
+      amount.setAttribute("aria-label", state.hideAmounts ? "金额已隐藏" : money(point.net));
+      row.append(element("span", "", point.month.replace("-", "年") + "月"), amount);
+      historyGroup.append(row);
+    });
+    content.append(historyGroup);
     [["资产", false], ["负债", true]].forEach(([label, liability]) => {
       const accounts = state.assetAccounts.filter(account => Boolean(FocusModel.assetKind(account.kind)?.liability) === liability);
       if (!accounts.length) return;
@@ -3363,8 +3458,12 @@
       const previous = history[index + 1];
       const row = element("div", "asset-history-row");
       const info = element("div");
-      const change = previous ? money(snapshot.amount - previous.amount, { sign: true }) : "首次记录";
-      info.append(element("strong", "", money(snapshot.amount)), element("small", "", [snapshot.date, change, snapshot.note].filter(Boolean).join(" · ")));
+      const change = previous ? shownAssetMoney(snapshot.amount - previous.amount, { sign: true }) : "首次记录";
+      const amount = element("strong", "", shownAssetMoney(snapshot.amount));
+      amount.setAttribute("aria-label", state.hideAmounts ? "金额已隐藏" : money(snapshot.amount));
+      const details = element("small", "", [snapshot.date, change, snapshot.note].filter(Boolean).join(" · "));
+      if (state.hideAmounts && previous) details.setAttribute("aria-label", [snapshot.date, "金额已隐藏", snapshot.note].filter(Boolean).join(" · "));
+      info.append(amount, details);
       const remove = taskButton("", "asset-remove", () => {
         state.assetSnapshots = state.assetSnapshots.filter(item => item.id !== snapshot.id);
         renderProfile();
@@ -3379,11 +3478,12 @@
     const actions = element("div", "modal-actions");
     actions.append(taskButton("返回", "secondary-button", assetSheet), taskButton("编辑账户", "secondary-button", () => accountEditor(id)),
       taskButton("删除账户", "secondary-button", () => {
-        const linked = state.wishes.some(wish => wish.accountId === id && !wish.archived);
-        confirmAction("删除账户", `删除「${account.name}」和它的全部余额记录？${linked ? "关联的心愿也会一并移除。" : ""}`, () => {
+        const linked = state.wishes.some(wish => wish.scope !== "all" && wish.accountId === id && !wish.archived);
+        const allWishes = state.wishes.some(wish => wish.scope === "all" && !wish.archived);
+        confirmAction("删除账户", `删除「${account.name}」和它的全部余额记录？${linked ? "关联的单账户心愿也会一并移除。" : ""}${allWishes ? "按所有资产计算的心愿会保留，并按剩余账户计算。" : ""}`, () => {
           state.assetAccounts = state.assetAccounts.filter(item => item.id !== id);
           state.assetSnapshots = state.assetSnapshots.filter(item => item.accountId !== id);
-          state.wishes = state.wishes.filter(wish => wish.accountId !== id);
+          state.wishes = state.wishes.filter(wish => wish.scope === "all" || wish.accountId !== id);
           renderProfile();
           toast("账户已删除。");
         }, "删除", () => accountDetail(id));
@@ -3427,16 +3527,19 @@
   function wishEditor(id = null) {
     const wish = id ? state.wishes.find(item => item.id === id) : null;
     const accounts = state.assetAccounts.filter(account => !FocusModel.assetKind(account.kind)?.liability);
-    if (!accounts.length) return toast("先添加一个资产账户，再用它来攒心愿。");
     const form = element("form");
     const validation = formError();
-    form.append(element("div", "modal-notice", "进度按所选账户的最新余额计算，建议给心愿单独开一个账户。"), validation);
+    form.append(element("div", "modal-notice", "可按单个资产账户或所有资产的当前余额计算；负债不计入所有资产。"), validation);
     const name = field(form, "心愿", "name", wish?.name ?? "", { maxLength: FocusModel.ASSET_LIMITS.maxWishName });
     const target = field(form, "目标金额（元）", "target", wish?.target ?? "");
     target.inputMode = "decimal";
     const deadline = field(form, "截止日期（可空）", "deadline", wish?.deadline ?? "", { type: "date" });
     deadline.required = false;
-    const account = field(form, "攒在哪个账户", "account", (assetAccount(wish?.accountId) ?? accounts[0]).name, { choices: accounts.map(item => item.name) });
+    const scope = field(form, "攒钱范围", "scope", wish?.scope === "all" || (!wish && !accounts.length) ? "所有资产" : "单个账户", { choices: ["单个账户", "所有资产"] });
+    const account = accounts.length ? field(form, "攒在哪个账户", "account", assetAccount(wish?.accountId)?.name ?? accounts[0].name, { choices: accounts.map(item => item.name) }) : null;
+    const updateScope = () => { if (account) account.closest(".field").hidden = scope.value !== "单个账户"; };
+    scope.addEventListener("change", updateScope);
+    updateScope();
     const actions = sheetActions("取消", closeModal, wish ? "保存" : "添加心愿");
     if (wish) actions.prepend(taskButton("归档", "secondary-button", () => {
       state.wishes = state.wishes.map(item => item.id === id ? { ...item, archived: true } : item);
@@ -3450,7 +3553,7 @@
       let validated;
       try {
         validated = FocusModel.validateWish({ name: name.value, target: target.value, deadline: deadline.value,
-          accountId: accounts.find(item => item.name === account.value)?.id });
+          scope: scope.value === "所有资产" ? "all" : "account", accountId: scope.value === "所有资产" ? null : accounts.find(item => item.name === account.value)?.id });
       } catch (error) { return showFormError(validation, error); }
       state.wishes = wish ? state.wishes.map(item => item.id === id ? { ...item, ...validated } : item)
         : [...state.wishes, { id: `wish-${state.nextAssetId++}`, archived: false, ...validated }];
@@ -3634,8 +3737,43 @@
   $("timer-settings").addEventListener("click", () => focusItemEditor(state.selectedFocusItem));
   $("preferences-button").addEventListener("click", timerSettings);
   $("asset-open").addEventListener("click", assetSheet);
+  $("asset-open-history").addEventListener("click", assetSheet);
   $("asset-update").addEventListener("click", balanceUpdater);
   $("asset-hide").addEventListener("click", () => { state.hideAmounts = !state.hideAmounts; renderProfile(); });
+  document.querySelectorAll("[data-asset-period]").forEach(button => button.addEventListener("click", () => {
+    state.assetPeriod = button.dataset.assetPeriod;
+    state.assetSelection = null;
+    renderProfile();
+  }));
+  $("asset-year-prev").addEventListener("click", () => { state.assetYear -= 1; state.assetSelection = null; renderProfile(); });
+  $("asset-year-next").addEventListener("click", () => { if (state.assetYear < new Date().getFullYear()) { state.assetYear += 1; state.assetSelection = null; renderProfile(); } });
+  const assetChart = $("asset-sparkline");
+  const pickAssetChartIndex = event => {
+    const series = activeAssetSeries();
+    const box = assetChart.getBoundingClientRect();
+    if (!box.width) return;
+    const ratio = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
+    const xFor = index => (index + 0.5) / series.length;
+    let nearest = null;
+    series.forEach((point, index) => {
+      if (point.known && (nearest === null || Math.abs(xFor(index) - ratio) < Math.abs(xFor(nearest) - ratio))) nearest = index;
+    });
+    if (nearest !== null) chooseAssetPoint(nearest);
+  };
+  assetChart.addEventListener("pointerdown", event => { assetChart.setPointerCapture(event.pointerId); pickAssetChartIndex(event); });
+  assetChart.addEventListener("pointermove", event => { if (assetChart.hasPointerCapture(event.pointerId) || event.pointerType === "mouse") pickAssetChartIndex(event); });
+  assetChart.addEventListener("keydown", event => {
+    const series = activeAssetSeries();
+    const keys = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 };
+    if (keys[event.key] === undefined && !["Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const current = state.assetSelection ?? 0;
+    const direction = event.key === "Home" ? 1 : event.key === "End" ? -1 : keys[event.key];
+    let index = event.key === "Home" ? 0 : event.key === "End" ? series.length - 1 : current + direction;
+    index = Math.max(0, Math.min(series.length - 1, index));
+    while (index >= 0 && index < series.length && !series[index].known) index += direction;
+    if (series[index]?.known) chooseAssetPoint(index);
+  });
   document.querySelectorAll("[data-life-page]").forEach(button => button.addEventListener("click", () => {
     if (button.dataset.lifePage === "tasks") state.filter = "done";
     navigate(button.dataset.lifePage);

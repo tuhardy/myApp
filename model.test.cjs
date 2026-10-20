@@ -1385,7 +1385,7 @@ test("周期平移按日周月年整段移动，环比与上一周期对比且�
   assert.deepEqual(comparePeriods(records, { period: "day", anchor }), { current: 0, previous: 0, difference: 0 });
 });
 
-const { diaryStreak, validateAssetAccount, validateAssetSnapshot, validateWish, latestBalance, assetSummary, netWorthSeries, wishProgress,
+const { diaryStreak, validateAssetAccount, validateAssetSnapshot, validateWish, latestBalance, assetSummary, netWorthSeries, netWorthYearSummary, wishProgress,
   initialAssetAccounts, initialAssetSnapshots, initialWishes } = require("./model.js");
 
 test("资产汇总：负债计负，本月变化对比上月月末，上月无数据时百分比为 null", () => {
@@ -1407,11 +1407,41 @@ test("净值曲线按月末沿用最近快照，附当月备注", () => {
   const now = new Date(2026, 9, 21, 12);
   const accounts = [{ id: "a", kind: "bank" }];
   const snaps = [{ accountId: "a", date: "2026-07-05", amount: 100, note: "" }, { accountId: "a", date: "2026-09-10", amount: 300, note: "发工资" }];
+  const single = netWorthSeries(accounts, [{ accountId: "a", date: "2026-10-05", amount: 123 }], 6, now);
+  assert.equal(single.filter(point => point.known).length, 1);
+  assert.equal(single.at(-1).net, 123);
   const series = netWorthSeries(accounts, snaps, 4, now);
   assert.deepEqual(series.map(point => [point.month, point.net, point.known]),
     [["2026-07", 100, true], ["2026-08", 100, true], ["2026-09", 300, true], ["2026-10", 300, true]]);
   assert.deepEqual(series[2].notes.map(note => note.note), ["发工资"]);
   assert.equal(netWorthSeries(accounts, snaps, 6, now)[0].known, false);
+});
+
+test("年度资产走势按月末计算，不补未来月份，缺少年初基准时年度变化为空", () => {
+  const now = new Date(2026, 9, 21, 12);
+  const accounts = [{ id: "a", kind: "bank" }, { id: "d", kind: "debt" }];
+  const snaps = [{ accountId: "a", date: "2026-03-10", amount: 1000 }, { accountId: "a", date: "2026-10-05", amount: 1500 }, { accountId: "d", date: "2026-10-01", amount: 200 }];
+  const year = netWorthYearSummary(accounts, snaps, 2026, now);
+  assert.equal(year.points.length, 12);
+  assert.equal(year.points[0].known, false);
+  assert.equal(year.points[2].net, 1000);
+  assert.equal(year.points[9].net, 1300);
+  assert.equal(year.points[10].known, false);
+  assert.equal(year.yearChange, null);
+  const prior = netWorthYearSummary(accounts, [{ accountId: "a", date: "2025-12-31", amount: 800 }, { accountId: "a", date: "2026-01-05", amount: 1000 }, { accountId: "a", date: "2026-10-05", amount: 1500 }, { accountId: "d", date: "2026-10-01", amount: 200 }], 2026, now);
+  assert.equal(prior.yearChange, 500);
+});
+
+test("心愿进度：全资产汇总排除负债，并随新增账户纳入", () => {
+  const now = new Date(2026, 9, 21, 12);
+  const accounts = [{ id: "a", kind: "bank" }, { id: "b", kind: "cash" }, { id: "d", kind: "debt" }];
+  const snaps = [{ accountId: "a", date: "2026-10-01", amount: 600 }, { accountId: "b", date: "2026-10-02", amount: 400 }, { accountId: "d", date: "2026-10-03", amount: 900 }];
+  const wish = { target: 2000, deadline: null, scope: "all", accountId: null };
+  assert.equal(wishProgress(wish, snaps, now, accounts).saved, 1000);
+  assert.equal(wishProgress(wish, snaps, now, [...accounts, { id: "c", kind: "cash" }]).saved, 1000);
+  const withNewAccount = [{ ...accounts[0] }, { ...accounts[1] }, { ...accounts[2] }, { id: "c", kind: "cash" }];
+  const withNewSnapshot = [...snaps, { accountId: "c", date: "2026-10-20", amount: 250 }];
+  assert.equal(wishProgress(wish, withNewSnapshot, now, withNewAccount).saved, 1250);
 });
 
 test("心愿进度：达成、过期与每月还需", () => {
@@ -1449,7 +1479,8 @@ test("资产校验：金额范围与小数位、未来日期、备注长度、�
   assert.throws(() => validateAssetSnapshot({ amount: 1, date: "2026-10-01", note: "字".repeat(41) }, now), /40/);
   assert.throws(() => validateAssetAccount({ name: "", kind: "bank" }));
   assert.throws(() => validateAssetAccount({ name: "x", kind: "gold" }));
-  assert.deepEqual(validateWish({ name: " 相机 ", target: "8000", deadline: "", accountId: "a" }), { name: "相机", target: 8000, deadline: null, accountId: "a" });
+  assert.deepEqual(validateWish({ name: " 相机 ", target: "8000", deadline: "", accountId: "a" }), { name: "相机", target: 8000, deadline: null, scope: "account", accountId: "a" });
+  assert.deepEqual(validateWish({ name: "旅行", target: "8000", scope: "all" }), { name: "旅行", target: 8000, deadline: null, scope: "all", accountId: null });
   assert.throws(() => validateWish({ name: "相机", target: "0", accountId: "a" }), /大于 0/);
   assert.throws(() => validateWish({ name: "相机", target: "1", accountId: "" }), /账户/);
 });

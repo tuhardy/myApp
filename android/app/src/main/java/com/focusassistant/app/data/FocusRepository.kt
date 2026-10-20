@@ -305,9 +305,10 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         mutateAssets { book -> book.copy(accounts = upsert(book.accounts, stored) { it.id }, snapshots = book.snapshots + listOfNotNull(opening)) }
         return stored.id
     }
-    /** 删除账户会一并删除它的余额记录和关联心愿。 */
+    /** 删除账户会一并删除它的余额记录和单账户心愿；所有资产心愿保留并按剩余账户计算。 */
     suspend fun deleteAssetAccount(id: String) = mutateAssets { book ->
-        AssetBook(book.accounts.filterNot { it.id == id }, book.snapshots.filterNot { it.accountId == id }, book.wishes.filterNot { it.accountId == id })
+        AssetBook(book.accounts.filterNot { it.id == id }, book.snapshots.filterNot { it.accountId == id },
+            book.wishes.filterNot { it.scope == WishScope.ACCOUNT && it.accountId == id })
     }
     /** 一次记入多条快照（更新余额共用一个备注），日期不能晚于今天。 */
     suspend fun addAssetSnapshots(entries: List<AssetSnapshot>) {

@@ -15,8 +15,9 @@ enum class AssetKind(val label: String, val liability: Boolean = false) {
 data class AssetAccount(val id: String, val name: String, val kind: AssetKind)
 /** 某一天某个账户的余额快照。金额以分为单位，避免浮点误差；date 为本地日期 YYYY-MM-DD。 */
 data class AssetSnapshot(val id: String, val accountId: String, val date: String, val amountCents: Long, val note: String = "")
-/** 心愿的进度只看所关联资产账户的最新余额。deadline 为空表示不设截止日期。 */
-data class Wish(val id: String, val name: String, val targetCents: Long, val deadline: String?, val accountId: String, val archived: Boolean = false)
+/** 心愿按单账户或全部非负债账户的最新余额计算。旧记录缺少 scope 时由编解码器按 account 读取。 */
+data class Wish(val id: String, val name: String, val targetCents: Long, val deadline: String?, val accountId: String?, val archived: Boolean = false, val scope: WishScope = WishScope.ACCOUNT)
+enum class WishScope { ACCOUNT, ALL }
 data class AssetBook(
     val accounts: List<AssetAccount> = emptyList(),
     val snapshots: List<AssetSnapshot> = emptyList(),
@@ -77,7 +78,8 @@ object AssetRules {
         require(wish.name.isNotBlank() && wish.name.length <= MAX_NAME) { "心愿名称需为 1–$MAX_NAME 个字符。" }
         require(wish.targetCents in 1..MAX_AMOUNT_CENTS) { "目标金额需大于 0。" }
         require(wish.deadline == null || parseDate(wish.deadline) != null) { "请选择有效的截止日期。" }
-        require(wish.accountId.isNotBlank()) { "请选择用来攒钱的账户。" }
+        require(wish.scope == WishScope.ALL || !wish.accountId.isNullOrBlank()) { "请选择用来攒钱的账户。" }
+        require(wish.scope != WishScope.ALL || wish.accountId == null) { "所有资产心愿不关联单个账户。" }
     }
 
     /** 整本校验：标识唯一、引用存在、心愿只能关联资产账户。备份恢复与仓库写入共用。 */
@@ -92,8 +94,10 @@ object AssetRules {
         book.snapshots.forEach { validateSnapshot(it); require(it.accountId in accounts) { "余额记录引用的账户不存在" } }
         book.wishes.forEach { wish ->
             validateWish(wish)
-            val account = accounts[wish.accountId] ?: throw IllegalArgumentException("心愿关联的账户不存在")
-            require(!account.kind.liability) { "心愿不能关联负债账户" }
+            if (wish.scope == WishScope.ACCOUNT) {
+                val account = accounts[requireNotNull(wish.accountId)] ?: throw IllegalArgumentException("心愿关联的账户不存在")
+                require(!account.kind.liability) { "心愿不能关联负债账户" }
+            }
         }
     }
 
@@ -133,6 +137,32 @@ object AssetRules {
         return AssetSummary(current.assetsCents, current.debtsCents, current.netCents, change, ratio)
     }
 
+    /** 指定年度按月取月末，本月取今天；未来月份保持未知，不补造余额。 */
+    fun yearSeries(book: AssetBook, year: Int, today: LocalDate): List<NetWorthPoint> {
+        require(year in 1..today.year) { "请选择有效的统计年份。" }
+        return (1..12).map { monthValue ->
+            val month = YearMonth.of(year, monthValue)
+            if (month > YearMonth.from(today)) NetWorthPoint(month, 0L, false, emptyList())
+            else {
+                val end = if (month == YearMonth.from(today)) today else month.atEndOfMonth()
+                val point = netWorth(book, end)
+                val notes = book.snapshots.filter { it.note.isNotBlank() && it.date.startsWith(month.toString()) && it.date <= today.toString() }.sortedBy { it.date }
+                NetWorthPoint(month, point.netCents, point.known, notes)
+            }
+        }
+    }
+
+    data class YearSummary(val year: Int, val points: List<NetWorthPoint>, val netCents: Long, val known: Boolean, val changeCents: Long?)
+
+    /** 年度变化以当年 1 月 1 日之前可用净值为基准；没有基准时不推算。 */
+    fun yearSummary(book: AssetBook, year: Int, today: LocalDate): YearSummary {
+        val points = yearSeries(book, year, today)
+        val current = netWorth(book, if (year == today.year) today else YearMonth.of(year, 12).atEndOfMonth())
+        val baseline = netWorth(book, LocalDate.of(year, 1, 1).minusDays(1))
+        val change = if (baseline.known && current.known) current.netCents - baseline.netCents else null
+        return YearSummary(year, points, current.netCents, current.known, change)
+    }
+
     /** 近 months 个月：过去各月取月末，本月取今天；各账户沿用该时点前最近一次快照，附当月带备注的快照。 */
     fun series(book: AssetBook, today: LocalDate, months: Int = TREND_MONTHS): List<NetWorthPoint> {
         val current = YearMonth.from(today)
@@ -146,9 +176,12 @@ object AssetRules {
         }
     }
 
+    fun assetBalance(book: AssetBook, at: LocalDate): Long = book.accounts.filterNot { it.kind.liability }
+        .sumOf { balance(book.snapshots, it.id, at) }
+
     /** 每月还需 = 剩余 ÷ 剩余月数（不足 30 天按 1 个月），向上取整到元；过期或已达成时不计算。 */
-    fun wishProgress(wish: Wish, snapshots: List<AssetSnapshot>, today: LocalDate): WishProgress {
-        val saved = balance(snapshots, wish.accountId, today)
+    fun wishProgress(wish: Wish, book: AssetBook, today: LocalDate): WishProgress {
+        val saved = if (wish.scope == WishScope.ALL) assetBalance(book, today) else balance(book.snapshots, requireNotNull(wish.accountId), today)
         val remaining = (wish.targetCents - saved).coerceAtLeast(0)
         val reached = remaining == 0L
         val daysLeft = wish.deadline?.let(::parseDate)?.let { ChronoUnit.DAYS.between(today, it) }

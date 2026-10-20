@@ -146,9 +146,11 @@ internal object JsonCodec {
     fun readAssetAccount(value: JSONObject) = AssetAccount(value.string("id"), value.string("name"), AssetKind.valueOf(value.string("kind"))).also { AssetRules.validateAccount(it) }
     fun assetSnapshot(value: AssetSnapshot): JSONObject = JSONObject().put("id", value.id).put("accountId", value.accountId).put("date", value.date).put("amountCents", value.amountCents).put("note", value.note)
     fun readAssetSnapshot(value: JSONObject) = AssetSnapshot(value.string("id"), value.string("accountId"), value.string("date"), value.long("amountCents"), value.string("note")).also { AssetRules.validateSnapshot(it) }
-    fun wish(value: Wish): JSONObject = JSONObject().put("id", value.id).put("name", value.name).put("targetCents", value.targetCents).put("deadline", nullable(value.deadline)).put("accountId", value.accountId).put("archived", value.archived)
+    fun wish(value: Wish): JSONObject = JSONObject().put("id", value.id).put("name", value.name).put("targetCents", value.targetCents).put("deadline", nullable(value.deadline)).put("accountId", nullable(value.accountId)).put("scope", value.scope.name).put("archived", value.archived)
     fun readWish(value: JSONObject) = Wish(value.string("id"), value.string("name"), value.long("targetCents"),
-        if (value.isNull("deadline")) null else value.string("deadline"), value.string("accountId"), value.boolean("archived")).also { AssetRules.validateWish(it) }
+        if (value.isNull("deadline")) null else value.string("deadline"),
+        if (value.has("accountId") && !value.isNull("accountId")) value.string("accountId") else if (!value.has("scope") || value.string("scope") == WishScope.ACCOUNT.name) "" else null,
+        value.boolean("archived"), if (value.has("scope")) WishScope.valueOf(value.string("scope")) else WishScope.ACCOUNT).also { AssetRules.validateWish(it) }
     fun readTimer(value: JSONObject) = ActiveTimer(value.string("sessionId"), value.string("projectId"), value.string("projectTitle"), value.string("category"), TimerMode.valueOf(value.string("timerMode")), value.nullableInteger("targetMinutes"),
         TimerPhase.valueOf(value.string("phase")), TimerStatus.valueOf(value.string("status")), value.long("startedAt"),
         value.long("accumulatedMs"), value.long("anchorElapsed"), value.long("anchorWall"), value.integer("bootCount"), value.objects("segments", 10000).map(::readSegment), value.boolean("targetNotified"), value.boolean("recoveryPending"))
