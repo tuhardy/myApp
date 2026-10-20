@@ -28,7 +28,38 @@ object TodoUndo {
     }
 }
 
+/** 编辑面板里能指到具体输入框的问题；[stepId] 为空表示标题。 */
+data class TodoFormProblem(val message: String, val stepId: String? = null)
+
 object TodoEditing {
+    /** 与浏览器 `taskFormProblem` 同口径：标题必填；未完成项的空小步保存时忽略，已完成项不能删步所以空名仍报错。 */
+    fun problem(draft: Todo, locked: Boolean): TodoFormProblem? {
+        if (draft.title.isBlank()) return TodoFormProblem("任务名称不能为空，先写下想做什么。")
+        val index = draft.steps.indexOfFirst { step ->
+            val length = step.title.trim().length
+            (locked && length == 0) || length > Validation.MAX_STEP_TITLE
+        }
+        if (index < 0) return null
+        return TodoFormProblem("第 ${index + 1} 步的小步名称需为 1–${Validation.MAX_STEP_TITLE} 个字。", draft.steps[index].id)
+    }
+
+    /** 去掉首尾空白；未完成项丢掉没填的空小步。 */
+    fun prepare(draft: Todo, locked: Boolean): Todo {
+        val steps = draft.steps.map { it.copy(title = it.title.trim()) }
+        return draft.copy(title = draft.title.trim(), steps = if (locked) steps else steps.filter { it.title.isNotEmpty() })
+    }
+
+    /** 只比用户能改的字段：标题、分类、重要、小步 id 与名称。 */
+    fun sameContent(a: Todo, b: Todo): Boolean =
+        a.title.trim() == b.title.trim() && a.category == b.category && a.important == b.important &&
+            a.steps.map { it.id to it.title.trim() } == b.steps.map { it.id to it.title.trim() }
+
+    /** 同名只提醒不阻止，只与其它待完成、未放下的事比。 */
+    fun hasDuplicate(todos: List<Todo>, id: String, title: String): Boolean {
+        val name = title.trim()
+        return name.isNotEmpty() && todos.any { it.id != id && !it.done && !it.archived && it.title.trim() == name }
+    }
+
     fun merge(current: Todo?, draft: Todo, today: LocalDate = LocalDate.now(), now: Long = System.currentTimeMillis()): Todo {
         Validation.todo(draft)
         if (current == null) return draft.copy(createdAt = today.toString(), done = false, archived = false,

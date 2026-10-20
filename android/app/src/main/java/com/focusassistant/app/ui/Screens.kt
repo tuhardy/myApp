@@ -621,6 +621,24 @@ internal fun TodosScreen(
     val groups = history?.groups ?: TodoGrouping.group(visible.map { it.copy(done = false) }).map { group ->
         group.copy(todos = group.todos.map { item -> visibleById.getValue(item.id) })
     }
+    // 保存后把那张卡片带进视野；不在当前视图（例如已完成跳到其它月份）时不滚动。
+    val saved = ui.justSaved
+    LaunchedEffect(saved, groups.isNotEmpty()) {
+        if (saved == null) return@LaunchedEffect
+        val key = "todo:${saved.id}"
+        withFrameNanos { }
+        val index = view.listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }?.index
+        if (index == null) {
+            // 两种视图都是两项固定表头：标题行 + 月份控制 / 列表引导。
+            var position = TodoUiLimits.HISTORY_HEADER_ITEMS
+            for (group in groups) {
+                position++
+                val within = group.todos.indexOfFirst { it.id == saved.id }
+                if (within >= 0) { view.listState.animateScrollToItem(position + within); break }
+                position += group.todos.size
+            }
+        }
+    }
     Column(Modifier.fillMaxSize().background(Color.White)) {
         LazyColumn(state = view.listState, modifier = Modifier.weight(1f).fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp)) {
@@ -848,6 +866,16 @@ private fun TodoCard(
     val collapse by animateFloatAsState(if (finish?.phase == TodoFinishPhase.EXIT) 0f else 1f,
         animationSpec = if (ui.reduceMotion || finish == null) snap() else tween(TodoUiLimits.FINISH_COLLAPSE_MS.toInt()), label = "todo-exit")
     var normalHeight by remember(todo.id) { mutableIntStateOf(0) }
+    // 刚保存的卡片暖橙底色淡出 1.2 秒，对应浏览器 `.just-saved`；系统关闭动画时不闪。
+    val savedFlash = remember(todo.id) { Animatable(0f) }
+    val savedToken = ui.justSaved?.takeIf { it.id == todo.id }?.token
+    LaunchedEffect(savedToken) {
+        // 保存后卡片在别的视图里时不闪；稍后切过去看到它也不再补闪。
+        if (savedToken == null || ui.reduceMotion || SystemClock.elapsedRealtime() - savedToken > TodoUiLimits.SAVED_FLASH_MS) return@LaunchedEffect
+        savedFlash.snapTo(1f)
+        savedFlash.animateTo(0f, tween(TodoUiLimits.SAVED_FLASH_MS, easing = LinearEasing))
+        if (ui.justSaved?.token == savedToken) ui.justSaved = null
+    }
     val shape = RoundedCornerShape(if (history) 0.dp else 15.dp)
     fun act(action: () -> Unit) {
         if (!allowed || dragging) return
@@ -869,7 +897,8 @@ private fun TodoCard(
                         modifier = Modifier.width(TodoUiLimits.SWIPE_WIDTH_DP.dp).clearAndSetSemantics {}, textAlign = TextAlign.Center)
                 }
             }
-            Surface(color = if (finish != null) androidx.compose.ui.graphics.lerp(Color(0xFFFFFAF6), AccentSoft, finishGlow * 0.6f) else todoBackground(todo, age), shape = shape,
+            Surface(color = if (finish != null) androidx.compose.ui.graphics.lerp(Color(0xFFFFFAF6), AccentSoft, finishGlow * 0.6f)
+                else androidx.compose.ui.graphics.lerp(todoBackground(todo, age), AccentSoft, savedFlash.value), shape = shape,
                 border = if (history || todo.archived) null else androidx.compose.foundation.BorderStroke(1.dp, if (finish != null) Accent else todoBorder(todo, age)),
                 modifier = Modifier.offset { IntOffset(swipe.roundToInt(), 0) }.fillMaxWidth()
                     .then(if (todo.archived && !history) Modifier.dashedBorder(Line, 15.dp) else Modifier)

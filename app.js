@@ -28,7 +28,7 @@
   const timer = new Timer();
   const state = {
     tasks: initialTasks(), filter: "pending", period: "today", goal: UI.initialGoalMinutes,
-    taskDrafts: new Map(), taskEditorId: null, taskEditorReturn: null, taskExpanded: new Set(), taskSearch: "",
+    taskDrafts: new Map(), taskEditorId: null, taskEditorReturn: null, lastTaskCategory: "", taskExpanded: new Set(), taskSearch: "",
     historyMonth: localDateKey(new Date()).slice(0, 7), historyUndated: false, historyViews: new Map(),
     finishingTasks: new Map(), taskUndo: [],
     records: initialFocusRecords(), activeFocus: null, overviewDay: "",
@@ -719,7 +719,7 @@
   function buildStepEditor(draft, locked, onChange) {
     const wrapper = element("details", "step-editor");
     wrapper.open = draft.stepsOpen ?? draft.steps.length > 0;
-    const summary = element("summary", "step-editor-title", "拆成小步 · 可选");
+    const summary = element("summary", "step-editor-title");
     const list = element("div", "step-editor-list");
     const add = taskButton("＋ 加一步", "add-step", () => {
       if (draft.steps.length >= LIMITS.maxTaskSteps) return;
@@ -731,6 +731,7 @@
     const draw = () => {
       list.replaceChildren(...draft.steps.map((step, index) => {
         const row = element("div", "step-editor-row");
+        row.dataset.stepIndex = String(index);
         const input = element("input");
         input.type = "text";
         input.value = step.title;
@@ -760,7 +761,8 @@
       }));
       add.disabled = draft.steps.length >= LIMITS.maxTaskSteps;
       add.textContent = add.disabled ? `最多 ${LIMITS.maxTaskSteps} 步` : "＋ 加一步";
-      summary.textContent = `拆成小步${draft.steps.length ? ` · ${draft.steps.length} 步` : " · 可选"}`;
+      summary.replaceChildren(element("span", "", "拆成小步"),
+        element("span", "step-editor-count", draft.steps.length ? `${draft.steps.length} 步` : "可选"));
     };
     wrapper.addEventListener("toggle", () => { draft.stepsOpen = wrapper.open; });
     draw();
@@ -775,36 +777,81 @@
     queueMicrotask(pumpProgressPrompts);
   }
 
+  function freshTaskDraft(task) {
+    return { title: task?.title || "", category: task?.category || state.lastTaskCategory || CATEGORIES[0],
+      important: task?.important || false, steps: (task?.steps || []).map(step => ({ ...step })), stepsOpen: !!task?.steps?.length };
+  }
+
+  /** 只比用户能改的字段：标题、分类、重要、小步 id 与名称。 */
+  function sameTaskContent(a, b) {
+    const steps = list => JSON.stringify((list || []).map(step => [step.id, String(step.title).trim()]));
+    return a.title.trim() === b.title.trim() && a.category === b.category && !!a.important === !!b.important && steps(a.steps) === steps(b.steps);
+  }
+
+  /** 先于 validateTask 找出能指到具体输入框的问题；返回 null 时交给模型校验。 */
+  function taskFormProblem(draft, locked) {
+    if (!draft.title.trim()) return { message: "任务名称不能为空，先写下想做什么。", step: -1 };
+    const index = draft.steps.findIndex(step => {
+      const length = step.title.trim().length;
+      return (locked && !length) || length > LIMITS.maxTaskStepTitle;
+    });
+    return index < 0 ? null : { message: `第 ${index + 1} 步的小步名称需为 1–${LIMITS.maxTaskStepTitle} 个字。`, step: index };
+  }
+
   function taskEditor(id) {
     const task = state.tasks.find(item => item.id === id);
     if (id && !task) return;
     if (!task && state.tasks.length >= LIMITS.maxTasks) return toast(`演示最多支持 ${LIMITS.maxTasks} 个待办。`);
     closeSwipes();
     if ($("modal").open) closeModal();
-    state.taskEditorReturn = document.activeElement;
+    if (!$("todo-sheet").open) state.taskEditorReturn = document.activeElement;
     state.taskEditorId = id || TODO_UI.newDraft;
+    const locked = !!task?.done;
     // M：小步是可选的。草稿按待办保留在本页内存中，保存后清除，刷新重置。
-    if (!state.taskDrafts.has(state.taskEditorId)) state.taskDrafts.set(state.taskEditorId, {
-      title: task?.title || "", category: task?.category || CATEGORIES[0], important: task?.important || false,
-      steps: (task?.steps || []).map(step => ({ ...step })), stepsOpen: !!task?.steps?.length,
-    });
+    const restored = state.taskDrafts.has(state.taskEditorId) && !sameTaskContent(state.taskDrafts.get(state.taskEditorId), freshTaskDraft(task));
+    if (!state.taskDrafts.has(state.taskEditorId)) state.taskDrafts.set(state.taskEditorId, freshTaskDraft(task));
     const draft = state.taskDrafts.get(state.taskEditorId);
-    if (task?.done) draft.steps = (task.steps || []).map(step => ({ ...step, title: draft.steps.find(value => value.id === step.id)?.title ?? step.title }));
+    if (locked) draft.steps = (task.steps || []).map(step => ({ ...step, title: draft.steps.find(value => value.id === step.id)?.title ?? step.title }));
     else if (task) draft.steps = draft.steps.map(step => ({ ...step, done: task.steps?.find(value => value.id === step.id)?.done ?? step.done }));
     const body = $("todo-sheet-body");
     body.replaceChildren();
     $("todo-sheet-title").textContent = task ? "编辑待办" : "记下一件事";
     $("save-todo-sheet").textContent = task ? "保存修改" : "添加待办";
-    const validation = element("div", "modal-notice");
+    const validation = element("div", "modal-notice todo-error");
     validation.id = "task-validation-error";
     validation.setAttribute("role", "alert");
     validation.hidden = true;
-    const onChange = () => { validation.hidden = true; };
     const titleInput = field(body, "想做什么？", "title", draft.title, { maxLength: LIMITS.maxTaskTitle });
-    titleInput.parentElement.classList.add("todo-title-field");
+    const titleField = titleInput.parentElement;
+    titleField.classList.add("todo-title-field");
     titleInput.placeholder = "从一件具体的小事开始";
     titleInput.setAttribute("aria-describedby", validation.id);
-    titleInput.addEventListener("input", () => { draft.title = titleInput.value; onChange(); });
+    const counter = element("span", "todo-title-count");
+    counter.setAttribute("aria-hidden", "true");
+    titleField.append(counter);
+    const duplicate = element("p", "todo-title-hint");
+    duplicate.setAttribute("aria-live", "polite");
+    titleField.after(duplicate);
+    const note = $("todo-draft-note");
+    const update = () => {
+      validation.hidden = true;
+      const title = draft.title.trim();
+      counter.textContent = `${draft.title.length}/${LIMITS.maxTaskTitle}`;
+      $("save-todo-sheet").classList.toggle("is-empty", !title);
+      duplicate.textContent = title && state.tasks.some(item => item.id !== id && !item.done && !item.archived && item.title.trim() === title)
+        ? "清单里已有同名待办，仍可保存。" : "";
+      const changed = !sameTaskContent(draft, freshTaskDraft(task));
+      note.hidden = !changed;
+      if (!changed) return note.replaceChildren();
+      if (!restored) return note.replaceChildren(document.createTextNode("已暂存草稿，关闭不会丢，刷新后重置。"));
+      const reset = taskButton(task ? "撤回修改" : "清空重写", "text-button todo-draft-reset", () => {
+        state.taskDrafts.delete(state.taskEditorId);
+        taskEditor(id);
+      });
+      note.replaceChildren(document.createTextNode("接着上次没写完的 · "), reset);
+    };
+    titleInput.addEventListener("input", () => { draft.title = titleInput.value; update(); });
+    const categoryLabel = element("p", "todo-field-label", "分类");
     const categories = element("div", "todo-category-choices");
     categories.setAttribute("role", "group");
     categories.setAttribute("aria-label", "待办分类");
@@ -816,6 +863,7 @@
           button.classList.toggle("selected", selected);
           button.setAttribute("aria-pressed", String(selected));
         });
+        update();
       });
       choice.setAttribute("aria-pressed", String(category === draft.category));
       categories.append(choice);
@@ -825,20 +873,41 @@
     checkbox.type = "checkbox";
     checkbox.name = "important";
     checkbox.checked = draft.important;
-    checkbox.addEventListener("change", () => { draft.important = checkbox.checked; });
-    important.append(checkbox, document.createTextNode("标为重要，放在最前面"));
-    body.append(categories, important, buildStepEditor(draft, !!task?.done, onChange), validation);
+    checkbox.addEventListener("change", () => { draft.important = checkbox.checked; update(); });
+    important.append(checkbox, element("span", "", "重要"), element("span", "todo-important-hint", "放在最前面"));
+    const stepEditor = buildStepEditor(draft, locked, update);
+    body.append(categoryLabel, categories, important, stepEditor);
     if (task) {
       const actions = element("div", "todo-editor-actions");
       actions.append(taskButton("删除待办", "text-button danger-button", () => { closeTaskSheet(); deleteTask(task.id); }));
       body.append(actions);
     }
+    const showError = (message, anchor, focusTarget) => {
+      anchor.after(validation);
+      validation.textContent = message;
+      validation.hidden = false;
+      focusTarget?.focus({ preventScroll: true });
+      validation.scrollIntoView({ block: "nearest" });
+    };
     $("todo-form").onsubmit = event => {
       event.preventDefault();
+      const problem = taskFormProblem(draft, locked);
+      if (problem?.step === -1) return showError(problem.message, titleField, titleInput);
+      if (problem) {
+        stepEditor.open = true;
+        const row = stepEditor.querySelector(`.step-editor-row[data-step-index="${problem.step}"]`);
+        return showError(problem.message, row || stepEditor, row?.querySelector("input"));
+      }
       try {
         const current = state.tasks.find(item => item.id === id);
         if (id && !current) throw new Error("这件待办已被删除，请关闭面板。");
-        const validated = validateTask(draft);
+        // 点了「加一步」却没填的空行直接忽略；已完成项不能删步，空名在上面已拦下。
+        const validated = validateTask({ ...draft, steps: locked ? draft.steps : draft.steps.filter(step => step.title.trim()) });
+        if (current && sameTaskContent(validated, current)) {
+          state.taskDrafts.delete(state.taskEditorId);
+          return closeTaskSheet();
+        }
+        let savedId = id;
         if (current) {
           const next = { ...current, ...validated };
           // 小步被删光时不该把已完成的事回退成未完成。
@@ -849,8 +918,10 @@
           state.filter = next.archived ? "archived" : next.done ? "done" : "pending";
         } else {
           if (state.tasks.length >= LIMITS.maxTasks) throw new Error(`演示最多支持 ${LIMITS.maxTasks} 个待办。`);
-          state.tasks.push({ ...validated, id: `new-${state.nextTaskId++}`, done: false, completedAt: null,
+          savedId = `new-${state.nextTaskId++}`;
+          state.tasks.push({ ...validated, id: savedId, done: false, completedAt: null,
             createdAt: localDateKey(new Date()), archived: false });
+          state.lastTaskCategory = validated.category;
           state.filter = "pending";
         }
         state.taskDrafts.delete(state.taskEditorId);
@@ -858,16 +929,24 @@
         $("task-search").value = "";
         closeTaskSheet();
         renderTasks();
+        markSavedTask(savedId);
         toast(task ? "修改已保存。" : "记下了，从第一步开始。" );
       } catch (error) {
-        validation.textContent = error.message;
-        validation.hidden = false;
-        validation.scrollIntoView({ block: "nearest" });
+        showError(error.message, stepEditor);
       }
     };
+    update();
     syncTaskViewport();
-    $("todo-sheet").showModal();
+    if (!$("todo-sheet").open) $("todo-sheet").showModal();
     titleInput.focus();
+  }
+
+  /** 保存后把卡片带进视野并轻闪一次；动画只靠 CSS，下次渲染自然清掉。 */
+  function markSavedTask(id) {
+    const wrapper = [...$("task-list").querySelectorAll(".task-swipe")].find(node => node.dataset.taskId === id);
+    if (!wrapper) return;
+    wrapper.scrollIntoView({ block: "nearest" });
+    wrapper.querySelector(".task-card")?.classList.add("just-saved");
   }
 
   function syncTaskViewport() {

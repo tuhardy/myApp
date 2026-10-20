@@ -62,9 +62,13 @@ internal object TodoUiLimits {
     const val SWIPE_THRESHOLD_DP = 36
     const val MIN_YEAR = 1900
     const val HISTORY_HEADER_ITEMS = 2
+    const val SAVED_FLASH_MS = 1200
 }
 
 internal enum class TodoFinishPhase { HOLD, EXIT }
+
+/** token 让同一件事连续保存也能重新触发闪动。 */
+internal data class TodoSaved(val id: String, val token: Long)
 
 @Stable
 internal class TodoFinish(val token: Long, val beganAt: Long) {
@@ -91,6 +95,8 @@ internal class TodoUiState {
     var undated by mutableStateOf(false)
     var openSwipeId by mutableStateOf<String?>(null)
     var reduceMotion by mutableStateOf(false)
+    /** 刚保存的待办：列表滚到它并轻闪一次；只是界面提示，不代表持久化状态。 */
+    var justSaved by mutableStateOf<TodoSaved?>(null)
     val expanded = mutableStateMapOf<String, Boolean>()
     val undo = mutableStateListOf<TodoUndoEntry>()
     val finishing = mutableStateMapOf<String, TodoFinish>()
@@ -145,7 +151,7 @@ internal class TodoUiState {
     }
     fun clear() {
         filter = TodoFilter.PENDING; month = YearMonth.now(); query = ""; undated = false; openSwipeId = null
-        views.clear(); expanded.clear(); undo.clear(); finishing.clear()
+        views.clear(); expanded.clear(); undo.clear(); finishing.clear(); justSaved = null
     }
 }
 
@@ -535,11 +541,14 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             }
             "todo" -> {
                 if (dialogTodo == null && ui.dialogId.isNotEmpty()) InformationDialog("这件事已不在清单中", listOf("待办可能已在其他窗口删除，请返回清单查看。"), { ui.close() })
-                else TodoEditorDialog(dialogTodo, ui.busy, { ui.close() }, onDelete = ::deleteTodo, onRestore = ::restoreTodo) { todo ->
+                else TodoEditorDialog(dialogTodo, ui.busy, { ui.close() }, onDelete = ::deleteTodo, onRestore = ::restoreTodo,
+                    todos = state.todos) { todo ->
                     val draftId = ui.dialogId.takeIf { it.isNotEmpty() }
                     ui.perform {
                         repository.saveTodo(todo, existing = draftId != null)
                         TodoDrafts.remove(draftId)
+                        if (draftId == null) TodoDrafts.lastCategory = todo.category
+                        ui.todos.justSaved = TodoSaved(todo.id, SystemClock.elapsedRealtime())
                         val saved = repository.state.value.todos.find { it.id == todo.id }
                         when {
                             saved?.archived == true -> ui.todos.setFilter(TodoFilter.ARCHIVED)

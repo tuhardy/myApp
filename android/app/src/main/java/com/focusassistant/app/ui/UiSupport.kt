@@ -25,7 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -42,14 +42,21 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -76,6 +83,7 @@ internal object UiLimits {
     const val MAX_PERCENT = 100
     const val RECORD_PAGE = 20
     const val TODO_GUIDE_HEIGHT_FRACTION = 0.85f
+    const val TODO_EDITOR_HEIGHT_FRACTION = 0.9f
     /** 与待办分组共用一份分类顺序，避免编辑器与分组各自漂移。 */
     val CATEGORIES = TodoGrouping.CATEGORIES
     val PRESETS = listOf(15, 25, 45, 60)
@@ -432,16 +440,17 @@ internal fun TodoGuideSheet(onDismiss: () -> Unit) {
                 IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "关闭使用指南", tint = Muted, modifier = Modifier.size(20.dp)) }
             }
             Column(Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                .padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 TODO_GUIDE_SECTIONS.forEach { (title, detail) ->
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
-                        Text(detail, color = Muted, fontSize = 13.sp, lineHeight = 20.sp)
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(title, color = AccentDark, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
+                        Text(detail, color = Muted, fontSize = 13.sp, lineHeight = 22.sp)
                     }
                 }
             }
-            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End).padding(horizontal = 12.dp, vertical = 4.dp)) {
-                Text("知道了")
+            Button(onClick = onDismiss, shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 20.dp).heightIn(min = 52.dp)) {
+                Text("知道了", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -451,11 +460,13 @@ internal data class TodoDraft(val value: Todo, val stepsOpen: Boolean)
 
 internal object TodoDrafts {
     private val drafts = mutableMapOf<String?, TodoDraft>()
+    /** 新建默认沿用上次保存的分类，仅进程内存，恢复备份时随草稿一起清空。 */
+    var lastCategory: String? = null
+    fun fresh(todo: Todo?): Todo = todo ?: Todo(UUID.randomUUID().toString(), "", lastCategory ?: UiLimits.CATEGORIES.first())
+    /** 打开前调用：已有草稿且内容与原样不同，面板才提示「接着上次没写完的」。 */
+    fun restored(todo: Todo?): Boolean = drafts[todo?.id]?.let { !TodoEditing.sameContent(it.value, fresh(todo)) } == true
     fun open(todo: Todo?): TodoDraft {
-        val draft = drafts[todo?.id] ?: TodoDraft(
-            todo ?: Todo(UUID.randomUUID().toString(), "", UiLimits.CATEGORIES.first()),
-            todo?.steps?.isNotEmpty() == true
-        )
+        val draft = drafts[todo?.id] ?: TodoDraft(fresh(todo), todo?.steps?.isNotEmpty() == true)
         return sync(draft, todo).also { put(todo?.id, it) }
     }
     fun sync(draft: TodoDraft, current: Todo?): TodoDraft {
@@ -470,7 +481,7 @@ internal object TodoDrafts {
     }
     fun put(id: String?, draft: TodoDraft) { drafts[id] = draft }
     fun remove(id: String?) { drafts.remove(id) }
-    fun clear() = drafts.clear()
+    fun clear() { drafts.clear(); lastCategory = null }
     fun removeMissing(ids: Set<String>) { drafts.keys.removeAll { it != null && it !in ids } }
 }
 
@@ -483,11 +494,14 @@ internal fun TodoEditorDialog(
     /** 删除与找回保留在编辑弹层，删除直接回调，由清单提供撤销。 */
     onDelete: (Todo) -> Unit,
     onRestore: (Todo) -> Unit,
+    /** 用于同名提醒的现有待办；只提醒，不阻止保存。 */
+    todos: List<Todo> = emptyList(),
     onSave: (Todo) -> Unit
 ) {
     // 草稿按待办保留在进程内存，所有关闭方式均保留；保存成功后由调用方清除。
+    var restored by remember(todo?.id) { mutableStateOf(TodoDrafts.restored(todo)) }
     var draft by remember(todo?.id) { mutableStateOf(TodoDrafts.open(todo)) }
-    var error by remember(todo?.id) { mutableStateOf<String?>(null) }
+    var error by remember(todo?.id) { mutableStateOf<TodoFormProblem?>(null) }
     var focusStep by remember(todo?.id) { mutableStateOf<String?>(null) }
     val titleFocus = remember(todo?.id) { FocusRequester() }
     val focusManager = LocalFocusManager.current
@@ -498,6 +512,10 @@ internal fun TodoEditorDialog(
     )
     val locked = todo?.done == true
     val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+    val maximumHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() } * UiLimits.TODO_EDITOR_HEIGHT_FRACTION
+    val titleEmpty = draft.value.title.isBlank()
+    val changed = !TodoEditing.sameContent(draft.value, TodoDrafts.fresh(todo))
+    val duplicate = TodoEditing.hasDuplicate(todos, todo?.id ?: draft.value.id, draft.value.title)
     fun edit(block: (TodoDraft) -> TodoDraft) {
         if (busy) return
         draft = block(draft)
@@ -516,15 +534,24 @@ internal fun TodoEditorDialog(
     }
     ModalBottomSheet(
         onDismissRequest = { if (!busy) onDismiss() }, sheetState = sheetState,
-        containerColor = Color.White, shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp), dragHandle = null
+        containerColor = Color.White, shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
+        dragHandle = {
+            Box(Modifier.padding(top = 8.dp).size(width = 36.dp, height = 4.dp).clip(RoundedCornerShape(2.dp)).background(Line)
+                .clearAndSetSemantics {})
+        }
     ) {
         LaunchedEffect(titleFocus) { titleFocus.requestFocus() }
-        Column(Modifier.fillMaxWidth().fillMaxHeight(0.94f).imePadding()) {
+        @Composable fun ErrorNote(problem: TodoFormProblem) {
+            Text(problem.message, color = AccentDark, fontSize = 12.sp, lineHeight = 19.sp,
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(AccentSoft).padding(12.dp)
+                    .semantics { liveRegion = LiveRegionMode.Assertive })
+        }
+        Column(Modifier.fillMaxWidth().heightIn(max = maximumHeight).imePadding()) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(enabled = !busy, onClick = onDismiss) { Text("取消", color = Muted) }
+                TextButton(enabled = !busy, onClick = onDismiss) { Text("取消", color = Muted, fontSize = 13.sp) }
                 Text(
                     if (todo == null) "记下一件事" else "编辑待办",
                     modifier = Modifier.weight(1f), textAlign = TextAlign.Center,
@@ -532,44 +559,65 @@ internal fun TodoEditorDialog(
                 )
                 Button(enabled = !busy, shape = RoundedCornerShape(10.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), onClick = {
                     val value = TodoDrafts.sync(draft, todo).value
-                    val trimmed = value.steps.map { it.copy(title = it.title.trim()) }
+                    val problem = TodoEditing.problem(value, locked)
                     when {
-                        value.title.isBlank() -> {
-                            error = "请输入待办名称。"
+                        problem?.stepId == null && problem != null -> {
+                            error = problem
                             titleFocus.requestFocus()
                         }
-                        trimmed.any { it.title.isBlank() } -> {
+                        problem != null -> {
                             edit { it.copy(stepsOpen = true) }
-                            focusStep = trimmed.first { it.title.isBlank() }.id
-                            error = if (locked) "每个小步都要有名字。" else "每个小步都要有名字，或删掉它。"
+                            error = problem
+                            focusStep = problem.stepId
                         }
                         else -> {
-                            // 提交编辑字段，完成状态与时间由真实待办及领域保存规则决定。
-                            onSave(value.copy(title = value.title.trim(), steps = trimmed))
+                            // 没填的空小步直接忽略；完成状态与时间由真实待办及领域保存规则决定。
+                            val prepared = TodoEditing.prepare(value, locked)
+                            if (todo != null && TodoEditing.sameContent(prepared, todo)) {
+                                TodoDrafts.remove(todo.id)
+                                onDismiss()
+                            } else onSave(prepared)
                         }
                     }
-                }) { Text(if (busy) "保存中" else if (todo == null) "添加待办" else "保存修改") }
+                }, colors = ButtonDefaults.buttonColors(
+                    // 标题为空时弱化但仍可点，点了走就近报错。
+                    containerColor = if (titleEmpty) AccentSoft else Accent, contentColor = if (titleEmpty) AccentDark else Color.White
+                )) { Text(if (busy) "保存中" else if (todo == null) "添加待办" else "保存修改", fontSize = 13.sp) }
             }
             HorizontalDivider(color = Line)
             Column(
-                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 28.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp).padding(top = 12.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                OutlinedTextField(
+                // 下划线输入框：去掉外框，聚焦时线变暖橙，下方是同名提醒与字数。
+                TextField(
                     value = draft.value.title,
                     onValueChange = { value -> if (value.length <= UiLimits.MAX_TITLE) edit { it.copy(value = it.value.copy(title = value)) } },
                     enabled = !busy, label = { Text("想做什么？") }, placeholder = { Text("从一件具体的小事开始") },
-                    singleLine = true, isError = error != null && draft.value.title.isBlank(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, unfocusedBorderColor = Line,
-                        focusedLabelColor = AccentDark, unfocusedLabelColor = Muted, cursorColor = Accent),
+                    singleLine = true, isError = error != null && error?.stepId == null,
+                    textStyle = TextStyle(fontSize = 17.sp),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.White, unfocusedContainerColor = Color.White,
+                        disabledContainerColor = Color.White, errorContainerColor = Color.White,
+                        focusedIndicatorColor = Accent, unfocusedIndicatorColor = Line, errorIndicatorColor = AccentDark,
+                        focusedLabelColor = AccentDark, unfocusedLabelColor = Muted, errorLabelColor = AccentDark, cursorColor = Accent
+                    ),
+                    supportingText = {
+                        Row(Modifier.fillMaxWidth()) {
+                            Text(if (duplicate) "清单里已有同名待办，仍可保存。" else "", color = Muted, fontSize = 11.sp,
+                                modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite })
+                            Text("${draft.value.title.length}/${UiLimits.MAX_TITLE}", color = Muted, fontSize = 11.sp,
+                                modifier = Modifier.clearAndSetSemantics {})
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth().focusRequester(titleFocus),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() })
                 )
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                error?.takeIf { it.stepId == null }?.let { ErrorNote(it) }
+                Text("分类", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                Row(Modifier.fillMaxWidth().padding(top = 0.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     UiLimits.CATEGORIES.forEach { category ->
                         FilterChip(
                             selected = draft.value.category == category, enabled = !busy,
@@ -583,14 +631,22 @@ internal fun TodoEditorDialog(
                         )
                     }
                 }
+                // 「重要」与分类同一套胶囊样式，选中变暖橙；读屏仍是复选框。
+                val important = draft.value.important
                 Row(
-                    Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(
-                        value = draft.value.important, enabled = !busy, role = Role.Checkbox,
-                        onValueChange = { value -> edit { it.copy(value = it.value.copy(important = value)) } }
-                    ), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(22.dp))
+                        .background(if (important) AccentSoft else Color.White)
+                        .border(1.dp, if (important) Accent else Line, RoundedCornerShape(22.dp))
+                        .toggleable(
+                            value = important, enabled = !busy, role = Role.Checkbox,
+                            onValueChange = { value -> edit { it.copy(value = it.value.copy(important = value)) } }
+                        ).padding(start = 10.dp, end = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Checkbox(checked = draft.value.important, onCheckedChange = null, enabled = !busy, modifier = Modifier.size(24.dp))
-                    Text("标为重要，放在最前面", modifier = Modifier.weight(1f), fontSize = 13.sp)
+                    Checkbox(checked = important, onCheckedChange = null, enabled = !busy, modifier = Modifier.size(24.dp),
+                        colors = CheckboxDefaults.colors(checkedColor = Accent, uncheckedColor = Muted))
+                    Text("重要", fontSize = 13.sp, color = if (important) AccentDark else Ink)
+                    Text("放在最前面", fontSize = 11.sp, color = Muted)
                 }
                 HorizontalDivider(color = Line)
                 Row(
@@ -598,11 +654,9 @@ internal fun TodoEditorDialog(
                         edit { it.copy(stepsOpen = !it.stepsOpen) }
                     }, verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        "拆成小步 · ${if (draft.value.steps.isEmpty()) "可选" else "${draft.value.steps.size} 步"}",
-                        modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium
-                    )
-                    Text(if (draft.stepsOpen) "收起" else "展开", color = Muted, fontSize = 12.sp)
+                    Text(if (draft.stepsOpen) "▾" else "▸", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(end = 6.dp))
+                    Text("拆成小步", modifier = Modifier.weight(1f), fontSize = 13.sp)
+                    Text(if (draft.value.steps.isEmpty()) "可选" else "${draft.value.steps.size} 步", color = Muted, fontSize = 12.sp)
                 }
                 if (draft.stepsOpen) {
                     draft.value.steps.forEachIndexed { index, step ->
@@ -622,9 +676,8 @@ internal fun TodoEditorDialog(
                             }
                             Row(
                                 Modifier.fillMaxWidth().heightIn(min = 48.dp).bringIntoViewRequester(bringIntoView),
-                                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Text("${index + 1}", color = Muted, fontSize = 13.sp)
                                 BasicTextField(
                                     value = step.title, enabled = !busy, singleLine = true,
                                     onValueChange = { value ->
@@ -635,7 +688,7 @@ internal fun TodoEditorDialog(
                                     modifier = Modifier.weight(1f).heightIn(min = 48.dp).focusRequester(requester)
                                         .onFocusChanged { focused = it.isFocused }
                                         .semantics { contentDescription = "第 ${index + 1} 步" },
-                                    textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 15.sp),
+                                    textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp),
                                     cursorBrush = SolidColor(Accent),
                                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                                     keyboardActions = KeyboardActions(onNext = {
@@ -647,37 +700,74 @@ internal fun TodoEditorDialog(
                                     decorationBox = { input ->
                                         Box(
                                             Modifier.fillMaxWidth().heightIn(min = 48.dp).border(1.dp, Line, RoundedCornerShape(10.dp))
-                                                .padding(horizontal = 12.dp, vertical = 12.dp), contentAlignment = Alignment.CenterStart
+                                                .padding(10.dp), contentAlignment = Alignment.CenterStart
                                         ) {
-                                            if (step.title.isEmpty()) Text("写下一个小步", color = Muted, fontSize = 15.sp)
                                             input()
                                         }
                                     }
                                 )
-                                if (!locked) IconButton(
-                                    enabled = !busy, modifier = Modifier.size(48.dp),
-                                    onClick = { edit { d -> d.copy(value = d.value.copy(steps = d.value.steps.filterNot { it.id == step.id })) } }
-                                ) { Icon(Icons.Outlined.DeleteOutline, "删除第 ${index + 1} 步", tint = Muted) }
+                                if (!locked) Box(
+                                    Modifier.size(width = 44.dp, height = 48.dp).clip(RoundedCornerShape(9.dp))
+                                        .clickable(enabled = !busy, role = Role.Button) {
+                                            edit { d -> d.copy(value = d.value.copy(steps = d.value.steps.filterNot { it.id == step.id })) }
+                                        }.semantics { contentDescription = "删除第 ${index + 1} 步" },
+                                    contentAlignment = Alignment.Center
+                                ) { Text("×", color = Muted, fontSize = 14.sp) }
                             }
+                            error?.takeIf { it.stepId == step.id }?.let { ErrorNote(it) }
                         }
                     }
                     if (locked) Text("已完成的步骤仅可改名。需要重做时，请在详情中选择「重新打开」。", color = Muted, fontSize = 12.sp)
-                    else TextButton(
-                        enabled = !busy && draft.value.steps.size < Validation.MAX_STEPS,
-                        onClick = ::addStep, modifier = Modifier.heightIn(min = 48.dp)
-                    ) { Text(if (draft.value.steps.size >= Validation.MAX_STEPS) "最多 ${Validation.MAX_STEPS} 步" else "加一步") }
+                    else {
+                        val full = draft.value.steps.size >= Validation.MAX_STEPS
+                        Row(
+                            Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp))
+                                .drawBehind {
+                                    val stroke = 1.dp.toPx()
+                                    drawRoundRect(Color(0xFFC9C9C9), topLeft = Offset(stroke / 2, stroke / 2),
+                                        size = Size(size.width - stroke, size.height - stroke), cornerRadius = CornerRadius(12.dp.toPx()),
+                                        style = Stroke(stroke, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))))
+                                }
+                                .clickable(enabled = !busy && !full, role = Role.Button, onClick = ::addStep)
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (!full) Icon(Icons.Outlined.Add, null, tint = AccentDark, modifier = Modifier.padding(end = 4.dp).size(14.dp))
+                            Text(if (full) "最多 ${Validation.MAX_STEPS} 步" else "加一步", color = if (full) Muted else AccentDark, fontSize = 12.sp)
+                        }
+                    }
                 }
                 if (todo != null) {
                     HorizontalDivider(color = Line)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (todo.archived) TextButton(enabled = !busy, onClick = { onRestore(todo) }) { Text("找回") }
-                        TextButton(enabled = !busy, onClick = { onDelete(todo) }) { Text("删除待办", color = AccentDark) }
+                        TextButton(enabled = !busy, onClick = { onDelete(todo) }, modifier = Modifier.heightIn(min = 48.dp),
+                            contentPadding = PaddingValues(horizontal = 0.dp)) { Text("删除待办", color = AccentDark, fontSize = 12.sp) }
                     }
                 }
             }
-            HorizontalDivider(color = Line)
-            Text("关闭保留草稿，保存后清除。", color = Muted, fontSize = 11.sp, textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 9.dp))
+            // 草稿提示只在有改动时出现；恢复出来的旧草稿可一键清空重写或撤回修改。
+            if (changed) {
+                HorizontalDivider(color = Line)
+                Row(Modifier.fillMaxWidth().heightIn(min = 36.dp).padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    if (!restored) Text("已暂存草稿，关闭不会丢。", color = Muted, fontSize = 11.sp)
+                    else {
+                        Text("接着上次没写完的 · ", color = Muted, fontSize = 11.sp)
+                        TextButton(enabled = !busy, contentPadding = PaddingValues(horizontal = 4.dp), modifier = Modifier.heightIn(min = 36.dp),
+                            onClick = {
+                                TodoDrafts.remove(todo?.id)
+                                draft = TodoDrafts.open(todo)
+                                restored = false
+                                error = null
+                                titleFocus.requestFocus()
+                            }) {
+                            Text(if (todo == null) "清空重写" else "撤回修改", color = AccentDark, fontSize = 11.sp,
+                                textDecoration = TextDecoration.Underline)
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -147,10 +147,10 @@ class TodosScreenshotTest {
         descriptions.any { description -> parts.all { description.contains(it) } }
     }
 
-    private fun renderEditor(todo: Todo?, onSave: (Todo) -> Unit = {}) {
+    private fun renderEditor(todo: Todo?, todos: List<Todo> = emptyList(), onDismiss: () -> Unit = {}, onSave: (Todo) -> Unit = {}) {
         compose.setContent {
             FocusTheme {
-                TodoEditorDialog(todo, busy = false, onDismiss = {}, onDelete = {}, onRestore = {}, onSave = onSave)
+                TodoEditorDialog(todo, busy = false, onDismiss = onDismiss, onDelete = {}, onRestore = {}, todos = todos, onSave = onSave)
             }
         }
     }
@@ -323,11 +323,59 @@ class TodosScreenshotTest {
         compose.onNodeWithText(todo.steps.last().title).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("保存修改").assertIsDisplayed()
         capture("todos-edit-eight-steps-scrolled", dialog = true)
+        compose.onNode(hasSetTextAction() and hasText(todo.steps.last().title)).performTextReplacement("改过的最后一步")
         compose.onNodeWithText("保存修改").performClick()
         compose.runOnIdle {
-            assertEquals(todo.steps, requireNotNull(saved).steps)
+            assertEquals(todo.steps.dropLast(1), requireNotNull(saved).steps.dropLast(1))
+            assertEquals("改过的最后一步", requireNotNull(saved).steps.last().title)
             assertEquals(todo.title, requireNotNull(saved).title)
         }
+    }
+
+    @Test fun unchangedEditClosesWithoutSaving() {
+        var saved: Todo? = null
+        var dismissed = 0
+        renderEditor(sampleTodos()[1], onDismiss = { dismissed++ }) { saved = it }
+        compose.onNodeWithText("已暂存草稿", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("保存修改").performClick()
+        compose.runOnIdle {
+            assertEquals(null, saved)
+            assertEquals(1, dismissed)
+        }
+    }
+
+    @Test fun blankStepsAreSkippedAndTitleErrorStaysByTitle() {
+        var saved: Todo? = null
+        renderEditor(null, todos = sampleTodos()) { saved = it }
+        compose.onNodeWithText("添加待办").performClick()
+        compose.onNodeWithText("任务名称不能为空", substring = true).assertIsDisplayed()
+        compose.runOnIdle { assertEquals(null, saved) }
+        compose.onNode(hasSetTextAction() and hasText("想做什么？")).performTextReplacement(sampleTodos().first().title)
+        compose.onNodeWithText("清单里已有同名待办", substring = true).assertExists()
+        compose.onNodeWithText("已暂存草稿", substring = true).assertExists()
+        compose.onNode(hasText("拆成小步") and hasClickAction()).performScrollTo().performClick()
+        compose.onNodeWithText("加一步").performScrollTo().performClick()
+        compose.onNode(hasSetTextAction() and hasContentDescription("第 1 步")).performTextReplacement("先做这一步")
+        compose.onNodeWithText("加一步").performScrollTo().performClick()
+        capture("todos-create-blank-step", dialog = true)
+        compose.onNodeWithText("添加待办").performClick()
+        compose.runOnIdle {
+            val result = requireNotNull(saved)
+            assertEquals(sampleTodos().first().title, result.title)
+            assertEquals(listOf("先做这一步"), result.steps.map { it.title })
+        }
+    }
+
+    @Test fun completedStepCannotBeBlankAndErrorNamesTheStep() {
+        val todo = sampleTodos()[1].let { source ->
+            source.copy(done = true, completedAt = now, steps = source.steps.map { it.copy(done = true) })
+        }
+        var saved: Todo? = null
+        renderEditor(todo) { saved = it }
+        compose.onNode(hasSetTextAction() and hasText(todo.steps[1].title)).performScrollTo().performTextReplacement("")
+        compose.onNodeWithText("保存修改").performClick()
+        compose.onNodeWithText("第 2 步", substring = true).performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { assertEquals(null, saved) }
     }
 
     @Test fun completionFeedbackUsesAlreadyCompletedRecord() {
@@ -583,6 +631,16 @@ class TodosScreenshotTest {
         compose.onNodeWithText("测试重新打开草稿").performClick()
         compose.onNode(hasSetTextAction() and hasText("未保存的待办草稿")).assertExists()
         compose.onNode(hasSetTextAction() and hasText("尚未保存的小步")).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("接着上次没写完的", substring = true).assertExists()
         compose.runOnIdle { assertEquals(0, saves) }
+        compose.onNodeWithText("清空重写").performClick()
+        compose.onNode(hasSetTextAction() and hasText("未保存的待办草稿")).assertDoesNotExist()
+        compose.onNodeWithText("接着上次没写完的", substring = true).assertDoesNotExist()
+    }
+
+    @Test fun newDraftDefaultsToLastSavedCategory() {
+        TodoDrafts.lastCategory = "生活"
+        renderEditor(null)
+        compose.onNode(hasText("生活") and isSelected()).assertExists()
     }
 }
