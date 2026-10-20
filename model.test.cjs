@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { Timer, LIMITS, MODES, USAGE, CATEGORIES, initialTasks, taskSummary, groupTasks, validateTask, validateSteps, taskAge, taskProgress, nextStep, daysBetween, formatTime } = require("./model.js");
+const { sampleUsageSegments, focusSpans, usageDaySummary } = require("./model.js");
 const { localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv } = require("./model.js");
 const { completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks } = require("./model.js");
 const { execFileSync } = require("node:child_process");
@@ -764,11 +765,58 @@ test("待办列表隔离实例，空列表进度不产生 NaN", () => {
 });
 
 test("示例统计的总时长、图表与应用分项保持一致", () => {
-  for (const data of Object.values(USAGE)) {
+  for (const data of [USAGE.today, USAGE.week]) {
     assert.equal(data.apps.reduce((sum, app) => sum + app.minutes, 0), data.total);
     assert.equal(data.bars.reduce((sum, value) => sum + value, 0), data.total);
   }
   assert.equal(USAGE.week.bars.at(-1), USAGE.today.total);
+});
+
+test("示例用屏片段与今日汇总、两小时分桶和应用分项一致", () => {
+  const now = new Date(2026, 9, 20, 23, 30);
+  const summary = usageDaySummary(sampleUsageSegments(now), [], now);
+  assert.equal(summary.total, USAGE.today.total);
+  assert.deepEqual(summary.apps, USAGE.today.apps.map(({ name, minutes }) => ({ name, minutes })));
+  const dayStart = periodRange("day", now).start.getTime();
+  const bars = Array(12).fill(0);
+  for (const span of summary.spans) for (let time = span.from; time < span.to; time += 60000) bars[Math.floor((time - dayStart) / 7200000)] += 1;
+  assert.deepEqual(bars, USAGE.today.bars);
+});
+
+test("用屏汇总按日历日裁剪跨午夜片段，夜间足迹取前一晚 23 点至 5 点", () => {
+  const anchor = new Date(2026, 9, 20, 12);
+  const at = (day, hour, minute = 0) => new Date(2026, 9, day, hour, minute).toISOString();
+  const segments = [
+    { app: "微信", startedAt: at(19, 23, 50), endedAt: at(20, 0, 20) },
+    { app: "浏览器", startedAt: at(20, 4, 50), endedAt: at(20, 5, 10) },
+    { app: "微信", startedAt: at(20, 22, 0), endedAt: at(20, 23, 30) },
+    { app: "浏览器", startedAt: at(20, 23, 50), endedAt: at(21, 0, 30) },
+  ];
+  const summary = usageDaySummary(segments, [], anchor);
+  assert.equal(summary.total, 20 + 20 + 90 + 10);
+  assert.deepEqual(summary.apps, [{ name: "微信", minutes: 110 }, { name: "浏览器", minutes: 30 }]);
+  assert.equal(summary.nightMinutes, 30 + 10);
+  assert.equal(summary.lastNightUse.getTime(), new Date(2026, 9, 20, 5).getTime());
+  assert.deepEqual(usageDaySummary([], [], anchor), { spans: [], apps: [], total: 0, nightMinutes: 0, lastNightUse: null, overlapCount: 0 });
+});
+
+test("专注片段按活动段裁剪，重叠计数只算与专注相交的用屏片段", () => {
+  const anchor = new Date(2026, 9, 20, 12);
+  const at = (hour, minute = 0) => new Date(2026, 9, 20, hour, minute).toISOString();
+  const { start, end } = periodRange("day", anchor);
+  const records = [
+    { startedAt: at(9), endedAt: at(10), segments: [{ startedAt: at(9), endedAt: at(9, 20) }, { startedAt: at(9, 40), endedAt: at(10) }] },
+    { startedAt: new Date(2026, 9, 19, 23, 50).toISOString(), endedAt: at(0, 10) },
+  ];
+  const spans = focusSpans(records, start, end);
+  assert.deepEqual(spans, [[start.getTime(), Date.parse(at(0, 10))], [Date.parse(at(9)), Date.parse(at(9, 20))], [Date.parse(at(9, 40)), Date.parse(at(10))]]);
+  const segments = [
+    { app: "微信", startedAt: at(9, 10), endedAt: at(9, 12) },
+    { app: "微信", startedAt: at(9, 25), endedAt: at(9, 35) },
+    { app: "微信", startedAt: at(9, 20), endedAt: at(9, 22) },
+    { app: "微信", startedAt: at(9, 55), endedAt: at(10, 5) },
+  ];
+  assert.equal(usageDaySummary(segments, spans, anchor).overlapCount, 2);
 });
 
 test("HTML ID 唯一且 app.js 的固定 ID 引用存在", () => {
@@ -1300,4 +1348,39 @@ test("CSV 在基础六列后追加模式、独立专注项、目标和实际整�
   });
   assert.ok(exportFocusCsv([record]).endsWith(',"专注计时","正计时","编程","50","61","","",""\r\n'));
   assert.ok(exportFocusCsv([{ ...record, timerMode: "countdown", durationMinutes: 25, durationSeconds: 1500 }]).endsWith(',"专注计时","倒计时","编程","50","1500","","",""\r\n'));
+});
+
+test("全部周期只取截至今天的记录，范围从首个完成日到明天零点，按月趋势补齐空月", () => {
+  const { allTimeRecords, allTimeRange, focusMonthlyTrend } = require("./model.js");
+  const now = new Date(2026, 9, 16, 12);
+  const at = (month, day, hour = 9) => new Date(2026, month, day, hour).toISOString();
+  const records = Object.freeze([
+    Object.freeze({ id: "a", endedAt: at(7, 30), durationMinutes: 30 }),
+    Object.freeze({ id: "b", endedAt: at(9, 16, 10), durationMinutes: 25 }),
+    Object.freeze({ id: "future", endedAt: at(9, 17), durationMinutes: 60 }),
+  ]);
+  assert.deepEqual(allTimeRecords(records, now).map(record => record.id), ["b", "a"]);
+  const range = allTimeRange(records, now);
+  assert.deepEqual([localDateKey(range.start), localDateKey(range.end)], ["2026-08-30", "2026-10-17"]);
+  assert.equal(allTimeRange([], now), null);
+  const trend = focusMonthlyTrend(records, now);
+  assert.deepEqual(trend.map(bin => [bin.key, bin.label, bin.minutes]), [["2026-08", "8月", 30], ["2026-09", "9月", 0], ["2026-10", "10月", 25]]);
+  assert.deepEqual(focusMonthlyTrend([], now), []);
+  assert.equal(focusMonthlyTrend([{ endedAt: new Date(2025, 11, 31).toISOString(), durationMinutes: 5 }], now)[0].label, "25年12月");
+});
+
+test("周期平移按日周月年整段移动，环比与上一周期对比且不修改输入", () => {
+  const { shiftPeriodAnchor, comparePeriods } = require("./model.js");
+  const anchor = new Date(2026, 9, 16, 15);
+  assert.equal(localDateKey(shiftPeriodAnchor("day", anchor, -1)), "2026-10-15");
+  assert.equal(localDateKey(shiftPeriodAnchor("week", anchor, -1)), "2026-10-05");
+  assert.equal(localDateKey(shiftPeriodAnchor("month", new Date(2026, 2, 31), -1)), "2026-02-01");
+  assert.equal(localDateKey(shiftPeriodAnchor("year", anchor, 1)), "2027-01-01");
+  const records = Object.freeze([
+    Object.freeze({ endedAt: new Date(2026, 9, 14).toISOString(), durationMinutes: 40, source: "session" }),
+    Object.freeze({ endedAt: new Date(2026, 9, 8).toISOString(), durationMinutes: 25, source: "sample" }),
+  ]);
+  assert.deepEqual(comparePeriods(records, { period: "week", anchor }), { current: 40, previous: 25, difference: 15 });
+  assert.deepEqual(comparePeriods(records, { period: "week", anchor, includeSamples: false }), { current: 40, previous: 0, difference: 40 });
+  assert.deepEqual(comparePeriods(records, { period: "day", anchor }), { current: 0, previous: 0, difference: 0 });
 });

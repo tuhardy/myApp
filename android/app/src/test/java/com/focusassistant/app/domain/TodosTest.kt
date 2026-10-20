@@ -385,6 +385,45 @@ class TodoEditingTest {
     private val pending = Todo("t", "一件事", "工作", steps = listOf(TodoStep("a", "一", true), TodoStep("b", "二")))
     private fun merge(current: Todo?, draft: Todo) = TodoEditing.merge(current, draft, today, 2000L)
 
+    @Test fun formProblemPointsAtTitleOrTheExactStep() {
+        assertNull(TodoEditing.problem(pending, locked = false))
+        assertNull(TodoEditing.problem(pending.copy(title = "   "), locked = false)?.stepId)
+        assertTrue(TodoEditing.problem(pending.copy(title = "   "), locked = false)!!.message.contains("任务名称"))
+        val blankSecond = pending.copy(steps = listOf(TodoStep("a", "一"), TodoStep("b", "  ")))
+        // 未完成项的空小步会在保存时被忽略，不算问题；已完成项不能删步，空名就近报错。
+        assertNull(TodoEditing.problem(blankSecond, locked = false))
+        val locked = TodoEditing.problem(blankSecond, locked = true)!!
+        assertEquals("b", locked.stepId)
+        assertTrue(locked.message.contains("第 2 步"))
+        val tooLong = pending.copy(steps = listOf(TodoStep("a", "x".repeat(Validation.MAX_STEP_TITLE + 1))))
+        assertEquals("a", TodoEditing.problem(tooLong, locked = false)!!.stepId)
+    }
+
+    @Test fun prepareTrimsAndDropsBlankStepsOnlyWhenEditable() {
+        val draft = pending.copy(title = "  一件事 ", steps = listOf(TodoStep("a", " 一 "), TodoStep("b", "  ")))
+        val editable = TodoEditing.prepare(draft, locked = false)
+        assertEquals("一件事", editable.title)
+        assertEquals(listOf(TodoStep("a", "一")), editable.steps)
+        assertEquals(2, TodoEditing.prepare(draft, locked = true).steps.size)
+    }
+
+    @Test fun sameContentIgnoresWhitespaceAndProgressButNotEdits() {
+        assertTrue(TodoEditing.sameContent(pending, pending.copy(title = " 一件事 ", steps = pending.steps.map { it.copy(done = !it.done) })))
+        assertFalse(TodoEditing.sameContent(pending, pending.copy(category = "生活")))
+        assertFalse(TodoEditing.sameContent(pending, pending.copy(important = true)))
+        assertFalse(TodoEditing.sameContent(pending, pending.copy(steps = pending.steps.take(1))))
+        assertFalse(TodoEditing.sameContent(pending, pending.copy(steps = pending.steps.map { if (it.id == "b") it.copy(title = "改") else it })))
+    }
+
+    @Test fun duplicateHintOnlyCountsOtherLivePendingTodos() {
+        val todos = listOf(pending, Todo("d", "已完成的", "工作", done = true), Todo("x", "放下的", "工作", archived = true))
+        assertTrue(TodoEditing.hasDuplicate(todos, "new", " 一件事 "))
+        assertFalse(TodoEditing.hasDuplicate(todos, "t", "一件事"))
+        assertFalse(TodoEditing.hasDuplicate(todos, "new", "已完成的"))
+        assertFalse(TodoEditing.hasDuplicate(todos, "new", "放下的"))
+        assertFalse(TodoEditing.hasDuplicate(todos, "new", "   "))
+    }
+
     @Test fun newTodoGetsTodayButLegacyEditsDoNotInventCreatedDate() {
         val created = merge(null, pending.copy(done = true, createdAt = "2020-01-01", completedAt = 1000L, archived = true))
         assertEquals(today.toString(), created.createdAt)

@@ -62,9 +62,13 @@ internal object TodoUiLimits {
     const val SWIPE_THRESHOLD_DP = 36
     const val MIN_YEAR = 1900
     const val HISTORY_HEADER_ITEMS = 2
+    const val SAVED_FLASH_MS = 1200
 }
 
 internal enum class TodoFinishPhase { HOLD, EXIT }
+
+/** token 让同一件事连续保存也能重新触发闪动。 */
+internal data class TodoSaved(val id: String, val token: Long)
 
 @Stable
 internal class TodoFinish(val token: Long, val beganAt: Long) {
@@ -91,6 +95,8 @@ internal class TodoUiState {
     var undated by mutableStateOf(false)
     var openSwipeId by mutableStateOf<String?>(null)
     var reduceMotion by mutableStateOf(false)
+    /** 刚保存的待办：列表滚到它并轻闪一次；只是界面提示，不代表持久化状态。 */
+    var justSaved by mutableStateOf<TodoSaved?>(null)
     val expanded = mutableStateMapOf<String, Boolean>()
     val undo = mutableStateListOf<TodoUndoEntry>()
     val finishing = mutableStateMapOf<String, TodoFinish>()
@@ -145,7 +151,7 @@ internal class TodoUiState {
     }
     fun clear() {
         filter = TodoFilter.PENDING; month = YearMonth.now(); query = ""; undated = false; openSwipeId = null
-        views.clear(); expanded.clear(); undo.clear(); finishing.clear()
+        views.clear(); expanded.clear(); undo.clear(); finishing.clear(); justSaved = null
     }
 }
 
@@ -160,6 +166,8 @@ class NativeUiModel : ViewModel() {
     private val todoAnimations = mutableMapOf<String, Job>()
     private var todoAnimationToken = 0L
     var period by mutableStateOf(Period.DAY)
+    /** 统计页第 5 个周期「全部」：为 true 时忽略 period 与 anchor。 */
+    var statsAll by mutableStateOf(false)
     var anchor by mutableStateOf(LocalDate.now())
     var recordLimit by mutableIntStateOf(UiLimits.RECORD_PAGE)
     var usageWeek by mutableStateOf(false)
@@ -345,15 +353,17 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             val snapshot = repository.state.value
             val period = ui.period
             val anchor = ui.anchor
-            val records = Statistics.select(snapshot.sessions, period, anchor)
+            val allPeriod = ui.statsAll
+            val records = if (allPeriod) Statistics.allTimeSessions(snapshot.sessions) else Statistics.select(snapshot.sessions, period, anchor)
             require(records.isNotEmpty()) { "当前周期没有可导出的完成记录。" }
             val text = withContext(Dispatchers.Default) {
                 if (csv) Statistics.csv(records, snapshot.progress)
-                else ExportCodec.statisticsJson(records, snapshot.progress, snapshot.sessions, period, anchor)
+                else ExportCodec.statisticsJson(records, snapshot.progress, snapshot.sessions, period, anchor, allPeriod)
             }
             ui.pendingExport = text
             ui.close()
-            if (csv) csvLauncher.launch("专注统计_${anchor}_${period.name}.csv") else jsonLauncher.launch("专注统计_${anchor}_${period.name}.json")
+            val name = if (allPeriod) "专注统计_全部_${LocalDate.now()}" else "专注统计_${anchor}_${period.name}"
+            if (csv) csvLauncher.launch("$name.csv") else jsonLauncher.launch("$name.json")
         }
     }
 
@@ -482,13 +492,21 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                         help = { ui.open("diary-help") },
                         message = ui::message
                     ))
-                    Screen.STATISTICS -> StatisticsScreen(state, ui.period, ui.anchor, ui.recordLimit, { ui.period = it; ui.recordLimit = UiLimits.RECORD_PAGE }, {
-                        ui.anchor = shiftPeriod(ui.period, ui.anchor, -1); ui.recordLimit = UiLimits.RECORD_PAGE
-                    }, { ui.anchor = shiftPeriod(ui.period, ui.anchor, 1); ui.recordLimit = UiLimits.RECORD_PAGE }, { ui.anchor = LocalDate.now(); ui.period = Period.DAY }, {
-                        DatePickerDialog(context, { _, year, month, day -> ui.anchor = LocalDate.of(year, month + 1, day); ui.recordLimit = UiLimits.RECORD_PAGE }, ui.anchor.year, ui.anchor.monthValue - 1, ui.anchor.dayOfMonth).show()
-                    }, { ui.screen = Screen.PROJECTS }, { ui.open("statistics-help") }, { ui.open("export") }, { ui.recordLimit += UiLimits.RECORD_PAGE }, { ui.open("progress-edit", it.id) }, { ui.anchor = it; ui.period = Period.DAY; ui.recordLimit = UiLimits.RECORD_PAGE }, today)
-                    Screen.USAGE -> UsageScreen(usageReport, usageAllowed, usageLoading, usageError, ui.usageWeek, state.settings,
-                        { context.startActivity(usageMonitor.permissionIntent()) }, { refresh++ }, { ui.usageWeek = it }, { ui.open("usage-goal") }, { enabled ->
+                    Screen.STATISTICS -> StatisticsScreen(state, ui.period, ui.statsAll, ui.anchor, ui.recordLimit, today,
+                        onPeriod = { ui.period = it; ui.statsAll = false; ui.recordLimit = UiLimits.RECORD_PAGE },
+                        onAll = { ui.statsAll = true; ui.recordLimit = UiLimits.RECORD_PAGE },
+                        onPrevious = { ui.anchor = Statistics.shift(ui.period, ui.anchor, -1); ui.recordLimit = UiLimits.RECORD_PAGE },
+                        onNext = { ui.anchor = Statistics.shift(ui.period, ui.anchor, 1); ui.recordLimit = UiLimits.RECORD_PAGE },
+                        onToday = { ui.anchor = LocalDate.now(); ui.recordLimit = UiLimits.RECORD_PAGE },
+                        onAnchor = { ui.anchor = it; ui.recordLimit = UiLimits.RECORD_PAGE },
+                        onPickDate = {
+                            DatePickerDialog(context, { _, year, month, day -> ui.anchor = LocalDate.of(year, month + 1, day); ui.recordLimit = UiLimits.RECORD_PAGE }, ui.anchor.year, ui.anchor.monthValue - 1, ui.anchor.dayOfMonth).show()
+                        },
+                        onBack = { ui.screen = Screen.PROJECTS }, onHelp = { ui.open("statistics-help") }, onExport = { ui.open("export") },
+                        onMoreRecords = { ui.recordLimit += UiLimits.RECORD_PAGE }, onProgress = { ui.open("progress-edit", it.id) },
+                        onSelectDay = { ui.anchor = it; ui.period = Period.DAY; ui.statsAll = false; ui.recordLimit = UiLimits.RECORD_PAGE })
+                    Screen.USAGE -> UsageScreen(usageReport, usageAllowed, usageLoading, usageError, ui.usageWeek, state.settings, state.sessions,
+                        { context.startActivity(usageMonitor.permissionIntent()) }, { refresh++ }, { ui.usageWeek = it }, { ui.open("usage-goal") }, { ui.open("usage-zoom") }, { enabled ->
                             if (enabled && !usageAllowed) ui.message("请先授予使用情况访问权限。")
                             else ui.perform { repository.saveSettings(state.settings.copy(usageReminders = enabled)); if (enabled && !notificationAllowed) ui.message("请在我的页面授权通知，否则超时提醒不可见。") }
                         }, { ui.open("usage-help") }, today)
@@ -523,11 +541,14 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             }
             "todo" -> {
                 if (dialogTodo == null && ui.dialogId.isNotEmpty()) InformationDialog("这件事已不在清单中", listOf("待办可能已在其他窗口删除，请返回清单查看。"), { ui.close() })
-                else TodoEditorDialog(dialogTodo, ui.busy, { ui.close() }, onDelete = ::deleteTodo, onRestore = ::restoreTodo) { todo ->
+                else TodoEditorDialog(dialogTodo, ui.busy, { ui.close() }, onDelete = ::deleteTodo, onRestore = ::restoreTodo,
+                    todos = state.todos) { todo ->
                     val draftId = ui.dialogId.takeIf { it.isNotEmpty() }
                     ui.perform {
                         repository.saveTodo(todo, existing = draftId != null)
                         TodoDrafts.remove(draftId)
+                        if (draftId == null) TodoDrafts.lastCategory = todo.category
+                        ui.todos.justSaved = TodoSaved(todo.id, SystemClock.elapsedRealtime())
                         val saved = repository.state.value.todos.find { it.id == todo.id }
                         when {
                             saved?.archived == true -> ui.todos.setFilter(TodoFilter.ARCHIVED)
@@ -606,7 +627,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             "statistics-help" -> {
                 val totals = Statistics.allTime(state.sessions)
                 InformationDialog("累计统计说明", listOf(
-                    "范围：${totals.firstDate ?: "暂无记录"} 至 ${LocalDate.now()}，共 ${totals.count} 次专注。总览不受下方日期和周期筛选影响。",
+                    "范围：${totals.firstDate ?: "暂无记录"} 至 ${LocalDate.now()}，共 ${totals.count} 次专注。「全部」汇总截至今天的全部记录，不受日、周、月、年的所选日期影响。",
                     "自然日均 = 总有效时长 ÷ ${totals.calendarDays} 个自然日。包含首次完成日至今天的空白日。",
                     "活跃日均 = 总有效时长 ÷ ${totals.activeDays} 个有记录日。无记录时均显示 0。",
                     "只统计已完成的倒计时、手动结束的正计时，不含暂停、休息或放弃的计时。小时分布拆分所选完成记录的实际活动片段。",
@@ -619,11 +640,12 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                 "每日超时提醒约每 15 分钟检查一次，可能受系统省电和后台限制延迟。每天最多提醒一次，需要通知权限。"
             ), { ui.close() })
             "automation" -> InformationDialog("自动化扩展", listOf("此版本仅预留自动化入口，尚未接入任何脚本引擎。", "后续根据你的具体手机脚本和工具确定接入方式，不默认申请 root、无障碍或其他应用控制权限。"), { ui.close() })
-            "export" -> AlertDialog(onDismissRequest = { if (!ui.busy) ui.close() }, title = { Text("导出当前周期") }, text = { Text("CSV 适合 Excel，JSON 包含活动片段、进度历史及累计总览。仅导出当前周期的完整记录，不受分页限制。") },
+            "export" -> AlertDialog(onDismissRequest = { if (!ui.busy) ui.close() }, title = { Text(if (ui.statsAll) "导出全部记录" else "导出当前周期") }, text = { Text("CSV 适合 Excel，JSON 包含活动片段、进度历史及累计总览。仅导出当前周期的完整记录，不受分页限制。") },
                 confirmButton = { TextButton(enabled = !ui.busy, onClick = { exportStatistics(false) }) { Text("JSON") } }, dismissButton = { TextButton(enabled = !ui.busy, onClick = { exportStatistics(true) }) { Text("CSV") } })
-            "usage-goal" -> NumberSettingsDialog("每日使用目标", listOf("目标分钟数" to state.settings.dailyGoalMinutes), ui.busy, { ui.close() }) { values ->
-                if (values.single() !in 1..1440) ui.message("请输入 1–1440 分钟。") else ui.perform { repository.saveSettings(state.settings.copy(dailyGoalMinutes = values.single())); ui.close() }
+            "usage-goal" -> GoalWheelSheet(state.settings.dailyGoalMinutes, ui.busy, { ui.close() }) { minutes ->
+                ui.perform { repository.saveSettings(state.settings.copy(dailyGoalMinutes = minutes)); ui.close() }
             }
+            "usage-zoom" -> UsageZoomSheet(usageReport.takeIf { usageAllowed && usageError == null }, state.sessions, today) { ui.close() }
             "rest-settings" -> NumberSettingsDialog("休息偏好", listOf("短休息（分钟）" to state.settings.shortBreakMinutes, "长休息（分钟）" to state.settings.longBreakMinutes), ui.busy, { ui.close() }) { values ->
                 if (values.any { it !in 1..120 }) ui.message("休息时长需为 1–120 分钟。") else ui.perform { repository.saveSettings(state.settings.copy(shortBreakMinutes = values[0], longBreakMinutes = values[1])); ui.close() }
             }
@@ -667,12 +689,6 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
     }
 }
 
-private fun shiftPeriod(period: Period, anchor: LocalDate, direction: Long): LocalDate = when (period) {
-    Period.DAY -> anchor.plusDays(direction)
-    Period.WEEK -> anchor.minusDays((anchor.dayOfWeek.value - 1).toLong()).plusWeeks(direction)
-    Period.MONTH -> anchor.withDayOfMonth(1).plusMonths(direction)
-    Period.YEAR -> anchor.withDayOfYear(1).plusYears(direction)
-}
 
 @Composable
 private fun NumberSettingsDialog(title: String, fields: List<Pair<String, Int>>, busy: Boolean, onDismiss: () -> Unit, onSave: (List<Int>) -> Unit) {

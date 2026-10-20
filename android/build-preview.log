@@ -1,0 +1,55 @@
+JAVA_HOME        = C:\Program Files\Java\jdk-21.0.12
+GRADLE_USER_HOME = C:\Users\EDY\Desktop\app\myApp\.tools\gradle-user-home
+ANDROID_HOME     = C:\Users\EDY\Desktop\app\myApp\.tools\android-sdk
+gradle           = C:\Users\EDY\Desktop\app\myApp\.tools\gradle-8.11.1\bin\gradle.bat
+tasks            = assemblePreview
+options          = --console=plain
+> Task :app:preBuild UP-TO-DATE
+> Task :app:prePreviewBuild UP-TO-DATE
+> Task :app:mergePreviewNativeDebugMetadata NO-SOURCE
+> Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:checkPreviewAarMetadata UP-TO-DATE
+> Task :app:generatePreviewResValues UP-TO-DATE
+> Task :app:mapPreviewSourceSetPaths UP-TO-DATE
+> Task :app:generatePreviewResources UP-TO-DATE
+> Task :app:mergePreviewResources UP-TO-DATE
+> Task :app:packagePreviewResources UP-TO-DATE
+> Task :app:parsePreviewLocalResources UP-TO-DATE
+> Task :app:createPreviewCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksPreview UP-TO-DATE
+> Task :app:processPreviewMainManifest UP-TO-DATE
+> Task :app:processPreviewManifest UP-TO-DATE
+> Task :app:processPreviewManifestForPackage UP-TO-DATE
+> Task :app:processPreviewResources UP-TO-DATE
+> Task :app:kspPreviewKotlin UP-TO-DATE
+> Task :app:compilePreviewKotlin UP-TO-DATE
+> Task :app:javaPreCompilePreview UP-TO-DATE
+> Task :app:compilePreviewJavaWithJavac NO-SOURCE
+> Task :app:mergePreviewShaders UP-TO-DATE
+> Task :app:compilePreviewShaders NO-SOURCE
+> Task :app:generatePreviewAssets UP-TO-DATE
+> Task :app:mergePreviewAssets UP-TO-DATE
+> Task :app:compressPreviewAssets UP-TO-DATE
+> Task :app:checkPreviewDuplicateClasses UP-TO-DATE
+> Task :app:desugarPreviewFileDependencies UP-TO-DATE
+> Task :app:mergeExtDexPreview UP-TO-DATE
+> Task :app:mergeLibDexPreview UP-TO-DATE
+> Task :app:dexBuilderPreview UP-TO-DATE
+> Task :app:mergePreviewGlobalSynthetics UP-TO-DATE
+> Task :app:processPreviewJavaRes UP-TO-DATE
+> Task :app:mergePreviewJavaResource UP-TO-DATE
+> Task :app:mergeProjectDexPreview UP-TO-DATE
+> Task :app:mergePreviewJniLibFolders UP-TO-DATE
+> Task :app:mergePreviewNativeLibs UP-TO-DATE
+> Task :app:stripPreviewDebugSymbols UP-TO-DATE
+> Task :app:validateSigningPreview UP-TO-DATE
+> Task :app:writePreviewAppMetadata UP-TO-DATE
+> Task :app:writePreviewSigningConfigVersions UP-TO-DATE
+> Task :app:packagePreview UP-TO-DATE
+> Task :app:createPreviewApkListingFileRedirect UP-TO-DATE
+> Task :app:assemblePreview UP-TO-DATE
+
+BUILD SUCCESSFUL in 1s
+36 actionable tasks: 36 up-to-date
+APK (debug): C:\Users\EDY\Desktop\app\myApp\android\app\build\outputs\apk\debug\app-debug.apk (17.5 MB, 10/20/2026 11:09:35)
+APK (preview): C:\Users\EDY\Desktop\app\myApp\android\app\build\outputs\apk\preview\app-preview.apk (16.8 MB, 10/20/2026 11:29:11)

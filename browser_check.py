@@ -48,12 +48,33 @@ def assert_hour_distribution(page):
 
 def assert_statistics_period(page, period, trend_count):
     page.locator(f'[data-stat-period="{period}"]').click()
-    expect(page.locator("#statistics-trend .trend-bar")).to_have_count(trend_count)
+    expect(page.locator(f'[data-stat-period="{period}"]')).to_have_attribute("aria-pressed", "true")
     if period == "day":
         expect(page.locator("#statistics-trend-section")).not_to_be_visible()
+        expect(page.locator("#statistics-month-section")).not_to_be_visible()
+        expect(page.locator("#statistics-timeline")).to_be_visible()
+    elif period == "month":
+        expect(page.locator("#statistics-trend-section")).not_to_be_visible()
+        expect(page.locator("#statistics-month-section")).to_be_visible()
+        expect(page.locator("#statistics-calendar .calendar-day")).to_have_count(trend_count)
     else:
         expect(page.locator("#statistics-trend-section")).to_be_visible()
+        expect(page.locator("#statistics-trend .trend-bar")).to_have_count(trend_count)
     return assert_hour_distribution(page)
+
+
+def set_statistics_date(page, value):
+    if not page.locator("#statistics-anchor").is_visible():
+        page.locator("#statistics-period-label").click()
+    page.locator("#statistics-anchor").fill(value)
+    page.locator("#statistics-anchor").dispatch_event("change")
+    expect(page.locator("#statistics-picker")).not_to_be_visible()
+
+
+def statistics_today(page):
+    if page.locator("#statistics-today").is_visible():
+        page.locator("#statistics-today").click()
+    expect(page.locator("#statistics-today")).not_to_be_visible()
 
 
 def assert_no_task_fields(value):
@@ -134,12 +155,19 @@ def skip_progress(page, return_to_timer=True, method="button"):
         choose_focus_item(page, page.locator("#focus-item-name").inner_text())
 
 
+def pick_focus_choice(page, label):
+    """专注项面板里的分类与计时方式都是点选按钮。"""
+    button = page.locator("#modal [data-choice]").filter(has_text=re.compile(f"^{re.escape(label)}$"))
+    button.click()
+    expect(button).to_have_attribute("aria-pressed", "true")
+
+
 def create_project(page, title, mode="倒计时", minutes=1, category="个人成长"):
     home(page)
     page.locator("#add-focus-item").click()
     page.locator('#modal input[name="title"]').fill(title)
-    page.locator('select[name="category"]').select_option(category)
-    page.locator('select[name="timerMode"]').select_option(mode)
+    pick_focus_choice(page, category)
+    pick_focus_choice(page, mode)
     page.locator('input[name="durationMinutes"]').fill(str(minutes))
     page.get_by_role("button", name="添加项目", exact=True).click()
     expect(page.locator("#page-focus")).to_be_visible()
@@ -167,10 +195,19 @@ def check_independent_countup(browser, errors):
     page.get_by_role("button", name="添加项目", exact=True).click()
     expect(page.locator("#modal [role='alert']")).to_contain_text("专注项名称")
     page.locator('#modal input[name="title"]').fill(title)
-    page.locator('select[name="category"]').select_option("工作")
-    page.locator('select[name="timerMode"]').select_option("正计时")
+    pick_focus_choice(page, "工作")
+    pick_focus_choice(page, "正计时")
     page.locator('input[name="durationMinutes"]').fill("1")
     expect(page.locator('#modal input[name="title"]')).to_have_attribute("maxlength", "80")
+    expect(page.locator("#modal")).to_have_class(re.compile(r"\bfocus-item-sheet\b"))
+    expect(page.get_by_role("button", name="减少 5 分钟")).to_be_disabled()
+    page.locator('input[name="durationMinutes"]').fill("118")
+    page.get_by_role("button", name="增加 5 分钟").click()
+    expect(page.locator('input[name="durationMinutes"]')).to_have_value("120")
+    expect(page.get_by_role("button", name="增加 5 分钟")).to_be_disabled()
+    page.get_by_role("button", name="减少 5 分钟").click()
+    expect(page.locator('input[name="durationMinutes"]')).to_have_value("115")
+    page.locator('input[name="durationMinutes"]').fill("1")
     assert page.locator("#modal").evaluate("el => el.scrollWidth <= el.clientWidth")
     page.screenshot(path=str(SCREENSHOT_DIRECTORY / "mobile-focus-item-editor.png"))
     page.get_by_role("button", name="添加项目", exact=True).click()
@@ -224,8 +261,8 @@ def check_independent_countup(browser, errors):
     skip_progress(page)
     page.locator("#timer-settings").click()
     page.locator('#modal input[name="title"]').fill("修改后的专注项")
-    page.locator('select[name="category"]').select_option("生活")
-    page.locator('select[name="timerMode"]').select_option("倒计时")
+    pick_focus_choice(page, "生活")
+    pick_focus_choice(page, "倒计时")
     page.locator('input[name="durationMinutes"]').fill("7")
     page.get_by_role("button", name="保存专注项", exact=True).click()
     expect(page.locator("#timer-time")).to_have_text("07:00")
@@ -570,9 +607,15 @@ def check_task_sheet_and_steps(browser, errors):
     expect(page.locator("#todo-form .step-editor-row")).to_have_count(MAX_TASK_STEPS - 1)
     expect(page.locator("#todo-form .add-step")).to_be_enabled()
     page.locator("#todo-form .add-step").click()
+    expect(page.locator("#todo-draft-note")).to_contain_text("已暂存草稿")
+    page.locator('#todo-form input[name="title"]').fill("")
+    expect(page.locator("#save-todo-sheet")).to_have_class(re.compile(r"\bis-empty\b"))
     page.locator("#save-todo-sheet").click()
-    expect(page.locator('#todo-sheet [role="alert"]')).to_contain_text("小步名称")
+    expect(page.locator('#todo-sheet [role="alert"]')).to_contain_text("任务名称")
+    expect(page.locator('#todo-form input[name="title"]')).to_be_focused()
     expect(page.locator("#todo-sheet")).to_be_visible()
+    page.locator('#todo-form input[name="title"]').fill(title)
+    expect(page.locator('#todo-sheet [role="alert"]')).not_to_be_visible()
     expect(page.locator("#todo-form .step-editor-row")).to_have_count(MAX_TASK_STEPS)
     page.locator("#todo-form .step-editor-row input").last.fill(unsafe_step)
     expect(page.locator('#todo-sheet [role="alert"]')).not_to_be_visible()
@@ -669,6 +712,11 @@ def check_task_sheet_and_steps(browser, errors):
     page.locator("#modal").get_by_role("button", name="编辑待办", exact=True).click()
     expect(page.locator("#todo-form .add-step, #todo-form .step-remove")).to_have_count(0)
     expect(page.locator("#todo-form .step-editor-row input")).to_have_count(MAX_TASK_STEPS)
+    # 已完成项不能删步，清空名称会就近报错并聚焦那一步。
+    page.locator("#todo-form .step-editor-row input").first.fill("")
+    page.locator("#save-todo-sheet").click()
+    expect(page.locator('#todo-sheet [role="alert"]')).to_contain_text("第 1 步")
+    expect(page.locator("#todo-form .step-editor-row input").first).to_be_focused()
     page.locator("#todo-form .step-editor-row input").first.fill("完成后只改名")
     page.locator("#save-todo-sheet").click()
     expect(task.locator("span.task-check-static")).to_be_visible()
@@ -695,8 +743,46 @@ def check_task_sheet_and_steps(browser, errors):
     page.locator('.bottom-nav [data-page="tasks"]').click()
     assert_task_counts(page, pending=3, done=1)
     page.locator("#add-task").click()
-    expect(page.locator('#todo-form input[name="title"]')).to_have_value("")
+    title_input = page.locator('#todo-form input[name="title"]')
+    expect(title_input).to_have_value("")
+    expect(page.locator("#todo-draft-note")).to_be_hidden()
+
+    # 同名只提醒；没填的空小步保存时忽略；保存后卡片轻闪一次。
+    title_input.fill("傍晚出去走一走")
+    expect(page.locator("#todo-form .todo-title-hint")).to_contain_text("同名")
+    page.locator("#todo-form .category-choice").filter(has_text="生活").click()
+    page.locator("#todo-form .step-editor summary").click()
+    page.locator("#todo-form .add-step").click()
+    page.locator("#todo-form .step-editor-row input").last.fill("换鞋")
+    page.locator("#todo-form .add-step").click()
+    page.locator("#save-todo-sheet").click()
+    expect(page.locator("#todo-sheet")).not_to_be_visible()
+    assert_task_counts(page, pending=4, done=1)
+    expect(task_card(page, "傍晚出去走一走")).to_have_count(2)
+    expect(task_card(page, "傍晚出去走一走").locator(".step-count")).to_have_text("小步 0 / 1")
+    expect(page.locator(".task-card.just-saved")).to_have_count(1)
+
+    # 新建沿用上次分类；恢复的草稿可清空重写。
+    page.locator("#add-task").click()
+    expect(page.locator("#todo-form .category-choice").filter(has_text="生活")).to_have_attribute("aria-pressed", "true")
+    title_input.fill("写到一半")
+    expect(page.locator("#todo-draft-note")).to_contain_text("已暂存草稿")
+    page.locator("#close-todo-sheet").click()
+    page.locator("#add-task").click()
+    expect(title_input).to_have_value("写到一半")
+    page.locator("#todo-draft-note").get_by_role("button", name="清空重写", exact=True).click()
+    expect(title_input).to_have_value("")
+    expect(title_input).to_be_focused()
+    expect(page.locator("#todo-draft-note")).to_be_hidden()
+    page.locator("#close-todo-sheet").click()
+
+    # 编辑未改动直接关闭，不提示「修改已保存」。
+    task_card(page, "阅读《原子习惯》").locator(".task-info").click()
+    page.locator("#save-todo-sheet").click()
+    expect(page.locator("#todo-sheet")).not_to_be_visible()
+    expect(page.locator("#toast")).not_to_have_text("修改已保存。")
     page.close()
+    print("PASS: empty-step skip, inline field errors, duplicate hint, remembered category, draft reset, unchanged edit without toast.", flush=True)
     print("PASS: independent sheet, isolated cancel/Escape/backdrop drafts, eight-step limit/full-row clicks, safe step text, completed read-only edit/partial reopen, 320px/landscape save reachability and refresh reset.", flush=True)
 
 
@@ -1340,8 +1426,8 @@ def check_focus_configuration(browser, errors):
     home(page)
     page.locator("#add-focus-item").click()
     page.locator('#modal input[name="title"]').fill(title)
-    page.locator('select[name="category"]').select_option("生活")
-    page.locator('select[name="timerMode"]').select_option("倒计时")
+    pick_focus_choice(page, "生活")
+    pick_focus_choice(page, "倒计时")
     page.locator('input[name="durationMinutes"]').fill("2")
     page.get_by_role("button", name="添加项目", exact=True).click()
     assert_task_counts(page, pending=3, done=1)
@@ -1590,7 +1676,10 @@ def check_progress_workflow(browser, errors):
     page.set_viewport_size(DESKTOP_VIEWPORT)
     open_statistics(page)
     page.locator("#statistics-source").select_option("session")
-    page.locator('.record-progress-button[data-record-id="session-2"]').click()
+    record_row = page.locator('.record-row[data-record-id="session-2"]')
+    record_row.locator(".record-toggle").click()
+    expect(record_row.locator(".record-toggle")).to_have_attribute("aria-expanded", "true")
+    record_row.locator(".record-progress-button").click()
     expect(note).to_have_value(unsafe_note)
     page.keyboard.press("Escape")
     expect(page.locator("#page-statistics")).to_be_visible()
@@ -1686,6 +1775,8 @@ def check_progress_queue(browser, errors):
 
 
 def alltime_snapshot(page):
+    page.locator('[data-stat-period="all"]').click()
+    expect(page.locator(".alltime-overview")).to_be_visible()
     snapshot = {name: page.locator(f"#{name}").inner_text() for name in ALLTIME_IDS}
     page.locator("#alltime-help").click()
     expect(page.get_by_role("dialog", name="累计统计说明")).to_be_visible()
@@ -1699,12 +1790,18 @@ def alltime_snapshot(page):
 def check_alltime_statistics(browser, errors):
     page = fresh_timer_page(browser, errors)
     open_statistics(page)
+    day_minutes = float(page.locator("#statistics-minutes").inner_text())
+    expect(page.locator(".alltime-overview")).not_to_be_visible()
+    page.locator('[data-stat-period="all"]').click()
+    expect(page.locator("#statistics-previous")).not_to_be_visible()
+    expect(page.locator("#statistics-period-label")).to_be_disabled()
     overview = page.locator(".alltime-overview")
+    expect(overview).to_be_visible()
     expect(overview.locator("strong")).to_have_count(3)
     expect(overview.locator("p, small")).to_have_count(0)
     for explanation in ("分母", "统计范围", "次专注", "首次", "空白日", "不受", "刷新"):
         expect(overview).not_to_contain_text(explanation)
-    assert overview.evaluate("el => { const css = getComputedStyle(el); return css.backgroundColor === 'rgb(255, 255, 255)' && css.borderTopWidth === '0px' && css.paddingTop === '0px'; }")
+    assert overview.evaluate("el => { const css = getComputedStyle(el); return css.backgroundColor === 'rgba(0, 0, 0, 0)' && css.borderTopWidth === '0px' && css.paddingTop === '0px'; }")
     help_button = page.get_by_role("button", name="累计统计说明", exact=True)
     expect(help_button).to_have_text("?")
     expect(help_button).to_have_attribute("title", "查看累计统计的范围与计算方式")
@@ -1731,12 +1828,15 @@ def check_alltime_statistics(browser, errors):
     samples = page.evaluate("FocusModel.initialFocusRecords().map(record => ({seconds: record.durationSeconds, date: FocusModel.localDateKey(new Date(record.endedAt))}))")
     sample_dates = {datetime.fromisoformat(record["date"]).date() for record in samples}
     assert minutes == sum(record["seconds"] for record in samples) / 60
-    assert minutes > float(page.locator("#statistics-minutes").inner_text())
+    assert minutes > day_minutes
+    assert abs(float(page.locator("#statistics-minutes").inner_text()) - minutes) < 0.01
+    expect(page.locator("#statistics-trend .trend-bar")).to_have_count(len({record["date"][:7] for record in samples}))
+    assert_hour_distribution(page)
     today = datetime.fromisoformat(page.evaluate("FocusModel.localDateKey(new Date())")).date()
     denominators = [int(value) for value in re.findall(r"分母：(\d+) 个(?:自然|活跃)日", initial["details"])]
     assert denominators == [(today - min(sample_dates)).days + 1, len(sample_dates)]
     assert f"{min(sample_dates)} 至 {today} · {len(samples)} 次专注" in initial["details"]
-    for explanation in ("自然日均 = 累计专注分钟数 ÷ 自然日天数", "活跃日均 = 累计专注分钟数 ÷ 有专注记录的天数", "首尾均计入", "空白日", "按日历差", "四舍五入至两位小数", "示例 + 本次计时（含演示记录）", "仅驻留内存", "刷新恢复示例", "不代表真实设备", "不受下方日、周、月、年周期和所选日期影响"):
+    for explanation in ("自然日均 = 累计专注分钟数 ÷ 自然日天数", "活跃日均 = 累计专注分钟数 ÷ 有专注记录的天数", "首尾均计入", "空白日", "按日历差", "四舍五入至两位小数", "示例 + 本次计时（含演示记录）", "仅驻留内存", "刷新恢复示例", "不代表真实设备", "不受日、周、月、年的所选日期影响"):
         assert explanation in initial["details"]
     assert denominators[0] > denominators[1] > 0
     for name, denominator in zip(("alltime-calendar-average", "alltime-active-average"), denominators):
@@ -1744,8 +1844,8 @@ def check_alltime_statistics(browser, errors):
     for period, trend_count in STAT_PERIODS:
         assert_statistics_period(page, period, trend_count)
         assert alltime_snapshot(page) == initial
-    page.locator("#statistics-anchor").fill("2024-02-29")
-    page.locator("#statistics-anchor").dispatch_event("change")
+    page.locator('[data-stat-period="day"]').click()
+    set_statistics_date(page, "2024-02-29")
     expect(page.locator("#statistics-count")).to_have_text("0")
     assert alltime_snapshot(page) == initial
     page.locator("#statistics-source").select_option("session")
@@ -1766,6 +1866,7 @@ def check_alltime_statistics(browser, errors):
     expect(page.locator("#focus-sessions")).to_have_text("4")
     skip_progress(page, return_to_timer=False)
     open_statistics(page)
+    page.locator('[data-stat-period="day"]').click()
     expect(page.locator("#statistics-count")).to_have_text("0")
     assert abs(float(page.locator("#alltime-duration").get_attribute("data-minutes")) - minutes - 61 / 60) < 0.000001
     completed = alltime_snapshot(page)
@@ -1781,8 +1882,8 @@ def check_alltime_statistics(browser, errors):
     assert "分母：1 个自然日" in session["details"]
     assert "分母：1 个活跃日" in session["details"]
     assert "仅本次计时（不含示例）" in session["details"]
-    page.locator("#statistics-today").click()
     page.locator('[data-stat-period="day"]').click()
+    statistics_today(page)
     assert alltime_snapshot(page) == session
     page.locator("#statistics-source").select_option("all")
     assert alltime_snapshot(page) == completed
@@ -1805,6 +1906,10 @@ def check_alltime_statistics(browser, errors):
     assert payload["progressHistory"] == []
     page.locator("#statistics-source").select_option("all")
     payload = download_statistics(page, "json")
+    assert payload["period"] == "all"
+    assert abs(payload["summary"]["minutes"] - payload["allTimeSummary"]["minutes"]) < 0.000001
+    page.locator('[data-stat-period="day"]').click()
+    payload = download_statistics(page, "json")
     assert payload["allTimeSummary"]["minutes"] > payload["summary"]["minutes"]
     assert abs(payload["allTimeSummary"]["minutes"] - minutes - 61 / 60) < 0.000001
     page.close()
@@ -1820,7 +1925,7 @@ def check_alltime_statistics(browser, errors):
     assert f"分母：{denominators[1]} 个活跃日" in advanced["details"]
     assert abs(float(advanced["alltime-calendar-average"]) - minutes / (denominators[0] + 1)) <= 0.005
     page.close()
-    print("PASS: minimal white all-time overview, keyboard help/focus return, dynamic popup formulas/range/denominators, next-day refresh, period/date invariance, source filters, completion refresh and JSON scope.", flush=True)
+    print("PASS: all-period overview without nested card, keyboard help/focus return, dynamic popup formulas/range/denominators, next-day refresh, period/date invariance, source filters, completion refresh and JSON scope.", flush=True)
 
 
 def run_checks():
@@ -1936,34 +2041,78 @@ def run_checks():
         assert len(csv_rows) == 5
         assert sum(float(row["时长（分钟）"]) for row in csv_rows) == 77
         assert {row["来源"] for row in csv_rows} == {"示例", "专注计时"}
-        page.locator("#statistics-anchor").fill("2024-02-29")
-        page.locator("#statistics-anchor").dispatch_event("change")
-        expect(page.locator(".calendar-day")).to_have_count(29)
+        set_statistics_date(page, "2024-02-29")
+        expect(page.locator("#statistics-period-text")).to_have_text("2024年2月29日 周四")
         expect(page.locator("#statistics-count")).to_have_text("0")
         expect(page.locator("#export-statistics")).to_be_disabled()
         page.locator('[data-stat-period="month"]').click()
+        expect(page.locator("#statistics-calendar .calendar-day")).to_have_count(29)
         page.locator("#statistics-next").click()
         expect(page.locator("#statistics-anchor")).to_have_value("2024-03-01")
-        page.locator("#statistics-today").click()
+        statistics_today(page)
         page.locator(".calendar-day").filter(has_text="26").click()
         expect(page.locator('[data-stat-period="day"]')).to_have_attribute("aria-pressed", "true")
         expect(page.locator("#statistics-count")).to_have_text("5")
+        page.locator('[data-stat-period="week"]').click()
+        page.locator("#statistics-period-label").click()
+        page.locator(".picker-week").first.click()
+        expect(page.locator("#statistics-picker")).not_to_be_visible()
+        expect(page.locator("#statistics-today")).to_be_visible()
+        statistics_today(page)
         page.locator('[data-stat-period="month"]').click()
         expected_records = int(page.locator("#statistics-count").inner_text())
-        expect(page.locator("#statistics-records > li")).to_have_count(20)
+        expect(page.locator("#statistics-records .record-row")).to_have_count(20)
+        expect(page.locator("#statistics-records .record-day").first).to_be_visible()
         page.locator("#statistics-more").click()
-        expect(page.locator("#statistics-records > li")).to_have_count(min(40, expected_records))
+        expect(page.locator("#statistics-records .record-row")).to_have_count(min(40, expected_records))
         rows = download_statistics(page, "csv")
         assert len(rows) == expected_records
 
         page.locator('.bottom-nav [data-page="usage"]').click()
+        expect(page.locator("#usage-screen-track i")).to_have_count(18)
+        assert page.locator("#usage-focus-track i").count() > 0
+        expect(page.locator("#usage-focus-legend")).to_contain_text("用屏 3 小时 24 分钟")
+        expect(page.locator("#goal-ring-ticks i.on")).to_have_count(34)
+        expect(page.locator("#night-title")).to_have_text("昨夜足迹 · 31 分钟")
+        expect(page.locator("#night-summary")).to_contain_text("02:32")
+        expect(page.locator("#usage-apps .app-row")).to_have_count(4)
+        page.locator("#usage-ribbon").click()
+        expect(page.locator("#modal.usage-zoom-sheet")).to_be_visible()
+        expect(page.locator("#modal .usage-zoom-lane.screen .usage-zoom-mark")).to_have_count(18)
+        focus_marks = page.locator("#modal .usage-zoom-lane.focus .usage-zoom-mark").count()
+        assert focus_marks > 0
+        expect(page.locator("#modal .usage-zoom-row")).to_have_count(18 + focus_marks)
+        page.locator("#modal .usage-zoom-lane.screen .usage-zoom-mark").first.click()
+        expect(page.locator("#modal .usage-zoom-row.selected")).to_contain_text("00:10–00:14")
+        page.locator("#close-modal").click()
+        expect(page.locator("#modal")).to_be_hidden()
         page.locator('[data-period="week"]').click()
         expect(page.locator("#usage-total-label")).to_have_text("本周屏幕使用")
         expect(page.locator(".chart-bar")).to_have_count(7)
+        expect(page.locator(".chart-focus")).to_have_count(7)
+        expect(page.locator("#usage-day")).to_be_hidden()
+        expect(page.locator("#night-title")).to_contain_text("本周夜间足迹")
         page.locator("#edit-goal").click()
-        page.locator('input[name="goal"]').fill("120")
+        hours_wheel = page.get_by_role("listbox", name="小时")
+        minutes_wheel = page.get_by_role("listbox", name="分钟")
+        expect(hours_wheel.locator('[aria-selected="true"]')).to_have_text("4")
+        expect(minutes_wheel.locator('[aria-selected="true"]')).to_have_text("00")
+        hours_wheel.locator('[data-value="0"]').click()
+        minutes_wheel.locator('[data-value="20"]').click()
+        expect(page.locator(".goal-wheel-preview")).to_contain_text("30 分钟到 24 小时")
+        expect(page.get_by_role("button", name="保存目标", exact=True)).to_be_disabled()
+        hours_wheel.locator('[data-value="1"]').click()
+        minutes_wheel.focus()
+        for _ in range(2):
+            page.keyboard.press("ArrowDown")
+        expect(minutes_wheel.locator('[aria-selected="true"]')).to_have_text("30")
+        expect(page.locator(".goal-wheel-preview")).to_have_text("每天 1 小时 30 分钟")
+        save_box = page.get_by_role("button", name="保存目标", exact=True).bounding_box()
+        cancel_box = page.locator(".goal-actions .secondary-button").bounding_box()
+        assert save_box["x"] > cancel_box["x"]
         page.get_by_role("button", name="保存目标", exact=True).click()
-        expect(page.locator("#goal-summary")).to_contain_text("超出目标 1 小时 24 分钟")
+        expect(page.locator("#goal-summary")).to_contain_text("超出目标 1 小时 54 分钟")
+        expect(page.locator("#goal-target")).to_have_text("目标 1 小时 30 分钟")
         page.locator("#reminder-switch").click()
         expect(page.locator("#reminder-switch")).to_have_attribute("aria-checked", "true")
 
@@ -1995,6 +2144,7 @@ def run_checks():
             if width == 390:
                 page.locator('[data-stat-period="week"]').click()
                 page.screenshot(path=str(SCREENSHOT_DIRECTORY / "mobile-statistics.png"))
+                page.locator('[data-stat-period="month"]').click()
                 page.locator("#statistics-calendar").screenshot(path=str(SCREENSHOT_DIRECTORY / "calendar.png"))
             page.locator("#export-statistics").click()
             assert page.locator("#modal").evaluate("el => el.scrollWidth <= el.clientWidth"), (width, "export dialog overflow")
@@ -2034,7 +2184,7 @@ def run_checks():
         midnight_page.clock.fast_forward(ONE_MINUTE_MS)
         midnight_page.locator("#timer-toggle").click()
         open_statistics(midnight_page)
-        midnight_page.locator("#statistics-today").click()
+        statistics_today(midnight_page)
         midnight_page.locator("#statistics-source").select_option("session")
         expect(midnight_page.locator("#statistics-count")).to_have_text("0")
         print("Midnight pause/resume verified; advancing delayed completion.", flush=True)

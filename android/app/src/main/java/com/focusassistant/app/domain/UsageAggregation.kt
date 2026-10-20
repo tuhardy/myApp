@@ -36,12 +36,17 @@ internal class UsageOverviewRange(today: LocalDate, week: Boolean, zone: ZoneId)
     }
 }
 
+/**
+ * spanStart 早于 start 时，[spanStart, start) 内的片段只收进 spans（供夜间足迹使用），不计入总量与分桶。
+ */
 internal class UsageAggregation(
     private val start: Long,
     private val end: Long,
-    private val overview: UsageOverviewRange? = null
+    private val overview: UsageOverviewRange? = null,
+    val spanStart: Long = start
 ) {
     private val packageTotals = mutableMapOf<String, Long>()
+    private val collected = mutableListOf<UsageSpan>()
     private val windows = overview?.buckets.orEmpty()
     private val durations = LongArray(windows.size)
     private val available = BooleanArray(windows.size)
@@ -50,6 +55,7 @@ internal class UsageAggregation(
     private var todayDuration = 0L
 
     val totals: Map<String, Long> get() = packageTotals.toMap()
+    val spans: List<UsageSpan> get() = collected.sortedWith(compareBy<UsageSpan> { it.startedAt }.thenBy { it.packageName })
     val hasData: Boolean get() = rangeHasEvents || packageTotals.isNotEmpty()
     val todayMillis: Long? get() = todayDuration.takeIf { todayAvailable }
     val buckets: List<UsageBucketTotal> get() = windows.mapIndexed { index, window ->
@@ -66,6 +72,9 @@ internal class UsageAggregation(
     }
 
     fun addSegment(packageName: String, segment: TimeSegment) {
+        val spanFrom = maxOf(spanStart, segment.startedAt)
+        val spanTo = minOf(end, segment.endedAt)
+        if (spanTo > spanFrom) collected += UsageSpan(packageName, spanFrom, spanTo)
         val from = maxOf(start, segment.startedAt)
         val to = minOf(end, segment.endedAt)
         if (to <= from) return

@@ -12,10 +12,7 @@ import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -25,7 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -42,14 +39,21 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -70,12 +74,12 @@ internal object UiLimits {
     const val MILLIS_PER_SECOND = 1000L
     const val MIN_TIMER = Validation.MIN_MINUTES
     const val MAX_TIMER = Validation.MAX_MINUTES
-    const val MAX_HOURS = 23
     const val MAX_TITLE = 80
     const val MAX_NOTE = 2000
     const val MAX_PERCENT = 100
     const val RECORD_PAGE = 20
     const val TODO_GUIDE_HEIGHT_FRACTION = 0.85f
+    const val TODO_EDITOR_HEIGHT_FRACTION = 0.9f
     /** 与待办分组共用一份分类顺序，避免编辑器与分组各自漂移。 */
     val CATEGORIES = TodoGrouping.CATEGORIES
     val PRESETS = listOf(15, 25, 45, 60)
@@ -176,111 +180,13 @@ internal fun ConfirmDialog(title: String, message: String, busy: Boolean, onDism
         dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("取消") } })
 }
 
-/** 解析小时与分钟输入。countup 且未启用目标时返回 null 值表示不限时。 */
-internal fun parseTarget(hours: String, minutes: String, mode: TimerMode, enabled: Boolean): Result<Int?> {
-    if (mode == TimerMode.COUNTUP && !enabled) return Result.success(null)
-    val hourText = hours.trim()
-    val minuteText = minutes.trim()
-    val hourValue = if (hourText.isEmpty()) 0 else hourText.toIntOrNull()
-    val minuteValue = if (minuteText.isEmpty()) 0 else minuteText.toIntOrNull()
-    if (hourValue == null || minuteValue == null || hourValue !in 0..UiLimits.MAX_HOURS || minuteValue !in 0 until UiLimits.MINUTES_PER_HOUR.toInt()) {
-        return Result.failure(IllegalArgumentException("小时须为 0–${UiLimits.MAX_HOURS}，分钟须为 0–${UiLimits.MINUTES_PER_HOUR - 1}，且均为整数。"))
-    }
-    val total = hourValue * UiLimits.MINUTES_PER_HOUR.toInt() + minuteValue
-    if (total < UiLimits.MIN_TIMER) {
-        return Result.failure(IllegalArgumentException(
-            if (mode == TimerMode.COUNTUP) "目标时长至少为 1 分钟；不想设目标请点「取消目标」。" else "专注时长至少为 1 分钟。"))
-    }
-    return Result.success(total)
-}
-
-/**
- * 自绘滚轮选择器：LazyColumn + 吸附滚动，上下各留一行空白，居中行即为当前值。
- * 只能选出 0 until count 的整数，不存在非法文本输入。
- */
-@Composable
-private fun WheelPicker(count: Int, value: Int, unit: String, description: String, onChange: (Int) -> Unit, modifier: Modifier = Modifier) {
-    val rowHeight = 44.dp
-    val density = LocalDensity.current
-    val rowPx = with(density) { rowHeight.toPx() }
-    val state = rememberLazyListState(initialFirstVisibleItemIndex = value.coerceIn(0, count - 1))
-    val centered by remember {
-        derivedStateOf {
-            (state.firstVisibleItemIndex + if (state.firstVisibleItemScrollOffset > rowPx / 2) 1 else 0).coerceIn(0, count - 1)
-        }
-    }
-    // 居中行一变就回报，不等滚动停止，避免滑动未停时保存到旧值；外部改值（如快捷时长）时把滚轮滚到对应行。
-    LaunchedEffect(state) {
-        snapshotFlow { centered }.collect(onChange)
-    }
-    LaunchedEffect(value) {
-        val target = value.coerceIn(0, count - 1)
-        if (!state.isScrollInProgress && target != centered) state.animateScrollToItem(target)
-    }
-    Box(modifier.height(rowHeight * 3), contentAlignment = Alignment.Center) {
-        Box(Modifier.fillMaxWidth().height(rowHeight).clip(RoundedCornerShape(12.dp)).background(Color(0xFFFFF3EC)))
-        LazyColumn(
-            state = state,
-            flingBehavior = rememberSnapFlingBehavior(state),
-            contentPadding = PaddingValues(vertical = rowHeight),
-            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "$description：$value $unit" }
-        ) {
-            items(count) { index ->
-                val selected = index == centered
-                Box(Modifier.fillMaxWidth().height(rowHeight), contentAlignment = Alignment.Center) {
-                    Text(
-                        index.toString().padStart(2, '0'),
-                        fontSize = if (selected) 26.sp else 20.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (selected) Accent else Color(0xFFB0A8A2)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DurationWheels(hours: Int, minutes: Int, onHours: (Int) -> Unit, onMinutes: (Int) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        WheelPicker(UiLimits.MAX_HOURS + 1, hours, "小时", "小时", onHours, Modifier.weight(1f))
-        Text("小时", color = Muted, fontSize = 12.sp)
-        Spacer(Modifier.width(8.dp))
-        WheelPicker(UiLimits.MINUTES_PER_HOUR.toInt(), minutes, "分钟", "分钟", onMinutes, Modifier.weight(1f))
-        Text("分钟", color = Muted, fontSize = 12.sp)
-    }
-}
-
-@Composable
-private fun ModeSelector(mode: TimerMode, onSelect: (TimerMode) -> Unit) {
-    Row(Modifier.fillMaxWidth().selectableGroup()) {
-        TimerMode.entries.forEach { value ->
-            val selected = mode == value
-            Column(
-                Modifier.weight(1f)
-                    .selectable(selected = selected, role = Role.RadioButton, onClick = { if (!selected) onSelect(value) })
-                    .padding(vertical = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(modeName(value), color = if (selected) Accent else Muted,
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, fontSize = 15.sp)
-                Spacer(Modifier.height(6.dp))
-                Box(Modifier.height(3.dp).width(40.dp).clip(RoundedCornerShape(2.dp))
-                    .background(if (selected) Accent else Color.Transparent))
-            }
-        }
-    }
-}
-
-/** 新建/编辑项目的草稿，按项目（新建为 null）分别保留；仅驻留内存，进程重启即丢弃。 */
+/** 新建/编辑项目的草稿，按项目（新建为 null）分别保留；仅驻留内存，进程重启即丢弃。时长存输入框原文，模式切换保留各自的值。 */
 internal data class ProjectDraft(
     val title: String,
     val category: String,
     val mode: TimerMode,
-    val countdownHours: Int,
-    val countdownMinutes: Int,
-    val countupHours: Int,
-    val countupMinutes: Int,
+    val countdownText: String,
+    val countupText: String,
     val targetEnabled: Boolean
 )
 
@@ -294,23 +200,90 @@ internal object ProjectDrafts {
 }
 
 private fun initialDraft(project: Project?): ProjectDraft {
-    val target = project?.targetMinutes
-    val hours = target?.let { it / UiLimits.MINUTES_PER_HOUR.toInt() } ?: 0
-    val minutes = target?.let { it % UiLimits.MINUTES_PER_HOUR.toInt() } ?: UiLimits.MIN_PRESET
-    val countdown = project?.timerMode == TimerMode.COUNTDOWN && target != null
+    val target = project?.targetMinutes?.toString()
+    val fallback = UiLimits.MIN_PRESET.toString()
     val countup = project?.timerMode == TimerMode.COUNTUP && target != null
     return ProjectDraft(
         title = project?.title.orEmpty(),
         category = project?.category ?: UiLimits.CATEGORIES.first(),
         mode = project?.timerMode ?: TimerMode.COUNTDOWN,
-        countdownHours = if (countdown) hours else 0,
-        countdownMinutes = if (countdown) minutes else UiLimits.MIN_PRESET,
-        countupHours = if (countup) hours else 0,
-        countupMinutes = if (countup) minutes else UiLimits.MIN_PRESET,
+        countdownText = target?.takeIf { project?.timerMode == TimerMode.COUNTDOWN } ?: fallback,
+        countupText = target?.takeIf { countup } ?: fallback,
         // 新建正计时默认不设目标；编辑时沿用项目已有设置。
         targetEnabled = countup
     )
 }
+
+/** 与原型 `.category-choice` 同款的胶囊：白底灰边，选中暖橙描边与浅底。 */
+@Composable
+private fun ChoicePill(label: String, selected: Boolean, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier.heightIn(min = 40.dp).clip(RoundedCornerShape(11.dp))
+            .background(if (selected) AccentSoft else Color.White)
+            .border(1.dp, if (selected) Accent else Line, RoundedCornerShape(11.dp))
+            .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) { Text(label, fontSize = 12.sp, color = if (selected) AccentDark else Ink, maxLines = 1) }
+}
+
+/** 与原型 `.segmented` 同款：灰底两段，选中段浅橙底、暖橙字。 */
+@Composable
+private fun ModeSegments(mode: TimerMode, enabled: Boolean, onSelect: (TimerMode) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(13.dp)).background(SoftSurface).padding(4.dp).selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        TimerMode.entries.forEach { value ->
+            val selected = mode == value
+            Box(
+                Modifier.weight(1f).heightIn(min = 40.dp).clip(RoundedCornerShape(10.dp))
+                    .background(if (selected) AccentSoft else Color.Transparent)
+                    .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = { if (!selected) onSelect(value) }),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(modeName(value), fontSize = 13.sp, color = if (selected) AccentDark else Muted,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+            }
+        }
+    }
+}
+
+/** 灰底步进器：−/+ 每次对齐到 5 分钟，中间大号数字可直接输入分钟数。 */
+@Composable
+private fun DurationStepper(text: String, enabled: Boolean, onText: (String) -> Unit) {
+    val minutes = text.toIntOrNull()
+    @Composable fun StepButton(label: String, description: String, active: Boolean, up: Boolean) {
+        Box(
+            Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(Color.White)
+                .clickable(enabled = enabled && active, role = Role.Button) {
+                    onText(DurationInput.step(minutes ?: Validation.MIN_MINUTES, up).toString())
+                }.semantics { contentDescription = description },
+            contentAlignment = Alignment.Center
+        ) { Text(label, fontSize = 22.sp, color = if (active) AccentDark else Line) }
+    }
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(SoftSurface).padding(6.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        StepButton("−", "减少 ${DurationInput.STEP} 分钟", minutes == null || minutes > Validation.MIN_MINUTES, up = false)
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.Bottom) {
+            BasicTextField(
+                value = text, enabled = enabled, singleLine = true,
+                onValueChange = { value -> if (value.length <= DurationInput.MAX_DIGITS && value.all(Char::isDigit)) onText(value) },
+                textStyle = TextStyle(fontSize = 34.sp, fontWeight = FontWeight.SemiBold, color = Ink, textAlign = TextAlign.Center),
+                cursorBrush = SolidColor(Accent),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                modifier = Modifier.width(96.dp).semantics { contentDescription = "时长（分钟）" }
+            )
+            Text("分钟", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 6.dp, bottom = 9.dp))
+        }
+        StepButton("+", "增加 ${DurationInput.STEP} 分钟", minutes == null || minutes < Validation.MAX_MINUTES, up = true)
+    }
+}
+
+@Composable
+private fun FieldLabel(text: String) = Text(text, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
@@ -322,90 +295,119 @@ internal fun ProjectEditorDialog(
     onDismiss: () -> Unit,
     onSave: (Project) -> Unit
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val currentBusy by rememberUpdatedState(busy)
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { it != SheetValue.Hidden || !currentBusy })
+    val maximumHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() } * UiLimits.TODO_EDITOR_HEIGHT_FRACTION
     var draft by remember(project?.id) { mutableStateOf(ProjectDrafts.get(project?.id) ?: initialDraft(project)) }
     var error by remember { mutableStateOf<String?>(null) }
-    // 关闭、Esc、遮罩、下拖都不丢草稿；保存成功后由调用方清除。
+    // 关闭、返回、遮罩、下拖都不丢草稿；保存成功后由调用方清除。
     fun edit(block: (ProjectDraft) -> ProjectDraft) {
+        if (busy) return
         draft = block(draft)
         ProjectDrafts.put(project?.id, draft)
         error = null
     }
     val countup = draft.mode == TimerMode.COUNTUP
-    val hours = if (countup) draft.countupHours else draft.countdownHours
-    val minutes = if (countup) draft.countupMinutes else draft.countdownMinutes
+    val durationText = if (countup) draft.countupText else draft.countdownText
     val unlimited = countup && !draft.targetEnabled
+    fun setDuration(text: String) = edit { if (countup) it.copy(countupText = text) else it.copy(countdownText = text) }
 
-    ModalBottomSheet(onDismissRequest = { if (!busy) onDismiss() }, sheetState = sheetState, containerColor = Color.White) {
-        Column(
-            Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Text(
-                when { durationOnly -> "调整时长"; project == null -> "新建学习项目"; else -> "项目设置" },
-                fontSize = 19.sp, fontWeight = FontWeight.SemiBold
-            )
-            if (durationOnly) Text(draft.title, color = Muted, fontSize = 13.sp)
-            else {
-                OutlinedTextField(
-                    value = draft.title, onValueChange = { if (it.length <= UiLimits.MAX_TITLE) edit { d -> d.copy(title = it) } },
-                    label = { Text("项目名称") }, singleLine = true, modifier = Modifier.fillMaxWidth()
+    ModalBottomSheet(
+        onDismissRequest = { if (!busy) onDismiss() }, sheetState = sheetState,
+        containerColor = Color.White, shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
+        dragHandle = {
+            Box(Modifier.padding(top = 8.dp).size(width = 36.dp, height = 4.dp).clip(RoundedCornerShape(2.dp)).background(Line)
+                .clearAndSetSemantics {})
+        }
+    ) {
+        Column(Modifier.fillMaxWidth().heightIn(max = maximumHeight).imePadding()) {
+            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    when { durationOnly -> "调整时长"; project == null -> "新建学习项目"; else -> "项目设置" },
+                    fontSize = 19.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).semantics { heading() }
                 )
-                Text("分类", color = Muted, fontSize = 13.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    UiLimits.CATEGORIES.forEach { value ->
-                        FilterChip(selected = draft.category == value, onClick = { edit { d -> d.copy(category = value) } }, label = { Text(value, fontSize = 12.sp) })
-                    }
-                }
-                // 模式切换保留各模式的时长设置。
-                ModeSelector(draft.mode) { value -> edit { d -> d.copy(mode = value) } }
+                IconButton(enabled = !busy, onClick = onDismiss) { Icon(Icons.Outlined.Close, "关闭并保留草稿", tint = Muted, modifier = Modifier.size(20.dp)) }
             }
-            if (unlimited) {
-                Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("不限时", fontSize = 30.sp, fontWeight = FontWeight.Light)
-                    Text("按自己的节奏，手动结束", color = Muted, fontSize = 12.sp)
-                    TextButton(onClick = { edit { d -> d.copy(targetEnabled = true) } }) { Text("设置目标时长") }
+            Column(
+                Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp).padding(bottom = 16.dp)
+            ) {
+                error?.let {
+                    Text(it, color = AccentDark, fontSize = 12.sp, lineHeight = 19.sp,
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(12.dp)).background(AccentSoft).padding(12.dp)
+                            .semantics { liveRegion = LiveRegionMode.Assertive })
                 }
-            } else {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (countup) "目标时长" else "专注时长", color = Muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                    Text(targetText(hours * UiLimits.MINUTES_PER_HOUR.toInt() + minutes), color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    if (countup) TextButton(onClick = { edit { d -> d.copy(targetEnabled = false) } }) { Text("取消目标") }
+                if (durationOnly) Text(draft.title, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+                else {
+                    // 下划线输入框，与待办面板标题同款。
+                    TextField(
+                        value = draft.title, onValueChange = { if (it.length <= UiLimits.MAX_TITLE) edit { d -> d.copy(title = it) } },
+                        enabled = !busy, label = { Text("专注项名称") }, placeholder = { Text("例如：Spring Boot 实战") },
+                        singleLine = true, textStyle = TextStyle(fontSize = 17.sp),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.White, unfocusedContainerColor = Color.White, disabledContainerColor = Color.White,
+                            focusedIndicatorColor = Accent, unfocusedIndicatorColor = Line,
+                            focusedLabelColor = AccentDark, unfocusedLabelColor = Muted, cursorColor = Accent
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    FieldLabel("分类")
+                    Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        UiLimits.CATEGORIES.forEach { value ->
+                            ChoicePill(value, draft.category == value, !busy, Modifier.weight(1f)) { edit { d -> d.copy(category = value) } }
+                        }
+                    }
+                    FieldLabel("计时方式")
+                    // 模式切换保留各模式的时长设置。
+                    ModeSegments(draft.mode, !busy) { value -> edit { d -> d.copy(mode = value) } }
+                    Text(
+                        if (countup) "从 00:00 累加，达到目标只提醒；点「结束并保存专注」记录实际时长，暂停不计时。"
+                        else "到零自动完成并记录，也可确认后提前结束；暂停不计时。",
+                        color = Muted, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 8.dp, start = 2.dp)
+                    )
                 }
-                DurationWheels(
-                    hours, minutes,
-                    onHours = { value -> edit { d -> if (countup) d.copy(countupHours = value) else d.copy(countdownHours = value) } },
-                    onMinutes = { value -> edit { d -> if (countup) d.copy(countupMinutes = value) else d.copy(countdownMinutes = value) } }
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    UiLimits.PRESETS.forEach { value ->
-                        OutlinedButton(
-                            onClick = {
-                                edit { d ->
-                                    val h = value / UiLimits.MINUTES_PER_HOUR.toInt()
-                                    val m = value % UiLimits.MINUTES_PER_HOUR.toInt()
-                                    if (countup) d.copy(countupHours = h, countupMinutes = m) else d.copy(countdownHours = h, countdownMinutes = m)
-                                }
-                            },
-                            contentPadding = PaddingValues(4.dp), modifier = Modifier.weight(1f)
-                        ) { Text("$value", fontSize = 12.sp) }
+                Row(Modifier.fillMaxWidth().padding(top = 14.dp).heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (countup) "目标时长" else "倒计时时长", color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                    // 直接输入分钟数时换算成小时，避免「150 分钟」到底多长要心算。
+                    durationText.toIntOrNull()?.takeIf { !unlimited && it >= UiLimits.MINUTES_PER_HOUR }?.let {
+                        Text("= ${targetText(it)}", color = AccentDark, fontSize = 12.sp)
+                    }
+                    if (countup) TextButton(enabled = !busy, onClick = { edit { d -> d.copy(targetEnabled = unlimited) } }) {
+                        Text(if (unlimited) "设置目标" else "取消目标", fontSize = 12.sp)
                     }
                 }
-                Text("合计至少 1 分钟，最多 ${UiLimits.MAX_HOURS} 小时 ${UiLimits.MINUTES_PER_HOUR - 1} 分钟。", color = Muted, fontSize = 11.sp)
+                Spacer(Modifier.height(8.dp))
+                if (unlimited) {
+                    Column(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(SoftSurface).padding(vertical = 14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text("不限时", fontSize = 26.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+                        Text("按自己的节奏，手动结束", color = Muted, fontSize = 12.sp)
+                    }
+                } else {
+                    DurationStepper(durationText, !busy, ::setDuration)
+                    Row(Modifier.fillMaxWidth().padding(top = 10.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        UiLimits.PRESETS.forEach { value ->
+                            ChoicePill("$value 分钟", durationText.toIntOrNull() == value, !busy, Modifier.weight(1f)) { setDuration(value.toString()) }
+                        }
+                    }
+                }
             }
-            Text(if (countup) "达到目标只提示，计时继续；手动结束后保存实际时长。" else "到零自动完成；暂停和未完成计时不计入统计。", color = Muted, fontSize = 12.sp)
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(enabled = !busy, onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("取消") }
-                Button(
-                    enabled = !busy, modifier = Modifier.weight(1f),
-                    onClick = {
-                        if (draft.title.isBlank()) { error = "请输入项目名称。"; return@Button }
-                        parseTarget(hours.toString(), minutes.toString(), draft.mode, draft.targetEnabled)
-                            .onFailure { error = it.message }
-                            .onSuccess { onSave(Project(project?.id ?: UUID.randomUUID().toString(), draft.title.trim(), draft.category, draft.mode, it)) }
-                    }
-                ) { Text(if (busy) "保存中" else if (durationOnly) "保存时长" else "保存项目") }
+            // 吸底保存栏：上边线白底，与原型 `.sheet-actions` 一致。
+            HorizontalDivider(color = Line)
+            Button(
+                enabled = !busy, shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 12.dp).heightIn(min = 52.dp),
+                onClick = {
+                    if (!durationOnly && draft.title.isBlank()) { error = "请输入专注项名称。"; return@Button }
+                    DurationInput.parse(durationText, draft.mode, draft.targetEnabled)
+                        .onFailure { error = it.message }
+                        .onSuccess { onSave(Project(project?.id ?: UUID.randomUUID().toString(), draft.title.trim(), draft.category, draft.mode, it)) }
+                }
+            ) {
+                Text(when { busy -> "保存中"; durationOnly -> "保存时长"; project == null -> "添加项目"; else -> "保存专注项" },
+                    fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -432,16 +434,17 @@ internal fun TodoGuideSheet(onDismiss: () -> Unit) {
                 IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "关闭使用指南", tint = Muted, modifier = Modifier.size(20.dp)) }
             }
             Column(Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                .padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 TODO_GUIDE_SECTIONS.forEach { (title, detail) ->
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
-                        Text(detail, color = Muted, fontSize = 13.sp, lineHeight = 20.sp)
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(title, color = AccentDark, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
+                        Text(detail, color = Muted, fontSize = 13.sp, lineHeight = 22.sp)
                     }
                 }
             }
-            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End).padding(horizontal = 12.dp, vertical = 4.dp)) {
-                Text("知道了")
+            Button(onClick = onDismiss, shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 20.dp).heightIn(min = 52.dp)) {
+                Text("知道了", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -451,11 +454,13 @@ internal data class TodoDraft(val value: Todo, val stepsOpen: Boolean)
 
 internal object TodoDrafts {
     private val drafts = mutableMapOf<String?, TodoDraft>()
+    /** 新建默认沿用上次保存的分类，仅进程内存，恢复备份时随草稿一起清空。 */
+    var lastCategory: String? = null
+    fun fresh(todo: Todo?): Todo = todo ?: Todo(UUID.randomUUID().toString(), "", lastCategory ?: UiLimits.CATEGORIES.first())
+    /** 打开前调用：已有草稿且内容与原样不同，面板才提示「接着上次没写完的」。 */
+    fun restored(todo: Todo?): Boolean = drafts[todo?.id]?.let { !TodoEditing.sameContent(it.value, fresh(todo)) } == true
     fun open(todo: Todo?): TodoDraft {
-        val draft = drafts[todo?.id] ?: TodoDraft(
-            todo ?: Todo(UUID.randomUUID().toString(), "", UiLimits.CATEGORIES.first()),
-            todo?.steps?.isNotEmpty() == true
-        )
+        val draft = drafts[todo?.id] ?: TodoDraft(fresh(todo), todo?.steps?.isNotEmpty() == true)
         return sync(draft, todo).also { put(todo?.id, it) }
     }
     fun sync(draft: TodoDraft, current: Todo?): TodoDraft {
@@ -470,7 +475,7 @@ internal object TodoDrafts {
     }
     fun put(id: String?, draft: TodoDraft) { drafts[id] = draft }
     fun remove(id: String?) { drafts.remove(id) }
-    fun clear() = drafts.clear()
+    fun clear() { drafts.clear(); lastCategory = null }
     fun removeMissing(ids: Set<String>) { drafts.keys.removeAll { it != null && it !in ids } }
 }
 
@@ -483,11 +488,14 @@ internal fun TodoEditorDialog(
     /** 删除与找回保留在编辑弹层，删除直接回调，由清单提供撤销。 */
     onDelete: (Todo) -> Unit,
     onRestore: (Todo) -> Unit,
+    /** 用于同名提醒的现有待办；只提醒，不阻止保存。 */
+    todos: List<Todo> = emptyList(),
     onSave: (Todo) -> Unit
 ) {
     // 草稿按待办保留在进程内存，所有关闭方式均保留；保存成功后由调用方清除。
+    var restored by remember(todo?.id) { mutableStateOf(TodoDrafts.restored(todo)) }
     var draft by remember(todo?.id) { mutableStateOf(TodoDrafts.open(todo)) }
-    var error by remember(todo?.id) { mutableStateOf<String?>(null) }
+    var error by remember(todo?.id) { mutableStateOf<TodoFormProblem?>(null) }
     var focusStep by remember(todo?.id) { mutableStateOf<String?>(null) }
     val titleFocus = remember(todo?.id) { FocusRequester() }
     val focusManager = LocalFocusManager.current
@@ -498,6 +506,10 @@ internal fun TodoEditorDialog(
     )
     val locked = todo?.done == true
     val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+    val maximumHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() } * UiLimits.TODO_EDITOR_HEIGHT_FRACTION
+    val titleEmpty = draft.value.title.isBlank()
+    val changed = !TodoEditing.sameContent(draft.value, TodoDrafts.fresh(todo))
+    val duplicate = TodoEditing.hasDuplicate(todos, todo?.id ?: draft.value.id, draft.value.title)
     fun edit(block: (TodoDraft) -> TodoDraft) {
         if (busy) return
         draft = block(draft)
@@ -516,15 +528,24 @@ internal fun TodoEditorDialog(
     }
     ModalBottomSheet(
         onDismissRequest = { if (!busy) onDismiss() }, sheetState = sheetState,
-        containerColor = Color.White, shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp), dragHandle = null
+        containerColor = Color.White, shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
+        dragHandle = {
+            Box(Modifier.padding(top = 8.dp).size(width = 36.dp, height = 4.dp).clip(RoundedCornerShape(2.dp)).background(Line)
+                .clearAndSetSemantics {})
+        }
     ) {
         LaunchedEffect(titleFocus) { titleFocus.requestFocus() }
-        Column(Modifier.fillMaxWidth().fillMaxHeight(0.94f).imePadding()) {
+        @Composable fun ErrorNote(problem: TodoFormProblem) {
+            Text(problem.message, color = AccentDark, fontSize = 12.sp, lineHeight = 19.sp,
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(AccentSoft).padding(12.dp)
+                    .semantics { liveRegion = LiveRegionMode.Assertive })
+        }
+        Column(Modifier.fillMaxWidth().heightIn(max = maximumHeight).imePadding()) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(enabled = !busy, onClick = onDismiss) { Text("取消", color = Muted) }
+                TextButton(enabled = !busy, onClick = onDismiss) { Text("取消", color = Muted, fontSize = 13.sp) }
                 Text(
                     if (todo == null) "记下一件事" else "编辑待办",
                     modifier = Modifier.weight(1f), textAlign = TextAlign.Center,
@@ -532,44 +553,65 @@ internal fun TodoEditorDialog(
                 )
                 Button(enabled = !busy, shape = RoundedCornerShape(10.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), onClick = {
                     val value = TodoDrafts.sync(draft, todo).value
-                    val trimmed = value.steps.map { it.copy(title = it.title.trim()) }
+                    val problem = TodoEditing.problem(value, locked)
                     when {
-                        value.title.isBlank() -> {
-                            error = "请输入待办名称。"
+                        problem?.stepId == null && problem != null -> {
+                            error = problem
                             titleFocus.requestFocus()
                         }
-                        trimmed.any { it.title.isBlank() } -> {
+                        problem != null -> {
                             edit { it.copy(stepsOpen = true) }
-                            focusStep = trimmed.first { it.title.isBlank() }.id
-                            error = if (locked) "每个小步都要有名字。" else "每个小步都要有名字，或删掉它。"
+                            error = problem
+                            focusStep = problem.stepId
                         }
                         else -> {
-                            // 提交编辑字段，完成状态与时间由真实待办及领域保存规则决定。
-                            onSave(value.copy(title = value.title.trim(), steps = trimmed))
+                            // 没填的空小步直接忽略；完成状态与时间由真实待办及领域保存规则决定。
+                            val prepared = TodoEditing.prepare(value, locked)
+                            if (todo != null && TodoEditing.sameContent(prepared, todo)) {
+                                TodoDrafts.remove(todo.id)
+                                onDismiss()
+                            } else onSave(prepared)
                         }
                     }
-                }) { Text(if (busy) "保存中" else if (todo == null) "添加待办" else "保存修改") }
+                }, colors = ButtonDefaults.buttonColors(
+                    // 标题为空时弱化但仍可点，点了走就近报错。
+                    containerColor = if (titleEmpty) AccentSoft else Accent, contentColor = if (titleEmpty) AccentDark else Color.White
+                )) { Text(if (busy) "保存中" else if (todo == null) "添加待办" else "保存修改", fontSize = 13.sp) }
             }
             HorizontalDivider(color = Line)
             Column(
-                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 28.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp).padding(top = 12.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                OutlinedTextField(
+                // 下划线输入框：去掉外框，聚焦时线变暖橙，下方是同名提醒与字数。
+                TextField(
                     value = draft.value.title,
                     onValueChange = { value -> if (value.length <= UiLimits.MAX_TITLE) edit { it.copy(value = it.value.copy(title = value)) } },
                     enabled = !busy, label = { Text("想做什么？") }, placeholder = { Text("从一件具体的小事开始") },
-                    singleLine = true, isError = error != null && draft.value.title.isBlank(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, unfocusedBorderColor = Line,
-                        focusedLabelColor = AccentDark, unfocusedLabelColor = Muted, cursorColor = Accent),
+                    singleLine = true, isError = error != null && error?.stepId == null,
+                    textStyle = TextStyle(fontSize = 17.sp),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.White, unfocusedContainerColor = Color.White,
+                        disabledContainerColor = Color.White, errorContainerColor = Color.White,
+                        focusedIndicatorColor = Accent, unfocusedIndicatorColor = Line, errorIndicatorColor = AccentDark,
+                        focusedLabelColor = AccentDark, unfocusedLabelColor = Muted, errorLabelColor = AccentDark, cursorColor = Accent
+                    ),
+                    supportingText = {
+                        Row(Modifier.fillMaxWidth()) {
+                            Text(if (duplicate) "清单里已有同名待办，仍可保存。" else "", color = Muted, fontSize = 11.sp,
+                                modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite })
+                            Text("${draft.value.title.length}/${UiLimits.MAX_TITLE}", color = Muted, fontSize = 11.sp,
+                                modifier = Modifier.clearAndSetSemantics {})
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth().focusRequester(titleFocus),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() })
                 )
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                error?.takeIf { it.stepId == null }?.let { ErrorNote(it) }
+                Text("分类", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                Row(Modifier.fillMaxWidth().padding(top = 0.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     UiLimits.CATEGORIES.forEach { category ->
                         FilterChip(
                             selected = draft.value.category == category, enabled = !busy,
@@ -583,14 +625,22 @@ internal fun TodoEditorDialog(
                         )
                     }
                 }
+                // 「重要」与分类同一套胶囊样式，选中变暖橙；读屏仍是复选框。
+                val important = draft.value.important
                 Row(
-                    Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(
-                        value = draft.value.important, enabled = !busy, role = Role.Checkbox,
-                        onValueChange = { value -> edit { it.copy(value = it.value.copy(important = value)) } }
-                    ), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(22.dp))
+                        .background(if (important) AccentSoft else Color.White)
+                        .border(1.dp, if (important) Accent else Line, RoundedCornerShape(22.dp))
+                        .toggleable(
+                            value = important, enabled = !busy, role = Role.Checkbox,
+                            onValueChange = { value -> edit { it.copy(value = it.value.copy(important = value)) } }
+                        ).padding(start = 10.dp, end = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Checkbox(checked = draft.value.important, onCheckedChange = null, enabled = !busy, modifier = Modifier.size(24.dp))
-                    Text("标为重要，放在最前面", modifier = Modifier.weight(1f), fontSize = 13.sp)
+                    Checkbox(checked = important, onCheckedChange = null, enabled = !busy, modifier = Modifier.size(24.dp),
+                        colors = CheckboxDefaults.colors(checkedColor = Accent, uncheckedColor = Muted))
+                    Text("重要", fontSize = 13.sp, color = if (important) AccentDark else Ink)
+                    Text("放在最前面", fontSize = 11.sp, color = Muted)
                 }
                 HorizontalDivider(color = Line)
                 Row(
@@ -598,11 +648,9 @@ internal fun TodoEditorDialog(
                         edit { it.copy(stepsOpen = !it.stepsOpen) }
                     }, verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        "拆成小步 · ${if (draft.value.steps.isEmpty()) "可选" else "${draft.value.steps.size} 步"}",
-                        modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium
-                    )
-                    Text(if (draft.stepsOpen) "收起" else "展开", color = Muted, fontSize = 12.sp)
+                    Text(if (draft.stepsOpen) "▾" else "▸", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(end = 6.dp))
+                    Text("拆成小步", modifier = Modifier.weight(1f), fontSize = 13.sp)
+                    Text(if (draft.value.steps.isEmpty()) "可选" else "${draft.value.steps.size} 步", color = Muted, fontSize = 12.sp)
                 }
                 if (draft.stepsOpen) {
                     draft.value.steps.forEachIndexed { index, step ->
@@ -622,9 +670,8 @@ internal fun TodoEditorDialog(
                             }
                             Row(
                                 Modifier.fillMaxWidth().heightIn(min = 48.dp).bringIntoViewRequester(bringIntoView),
-                                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Text("${index + 1}", color = Muted, fontSize = 13.sp)
                                 BasicTextField(
                                     value = step.title, enabled = !busy, singleLine = true,
                                     onValueChange = { value ->
@@ -635,7 +682,7 @@ internal fun TodoEditorDialog(
                                     modifier = Modifier.weight(1f).heightIn(min = 48.dp).focusRequester(requester)
                                         .onFocusChanged { focused = it.isFocused }
                                         .semantics { contentDescription = "第 ${index + 1} 步" },
-                                    textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 15.sp),
+                                    textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp),
                                     cursorBrush = SolidColor(Accent),
                                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                                     keyboardActions = KeyboardActions(onNext = {
@@ -647,37 +694,74 @@ internal fun TodoEditorDialog(
                                     decorationBox = { input ->
                                         Box(
                                             Modifier.fillMaxWidth().heightIn(min = 48.dp).border(1.dp, Line, RoundedCornerShape(10.dp))
-                                                .padding(horizontal = 12.dp, vertical = 12.dp), contentAlignment = Alignment.CenterStart
+                                                .padding(10.dp), contentAlignment = Alignment.CenterStart
                                         ) {
-                                            if (step.title.isEmpty()) Text("写下一个小步", color = Muted, fontSize = 15.sp)
                                             input()
                                         }
                                     }
                                 )
-                                if (!locked) IconButton(
-                                    enabled = !busy, modifier = Modifier.size(48.dp),
-                                    onClick = { edit { d -> d.copy(value = d.value.copy(steps = d.value.steps.filterNot { it.id == step.id })) } }
-                                ) { Icon(Icons.Outlined.DeleteOutline, "删除第 ${index + 1} 步", tint = Muted) }
+                                if (!locked) Box(
+                                    Modifier.size(width = 44.dp, height = 48.dp).clip(RoundedCornerShape(9.dp))
+                                        .clickable(enabled = !busy, role = Role.Button) {
+                                            edit { d -> d.copy(value = d.value.copy(steps = d.value.steps.filterNot { it.id == step.id })) }
+                                        }.semantics { contentDescription = "删除第 ${index + 1} 步" },
+                                    contentAlignment = Alignment.Center
+                                ) { Text("×", color = Muted, fontSize = 14.sp) }
                             }
+                            error?.takeIf { it.stepId == step.id }?.let { ErrorNote(it) }
                         }
                     }
                     if (locked) Text("已完成的步骤仅可改名。需要重做时，请在详情中选择「重新打开」。", color = Muted, fontSize = 12.sp)
-                    else TextButton(
-                        enabled = !busy && draft.value.steps.size < Validation.MAX_STEPS,
-                        onClick = ::addStep, modifier = Modifier.heightIn(min = 48.dp)
-                    ) { Text(if (draft.value.steps.size >= Validation.MAX_STEPS) "最多 ${Validation.MAX_STEPS} 步" else "加一步") }
+                    else {
+                        val full = draft.value.steps.size >= Validation.MAX_STEPS
+                        Row(
+                            Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp))
+                                .drawBehind {
+                                    val stroke = 1.dp.toPx()
+                                    drawRoundRect(Color(0xFFC9C9C9), topLeft = Offset(stroke / 2, stroke / 2),
+                                        size = Size(size.width - stroke, size.height - stroke), cornerRadius = CornerRadius(12.dp.toPx()),
+                                        style = Stroke(stroke, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))))
+                                }
+                                .clickable(enabled = !busy && !full, role = Role.Button, onClick = ::addStep)
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (!full) Icon(Icons.Outlined.Add, null, tint = AccentDark, modifier = Modifier.padding(end = 4.dp).size(14.dp))
+                            Text(if (full) "最多 ${Validation.MAX_STEPS} 步" else "加一步", color = if (full) Muted else AccentDark, fontSize = 12.sp)
+                        }
+                    }
                 }
                 if (todo != null) {
                     HorizontalDivider(color = Line)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (todo.archived) TextButton(enabled = !busy, onClick = { onRestore(todo) }) { Text("找回") }
-                        TextButton(enabled = !busy, onClick = { onDelete(todo) }) { Text("删除待办", color = AccentDark) }
+                        TextButton(enabled = !busy, onClick = { onDelete(todo) }, modifier = Modifier.heightIn(min = 48.dp),
+                            contentPadding = PaddingValues(horizontal = 0.dp)) { Text("删除待办", color = AccentDark, fontSize = 12.sp) }
                     }
                 }
             }
-            HorizontalDivider(color = Line)
-            Text("关闭保留草稿，保存后清除。", color = Muted, fontSize = 11.sp, textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 9.dp))
+            // 草稿提示只在有改动时出现；恢复出来的旧草稿可一键清空重写或撤回修改。
+            if (changed) {
+                HorizontalDivider(color = Line)
+                Row(Modifier.fillMaxWidth().heightIn(min = 36.dp).padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    if (!restored) Text("已暂存草稿，关闭不会丢。", color = Muted, fontSize = 11.sp)
+                    else {
+                        Text("接着上次没写完的 · ", color = Muted, fontSize = 11.sp)
+                        TextButton(enabled = !busy, contentPadding = PaddingValues(horizontal = 4.dp), modifier = Modifier.heightIn(min = 36.dp),
+                            onClick = {
+                                TodoDrafts.remove(todo?.id)
+                                draft = TodoDrafts.open(todo)
+                                restored = false
+                                error = null
+                                titleFocus.requestFocus()
+                            }) {
+                            Text(if (todo == null) "清空重写" else "撤回修改", color = AccentDark, fontSize = 11.sp,
+                                textDecoration = TextDecoration.Underline)
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -863,24 +947,4 @@ internal fun ProgressEditorDialog(context: Context, session: FocusSession, previ
             else -> onSave(note.trim(), value)
         }
     }) { Text(if (busy) "保存中" else "保存进度") } }, dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("稍后再写") } })
-}
-
-@Composable
-internal fun BarChart(values: List<Long>, labels: List<String>, description: String) {
-    val color = MaterialTheme.colorScheme.primary
-    val maximum = (values.maxOrNull() ?: 0L).coerceAtLeast(1L)
-    Column {
-        Canvas(Modifier.fillMaxWidth().height(125.dp).semantics { contentDescription = description }) {
-            val line = Color(0xFFEEEEEE)
-            repeat(4) { index -> val y = size.height * index / 3f; drawLine(line, Offset(0f, y), Offset(size.width, y)) }
-            if (values.isNotEmpty()) {
-                val cell = size.width / values.size
-                values.forEachIndexed { index, value ->
-                    val height = (size.height - 8.dp.toPx()) * value.toFloat() / maximum
-                    drawRoundRect(if (value == maximum) color else Color(0xFFBBBBBB), Offset(index * cell + cell * 0.16f, size.height - height.coerceAtLeast(1f)), Size(cell * 0.68f, height.coerceAtLeast(1f)), CornerRadius(3.dp.toPx()))
-                }
-            }
-        }
-        Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) { labels.forEach { Text(it, fontSize = 10.sp, color = Muted) } }
-    }
 }

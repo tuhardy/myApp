@@ -107,3 +107,24 @@ object Validation {
         require(percent == null || percent in 0..100) { "完成度须为 0–100" }
     }
 }
+
+/** 专注项时长输入：直接填分钟数，±5 步进先对齐到 5 的倍数（7 按「+」得 10），夹在 1 分钟至 23 小时 59 分之间。 */
+object DurationInput {
+    const val STEP = 5
+    const val MAX_DIGITS = 4
+
+    fun step(minutes: Int, up: Boolean): Int {
+        val next = if (up) Math.floorDiv(minutes, STEP) * STEP + STEP else -Math.floorDiv(-minutes, STEP) * STEP - STEP
+        return next.coerceIn(Validation.MIN_MINUTES, Validation.MAX_MINUTES)
+    }
+
+    /** 输入框只收数字；正计时未设目标返回 null，表示不限时。 */
+    fun parse(text: String, mode: TimerMode, targetEnabled: Boolean): Result<Int?> {
+        if (mode == TimerMode.COUNTUP && !targetEnabled) return Result.success(null)
+        val minutes = text.trim().toIntOrNull()
+        if (minutes == null || minutes < Validation.MIN_MINUTES) return Result.failure(IllegalArgumentException(
+            if (mode == TimerMode.COUNTUP) "目标时长至少为 1 分钟；不想设目标请点「取消目标」。" else "专注时长至少为 1 分钟。"))
+        if (minutes > Validation.MAX_MINUTES) return Result.failure(IllegalArgumentException("时长最多 ${Validation.MAX_MINUTES} 分钟（23 小时 59 分钟）。"))
+        return Result.success(minutes)
+    }
+}

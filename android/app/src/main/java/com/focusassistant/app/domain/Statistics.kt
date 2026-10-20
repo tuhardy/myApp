@@ -12,6 +12,9 @@ data class Summary(val seconds: Long, val count: Int, val activeDays: Int, val a
 data class AllTimeSummary(val seconds: Long, val count: Int, val activeDays: Int, val calendarDays: Long,
     val calendarAverageSeconds: Double, val activeAverageSeconds: Double, val firstDate: LocalDate?)
 data class TrendPoint(val label: String, val seconds: Long)
+data class Comparison(val current: Long, val previous: Long) {
+    val difference: Long get() = current - previous
+}
 
 object Statistics {
     fun range(period: Period, anchor: LocalDate): Pair<LocalDate, LocalDate> {
@@ -81,6 +84,52 @@ object Statistics {
         }
         return result
     }
+    fun completionDate(session: FocusSession, zone: ZoneId = ZoneId.systemDefault()): LocalDate = date(session, zone)
+
+    /** 「全部」周期：截至今天（含）完成的全部记录，按结束时间倒序。 */
+    fun allTimeSessions(sessions: List<FocusSession>, today: LocalDate = LocalDate.now(), zone: ZoneId = ZoneId.systemDefault()): List<FocusSession> =
+        sessions.filter { !date(it, zone).isAfter(today) }.sortedByDescending { it.endedAt }
+
+    /** 全部记录的范围：首个完成日至明天零点（不含）；没有记录时为 null。 */
+    fun allTimeRange(sessions: List<FocusSession>, today: LocalDate = LocalDate.now(), zone: ZoneId = ZoneId.systemDefault()): Pair<LocalDate, LocalDate>? =
+        allTimeSessions(sessions, today, zone).minOfOrNull { date(it, zone) }?.let { it to today.plusDays(1) }
+
+    /** 按月趋势，从首个完成月补齐到本月；跨年的月份标注两位年份。 */
+    fun monthlyTrend(sessions: List<FocusSession>, today: LocalDate = LocalDate.now(), zone: ZoneId = ZoneId.systemDefault()): List<TrendPoint> {
+        val completed = allTimeSessions(sessions, today, zone)
+        val first = completed.minOfOrNull { date(it, zone) } ?: return emptyList()
+        val byMonth = completed.groupBy { date(it, zone).withDayOfMonth(1) }.mapValues { (_, records) -> records.sumOf { it.durationSeconds } }
+        val result = mutableListOf<TrendPoint>()
+        var cursor = first.withDayOfMonth(1)
+        val end = today.withDayOfMonth(1).plusMonths(1)
+        while (cursor < end) {
+            val label = if (cursor.year == today.year) "${cursor.monthValue}月" else "${cursor.year % 100}年${cursor.monthValue}月"
+            result += TrendPoint(label, byMonth[cursor] ?: 0L)
+            cursor = cursor.plusMonths(1)
+        }
+        return result
+    }
+
+    /** 以周期起点整段平移：日±1 天、周±1 周、月±1 月、年±1 年。 */
+    fun shift(period: Period, anchor: LocalDate, direction: Long): LocalDate {
+        val start = range(period, anchor).first
+        return when (period) {
+            Period.DAY -> start.plusDays(direction)
+            Period.WEEK -> start.plusWeeks(direction)
+            Period.MONTH -> start.plusMonths(direction)
+            Period.YEAR -> start.plusYears(direction)
+        }
+    }
+
+    /** 与上一完整周期对比完成时长（秒）。 */
+    fun compare(sessions: List<FocusSession>, period: Period, anchor: LocalDate, zone: ZoneId = ZoneId.systemDefault()): Comparison =
+        Comparison(select(sessions, period, anchor, zone).sumOf { it.durationSeconds },
+            select(sessions, period, shift(period, anchor, -1), zone).sumOf { it.durationSeconds })
+
+    /** 每个本地完成日的专注秒数，用于热力日历与选择面板。 */
+    fun dailySeconds(sessions: List<FocusSession>, zone: ZoneId = ZoneId.systemDefault()): Map<LocalDate, Long> =
+        sessions.groupBy { date(it, zone) }.mapValues { (_, records) -> records.sumOf { it.durationSeconds } }
+
     fun latestProgress(progress: List<ProgressEntry>, projectId: String): ProgressEntry? = latest(progress.filter { it.projectId == projectId })
     fun latestForSession(progress: List<ProgressEntry>, sessionId: String): ProgressEntry? = latest(progress.filter { it.sessionId == sessionId })
     private fun latest(progress: List<ProgressEntry>): ProgressEntry? = progress.withIndex().maxWithOrNull(
