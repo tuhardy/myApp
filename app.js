@@ -3198,6 +3198,17 @@
     svg.setAttribute("aria-hidden", "true");
     const known = series.map((point, index) => ({ point, index })).filter(item => item.point.known);
     if (!known.length) return svg;
+    if (!compact) {
+      [0.25, 0.5, 0.75].forEach(fraction => {
+        const grid = document.createElementNS(ns, "line");
+        grid.setAttribute("x1", "0");
+        grid.setAttribute("x2", String(width));
+        grid.setAttribute("y1", String((height * fraction).toFixed(1)));
+        grid.setAttribute("y2", String((height * fraction).toFixed(1)));
+        grid.setAttribute("class", "asset-gridline");
+        svg.append(grid);
+      });
+    }
     const values = known.map(item => item.point.net);
     const min = Math.min(...values);
     const max = Math.max(...values);
@@ -3207,6 +3218,18 @@
       ? height / 2
       : height - pad - (value - min) / span * (height - pad * 2);
     const points = known.map(({ point, index }) => [x(index), y(point.net), point, index]);
+    if (!compact && selectedIndex !== null && selectedIndex !== undefined && series[selectedIndex]?.known) {
+      const selectedPoint = points.find(([, , , index]) => index === selectedIndex);
+      if (selectedPoint) {
+        const guide = document.createElementNS(ns, "line");
+        guide.setAttribute("x1", selectedPoint[0].toFixed(1));
+        guide.setAttribute("x2", selectedPoint[0].toFixed(1));
+        guide.setAttribute("y1", String(pad));
+        guide.setAttribute("y2", String(height - pad));
+        guide.setAttribute("class", "asset-selection-guide");
+        svg.append(guide);
+      }
+    }
     if (points.length > 1) {
       const line = document.createElementNS(ns, "polyline");
       line.setAttribute("points", points.map(([px, py]) => `${px.toFixed(1)},${py.toFixed(1)}`).join(" "));
@@ -3260,7 +3283,10 @@
     chart.setAttribute("aria-valuetext", readout.textContent);
     chart.setAttribute("aria-label", `${state.assetPeriod === "year" ? `${state.assetYear}年` : "近 6 个月"}净资产走势。${readout.textContent}`);
     chart.tabIndex = state.assetTrendOpen && known.length ? 0 : -1;
-    $("asset-chart-note").textContent = !known.length ? "记下余额后即可开始查看历史。" : known.length === 1 ? "目前只有一个月份的记录，已显示单点；积累更多月份后可查看变化趋势。" : "点选图表或月份查看净资产；实心点表示当月记录含备注。";
+    const chartNote = $("asset-chart-note");
+    const chartHelp = $("asset-chart-help");
+    chartNote.textContent = !known.length ? "记下余额后即可开始查看历史。" : known.length === 1 ? "已显示单月余额" : "点选图表或月份查看净资产";
+    chartHelp.hidden = known.length !== 1;
     const labels = $("asset-labels");
     labels.replaceChildren(...series.map((item, index) => {
       const button = taskButton("", `asset-label${index === selected ? " selected" : ""}`, () => chooseAssetPoint(index));
@@ -3290,10 +3316,13 @@
       : state.hideAmounts ? "本月变化 · 金额已隐藏"
         : `本月 ${summary.monthChange >= 0 ? "↑" : "↓"} ${shownAssetMoney(summary.monthChange, { sign: true })}${pct}`;
     $("asset-change").classList.toggle("down", (summary.monthChange ?? 0) < 0);
-    $("asset-split").textContent = `资产 ${shownAssetMoney(summary.assets)} · 负债 ${shownAssetMoney(summary.debts)}`;
+    $("asset-total").textContent = shownAssetMoney(summary.assets);
+    $("asset-debt").textContent = shownAssetMoney(summary.debts);
     $("asset-net").setAttribute("aria-label", state.hideAmounts ? "净资产金额已隐藏" : `净资产 ${money(summary.net)}`);
     $("asset-change").setAttribute("aria-label", state.hideAmounts ? "本月变化金额已隐藏" : $("asset-change").textContent);
-    $("asset-split").setAttribute("aria-label", state.hideAmounts ? "资产与负债金额已隐藏" : $("asset-split").textContent);
+    $("asset-split").setAttribute("aria-label", state.hideAmounts
+      ? "资产与负债金额已隐藏"
+      : `资产 ${money(summary.assets)} · 负债 ${money(summary.debts)}`);
     $("asset-hide").textContent = state.hideAmounts ? "显示金额" : "隐藏金额";
     $("asset-hide").setAttribute("aria-pressed", String(state.hideAmounts));
     $("asset-year-control").hidden = state.assetPeriod !== "year";
@@ -3748,8 +3777,8 @@
   });
   $("timer-settings").addEventListener("click", () => focusItemEditor(state.selectedFocusItem));
   $("preferences-button").addEventListener("click", timerSettings);
-  $("asset-open").addEventListener("click", assetSheet);
-  $("asset-open-history").addEventListener("click", assetSheet);
+  $("asset-open").addEventListener("click", () => assetSheet());
+  $("asset-open-history").addEventListener("click", () => assetSheet());
   $("asset-trend-toggle").addEventListener("click", () => {
     const detail = $("asset-trend-detail");
     const collapsing = state.assetTrendOpen;
@@ -3757,6 +3786,7 @@
     state.assetTrendOpen = !state.assetTrendOpen;
     renderProfile();
   });
+  $("asset-chart-help").addEventListener("click", () => information("为什么图表只有一个点？", ["目前只有一个月份有可用的余额记录，因此图表显示单点。记录更多月份后，才能看到变化趋势。", "这里展示的是账户余额变化，不是收入、支出或投资收益统计。"]));
   $("asset-update").addEventListener("click", balanceUpdater);
   $("asset-hide").addEventListener("click", () => { state.hideAmounts = !state.hideAmounts; renderProfile(); });
   document.querySelectorAll("[data-asset-period]").forEach(button => button.addEventListener("click", () => {

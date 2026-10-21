@@ -210,12 +210,16 @@
                 <div class="asset-period-summary" id="asset-period-summary"></div>
                 <div class="asset-period-tabs" role="group" aria-label="资产走势周期"><button type="button" data-asset-period="six" aria-pressed="true">近 6 个月</button><button type="button" data-asset-period="year" aria-pressed="false">年度</button></div>
                 <div class="asset-year-control" id="asset-year-control" hidden><button type="button" id="asset-year-prev" aria-label="上一年">‹</button><strong id="asset-year"></strong><button type="button" id="asset-year-next" aria-label="下一年">›</button></div>
-                <div class="asset-sparkline" id="asset-sparkline" role="slider" tabindex="0" aria-label="净资产历史走势"></div>
-                <p class="asset-chart-note" id="asset-chart-note"></p>
+                <div class="asset-chart-frame"><div class="asset-sparkline" id="asset-sparkline" role="slider" tabindex="0" aria-label="净资产历史走势"></div></div>
+                <div class="asset-chart-meta"><p class="asset-chart-note" id="asset-chart-note" aria-live="polite"></p><button class="asset-chart-help" id="asset-chart-help" type="button" aria-label="查看单月资产走势说明" aria-haspopup="dialog" aria-controls="modal" title="为什么图表只有一个点？" hidden></button></div>
                 <div class="asset-labels" id="asset-labels"></div>
                 <p class="asset-chart-readout" id="asset-chart-readout" aria-live="polite"></p>
               </div>
-              <div class="asset-foot"><small id="asset-split"></small><div><button class="text-button" id="asset-open-history" type="button">历史明细</button><button class="secondary-button" id="asset-update" type="button">更新余额</button></div></div>
+              <div class="asset-breakdown" id="asset-split" aria-label="资产与负债金额">
+                <div class="asset-breakdown-item"><span>资产</span><strong id="asset-total"></strong></div>
+                <div class="asset-breakdown-item"><span>负债</span><strong id="asset-debt"></strong></div>
+              </div>
+              <div class="asset-foot"><button class="secondary-button" id="asset-open-history" type="button">余额历史</button><button class="secondary-button" id="asset-update" type="button">更新余额</button></div>
             </div>
             <div class="section-heading"><h3>心愿</h3><small id="wish-caption">单个账户或所有资产</small></div>
             <div class="wish-list" id="wish-list"></div>
