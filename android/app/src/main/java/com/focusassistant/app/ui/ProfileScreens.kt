@@ -30,6 +30,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -113,10 +114,14 @@ internal fun ProfileScreen(
     ScreenBody {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Caption("PERSONAL SPACE")
-                Text("我的", fontSize = 26.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
+                Text("PERSONAL SPACE", fontSize = 10.sp, letterSpacing = 1.5.sp, color = Muted)
+                Text("我的", fontSize = 25.sp, lineHeight = 35.sp, letterSpacing = (-0.9).sp, fontWeight = FontWeight(650), modifier = Modifier.semantics { heading() })
             }
-            TextButton(onClick = onToggleHide) { Text(if (hideAmounts) "显示金额" else "隐藏金额", color = Muted, fontSize = 12.sp) }
+            Box(
+                Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(8.dp))
+                    .clickable(role = Role.Button, onClick = onToggleHide).padding(horizontal = 4.dp),
+                contentAlignment = Alignment.Center
+            ) { Text(if (hideAmounts) "显示金额" else "隐藏金额", color = Muted, fontSize = 11.sp, maxLines = 1) }
         }
         NetWorthCard(state.assets, today, hideAmounts, onToggleHide, onAssets, onUpdate, onAddAccount)
         SectionHeading("心愿", "单个账户或所有资产")
@@ -136,7 +141,7 @@ internal fun ProfileScreen(
 @Composable
 private fun SectionHeading(title: String, caption: String?) {
     Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).semantics { heading() })
+        Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).semantics { heading() })
         caption?.let { Text(it, fontSize = 11.sp, color = Muted) }
     }
 }
@@ -158,18 +163,19 @@ private fun NetWorthCard(book: AssetBook, today: LocalDate, hide: Boolean, onTog
     val empty = book.accounts.isEmpty()
     val change = summary.monthChangeCents
     if (showSingleMonthInfo) AlertDialog(
-        onDismissRequest = { showSingleMonthInfo = false },
-        title = { Text("为什么图表只有一个点？") },
+        onDismissRequest = { showSingleMonthInfo = false }, containerColor = Color.White,
+        title = { Text("为什么图表只有一个点？", fontSize = 22.sp, fontWeight = FontWeight.SemiBold) },
         text = { Text("目前只有一个月份有可用的余额记录，因此图表显示单点。记录更多月份后，才能看到变化趋势。\n\n这里展示的是账户余额变化，不是收入、支出或投资收益统计。") },
         confirmButton = { TextButton(onClick = { showSingleMonthInfo = false }) { Text("知道了") } }
     )
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White).border(1.dp, CardLine, RoundedCornerShape(18.dp)).padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("净资产", fontSize = 12.sp, color = Muted, modifier = Modifier.weight(1f))
-            Text("手动记录 · 非收支统计", fontSize = 10.sp, color = Muted)
+            Text("手动记录 · 非收支统计", fontSize = 10.sp, color = Muted, maxLines = 1, softWrap = false)
         }
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClickLabel = "查看资产详情", onClick = onAssets)) {
-            Text(shownMoney(summary.netCents, hide), fontSize = 30.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp, color = Ink, modifier = Modifier.clearAndSetSemantics { contentDescription = if (hide) "金额已隐藏" else AssetRules.money(summary.netCents) })
+            Text(shownMoney(summary.netCents, hide), fontSize = 30.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp, color = Ink,
+                style = NumeralStyle, modifier = Modifier.clearAndSetSemantics { contentDescription = if (hide) "金额已隐藏" else AssetRules.money(summary.netCents) })
             val pct = summary.monthRatio?.takeIf { !hide }?.let { String.format(Locale.ROOT, " · %.1f%%", it * 100) }.orEmpty()
             Text(when { empty -> "还没有账户，添加一个开始记录"; change == null -> "本月暂无对比"; hide -> "本月变化 · 金额已隐藏"; else -> "本月 ${if (change >= 0) "↑" else "↓"} ${shownMoney(change, hide, sign = true)}$pct" },
                 fontSize = 12.sp, color = if ((change ?: 0L) < 0L || empty) Muted else AccentDark,
@@ -182,12 +188,16 @@ private fun NetWorthCard(book: AssetBook, today: LocalDate, hide: Boolean, onTog
             } else {
                 Spacer(Modifier.weight(1f))
             }
-            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.heightIn(min = 44.dp).clearAndSetSemantics {
-                contentDescription = if (expanded) "收起趋势" else "查看趋势"
-                stateDescription = if (expanded) "已展开" else "已收起"
-            }) {
-                Text(if (expanded) "收起趋势" else "查看趋势", color = AccentDark, fontSize = 12.sp)
-            }
+            Box(
+                Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(10.dp)).background(AccentSoft)
+                    .border(1.dp, Color(0xFFE9C6B2), RoundedCornerShape(10.dp))
+                    .clickable(role = Role.Button, onClickLabel = if (expanded) "收起趋势" else "查看趋势") { expanded = !expanded }
+                    .clearAndSetSemantics {
+                        contentDescription = if (expanded) "收起趋势" else "查看趋势"
+                        stateDescription = if (expanded) "已展开" else "已收起"
+                    }.padding(horizontal = 10.dp),
+                contentAlignment = Alignment.Center
+            ) { Text(if (expanded) "收起趋势" else "查看趋势", color = AccentDark, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1) }
         }
         if (expanded) {
             Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
@@ -240,17 +250,31 @@ private fun NetWorthCard(book: AssetBook, today: LocalDate, hide: Boolean, onTog
             listOf("资产" to summary.assetsCents, "负债" to summary.debtsCents).forEachIndexed { index, (label, amount) ->
                 Row(Modifier.fillMaxWidth().heightIn(min = 38.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(label, fontSize = 11.sp, color = Muted, modifier = Modifier.weight(1f))
-                    Text(shownMoney(amount, hide), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Ink, maxLines = 1, softWrap = false,
+                    Text(shownMoney(amount, hide), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Ink, maxLines = 1, softWrap = false,
                         modifier = Modifier.clearAndSetSemantics { contentDescription = if (hide) "金额已隐藏" else "$label ${AssetRules.money(amount)}" })
                 }
                 if (index == 0) HorizontalDivider(color = CardLine)
             }
         }
-        Row(Modifier.fillMaxWidth().padding(top = 10.dp).heightIn(min = 48.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SoftButton("余额历史", Modifier.weight(1f).heightIn(min = 48.dp), onClick = onAssets)
+        Row(
+            Modifier.fillMaxWidth().padding(top = 10.dp).drawBehind {
+                drawLine(CardLine, Offset(0f, 0f), Offset(size.width, 0f), 1.dp.toPx())
+            }.padding(top = 10.dp).heightIn(min = 44.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                Modifier.weight(1f).heightIn(min = 44.dp).clip(RoundedCornerShape(10.dp))
+                    .background(AccentSoft).border(1.dp, Color(0xFFE9C6B2), RoundedCornerShape(10.dp))
+                    .clickable(role = Role.Button, onClick = onAssets),
+                contentAlignment = Alignment.Center
+            ) { Text("余额历史", fontSize = 11.sp, color = AccentDark, maxLines = 1) }
             Box(Modifier.weight(1f)) {
                 if (empty) PrimaryButton("添加账户", true, Modifier.fillMaxWidth(), onAdd)
-                else PrimaryButton("更新余额", true, Modifier.fillMaxWidth(), onUpdate)
+                else Button(
+                    onClick = onUpdate, shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)
+                ) { Text("更新余额", fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1) }
             }
         }
     }
@@ -325,7 +349,7 @@ private fun WishRow(book: AssetBook, today: LocalDate, hide: Boolean, onWish: (S
                     .clearAndSetSemantics { contentDescription = "${wish.name}，${if (wish.scope == WishScope.ALL) "所有资产" else "单个账户"}，${if (hide) "进度金额已隐藏" else "已存 $percent%"}，$status" },
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(wish.name, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text(wish.name, fontSize = 13.sp, fontWeight = FontWeight(550))
                 Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(SoftSurface)) {
                     if (!hide) Box(Modifier.fillMaxWidth(progress.ratio.toFloat()).fillMaxHeight().clip(RoundedCornerShape(3.dp)).background(Accent))
                 }
@@ -391,8 +415,8 @@ private fun SettingsGroup(state: AppState, notificationAllowed: Boolean, exactAl
             ) {
                 Box(Modifier.width(27.dp), contentAlignment = Alignment.Center) { Icon(item.icon, null, tint = Muted, modifier = Modifier.size(19.dp)) }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text(item.title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Text(item.detail, fontSize = 12.sp, color = Muted)
+                    Text(item.title, fontSize = 12.sp, fontWeight = FontWeight(550))
+                    Text(item.detail, fontSize = 11.sp, color = Muted)
                 }
                 item.tag?.let {
                     Text(it, fontSize = 11.sp, color = Muted, modifier = Modifier.border(1.dp, Line, RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 3.dp))

@@ -152,7 +152,7 @@ internal fun UsageScreen(
                 Text(buildAnnotatedString {
                     append("时间足迹")
                     withStyle(SpanStyle(color = Accent)) { append(".") }
-                }, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
+                }, fontSize = 26.sp, lineHeight = 36.sp, letterSpacing = (-0.9).sp, fontWeight = FontWeight.SemiBold)
             }
             IconButton(onClick = onRefresh, enabled = permissionGranted && !loading) {
                 Icon(Icons.Outlined.Refresh, "刷新使用时长", tint = Muted)
@@ -225,7 +225,7 @@ private fun UsageHero(week: Boolean, report: UsageReport?, caption: String, goal
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(if (week) "本周应用使用" else "今日应用使用", color = AccentDark, fontSize = 12.sp)
             if (report?.hasData == true) UsageTotal(report.totalMillis)
-            else Text("—", fontSize = 40.sp, fontWeight = FontWeight.Light, color = Muted)
+            else Text("—", fontSize = 40.sp, fontWeight = FontWeight.Light, color = Muted, style = NumeralStyle)
             Text(caption, color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
         }
         GoalRing(goalMinutes, report?.todayMillis, onGoal)
@@ -236,9 +236,9 @@ private fun UsageHero(week: Boolean, report: UsageReport?, caption: String, goal
 private fun UsageTotal(millis: Long) {
     val minutes = millis / UsageLimits.MILLIS_PER_MINUTE
     Text(buildAnnotatedString {
-        withStyle(SpanStyle(fontSize = 40.sp, fontWeight = FontWeight.Light, color = Ink)) { append((minutes / UiLimits.MINUTES_PER_HOUR).toString()) }
+        withStyle(SpanStyle(fontSize = 40.sp, fontWeight = FontWeight.Light, color = Ink, fontFeatureSettings = "'tnum'")) { append((minutes / UiLimits.MINUTES_PER_HOUR).toString()) }
         append(" 小时 ")
-        withStyle(SpanStyle(fontSize = 40.sp, fontWeight = FontWeight.Light, color = Ink)) { append((minutes % UiLimits.MINUTES_PER_HOUR).toString()) }
+        withStyle(SpanStyle(fontSize = 40.sp, fontWeight = FontWeight.Light, color = Ink, fontFeatureSettings = "'tnum'")) { append((minutes % UiLimits.MINUTES_PER_HOUR).toString()) }
         append(" 分钟")
     }, color = AccentDark, fontSize = 12.sp, maxLines = 1)
 }
@@ -266,7 +266,7 @@ private fun GoalRing(goalMinutes: Int, todayMillis: Long?, onGoal: () -> Unit) {
             }
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(percent, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = AccentDark)
+            Text(percent, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = AccentDark, style = NumeralStyle)
             Text("目标 ${compactGoal(goalMinutes)}", fontSize = 10.sp, color = Muted, maxLines = 1)
         }
     }

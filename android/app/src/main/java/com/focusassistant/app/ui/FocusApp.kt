@@ -13,17 +13,22 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AssignmentTurnedIn
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Book
-import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -431,17 +436,35 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
     FocusTheme {
         Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
             // 全屏编辑日记时隐藏底部导航。
-            if (!writingDiary) NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+            if (!writingDiary) NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.drawBehind {
+                    drawLine(Line, start = Offset(0f, 0f), end = Offset(size.width, 0f), strokeWidth = 1.dp.toPx())
+                }
+            ) {
                 val selected = when (ui.screen) { Screen.TIMER, Screen.STATISTICS -> Screen.PROJECTS; else -> ui.screen }
                 listOf(Screen.PROJECTS, Screen.TODOS, Screen.DIARY, Screen.USAGE, Screen.SETTINGS).forEach { page ->
                     val label = when (page) { Screen.PROJECTS -> "专注"; Screen.TODOS -> "待办"; Screen.DIARY -> "日记"; Screen.USAGE -> "用时"; else -> "我的" }
-                    val image = when (page) { Screen.PROJECTS -> Icons.Outlined.Timer; Screen.TODOS -> Icons.Outlined.CheckCircle; Screen.DIARY -> Icons.Outlined.Book; Screen.USAGE -> Icons.Outlined.BarChart; else -> Icons.Outlined.PersonOutline }
-                    NavigationBarItem(selected = selected == page, onClick = {
+                    val image = when (page) {
+                        Screen.PROJECTS -> Icons.Outlined.Timer
+                        Screen.TODOS -> Icons.Outlined.AssignmentTurnedIn
+                        Screen.DIARY -> Icons.Outlined.Book
+                        Screen.USAGE -> Icons.Outlined.BarChart
+                        else -> Icons.Outlined.PersonOutline
+                    }
+                    val colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = AccentDark, selectedTextColor = AccentDark,
+                        indicatorColor = AccentSoft, unselectedIconColor = Muted, unselectedTextColor = Muted
+                    )
+                    NavigationBarItem(selected = selected == page, alwaysShowLabel = true, onClick = {
                         // 已在日记页时再点「日记」：二级页回首页，已在首页则滚回顶部；从别的页签切回仍回到离开时的页面。
                         if (page == Screen.DIARY && ui.screen == Screen.DIARY) {
                             if (ui.diary.reselect()) navScope.launch { ui.diary.homeList.animateScrollToItem(0) }
                         } else ui.screen = page
-                    }, icon = { Icon(image, label) }, label = { Text(label) })
+                    }, icon = { Icon(image, label, modifier = Modifier.size(20.dp)) },
+                        label = { Text(label, fontSize = 12.sp) }, colors = colors,
+                        modifier = Modifier.heightIn(min = 64.dp)
+                    )
                 }
             }
         }) { padding ->
@@ -702,7 +725,8 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                 })
             }
             "automation" -> InformationDialog("自动化扩展", listOf("此版本仅预留自动化入口，尚未接入任何脚本引擎。", "后续根据你的具体手机脚本和工具确定接入方式，不默认申请 root、无障碍或其他应用控制权限。"), { ui.close() })
-            "export" -> AlertDialog(onDismissRequest = { if (!ui.busy) ui.close() }, title = { Text(if (ui.statsAll) "导出全部记录" else "导出当前周期") }, text = { Text("CSV 适合 Excel，JSON 包含活动片段、进度历史及累计总览。仅导出当前周期的完整记录，不受分页限制。") },
+            "export" -> AlertDialog(onDismissRequest = { if (!ui.busy) ui.close() }, containerColor = Color.White,
+                title = { Text(if (ui.statsAll) "导出全部记录" else "导出当前周期", fontSize = 22.sp, fontWeight = FontWeight.SemiBold) }, text = { Text("CSV 适合 Excel，JSON 包含活动片段、进度历史及累计总览。仅导出当前周期的完整记录，不受分页限制。") },
                 confirmButton = { TextButton(enabled = !ui.busy, onClick = { exportStatistics(false) }) { Text("JSON") } }, dismissButton = { TextButton(enabled = !ui.busy, onClick = { exportStatistics(true) }) { Text("CSV") } })
             "usage-goal" -> GoalWheelSheet(state.settings.dailyGoalMinutes, ui.busy, { ui.close() }) { minutes ->
                 ui.perform { repository.saveSettings(state.settings.copy(dailyGoalMinutes = minutes)); ui.close() }
@@ -756,7 +780,8 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
 private fun NumberSettingsDialog(title: String, fields: List<Pair<String, Int>>, busy: Boolean, onDismiss: () -> Unit, onSave: (List<Int>) -> Unit) {
     var values by remember(title) { mutableStateOf(fields.map { it.second.toString() }) }
     var invalid by remember { mutableStateOf(false) }
-    AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, title = { Text(title) }, text = {
+    AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, containerColor = Color.White,
+        title = { Text(title, fontSize = 22.sp, fontWeight = FontWeight.SemiBold) }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             fields.forEachIndexed { index, field -> OutlinedTextField(value = values[index], onValueChange = { next -> values = values.mapIndexed { position, old -> if (position == index) next else old }; invalid = false }, label = { Text(field.first) }, singleLine = true, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number), modifier = Modifier.fillMaxWidth()) }
             if (invalid) Text("请输入有效的整数。", color = MaterialTheme.colorScheme.error)

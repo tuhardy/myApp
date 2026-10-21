@@ -259,7 +259,8 @@ private fun StatsOverview(allPeriod: Boolean, current: Boolean, names: PeriodNam
                     Text("累计总时长", fontSize = 12.sp, color = Muted)
                     HelpButton(onHelp)
                 }
-                Text(durationText(all.seconds), fontSize = 30.sp, fontWeight = FontWeight.Light, color = AccentDark)
+                Text(durationText(all.seconds), fontSize = 32.sp, fontWeight = FontWeight.Light, lineHeight = 40.sp,
+                    color = AccentDark, style = NumeralStyle)
                 Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     StatsMetric("自然日均 / 分钟", minuteText(all.calendarAverageSeconds), Modifier.weight(1f))
                     StatsMetric("活跃日均 / 分钟", minuteText(all.activeAverageSeconds), Modifier.weight(1f))
@@ -268,7 +269,7 @@ private fun StatsOverview(allPeriod: Boolean, current: Boolean, names: PeriodNam
                 Text(if (current) "${names.current}专注" else "${names.other}专注", fontSize = 12.sp, color = AccentDark, fontWeight = FontWeight.SemiBold)
                 Row(Modifier.padding(top = 2.dp)) {
                     Text(trimDecimal(summary.seconds / UiLimits.SECONDS_PER_MINUTE.toDouble()), fontSize = 48.sp, fontWeight = FontWeight.Light,
-                        letterSpacing = (-1).sp, color = Ink, modifier = Modifier.alignByBaseline())
+                        letterSpacing = (-0.96).sp, color = Ink, style = NumeralStyle, modifier = Modifier.alignByBaseline())
                     Text(" 分钟", fontSize = 12.sp, color = AccentDark, modifier = Modifier.alignByBaseline())
                 }
                 if (comparison.current > 0 || comparison.previous > 0) {
@@ -519,7 +520,7 @@ private fun ShareSection(sessions: List<FocusSession>, totalSeconds: Long) {
                     }
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(if (inHours) trimDecimal(totalMinutes / UiLimits.MINUTES_PER_HOUR) else totalMinutes.roundToLong().toString(), fontSize = 22.sp, color = Ink)
+                    Text(if (inHours) trimDecimal(totalMinutes / UiLimits.MINUTES_PER_HOUR) else totalMinutes.roundToLong().toString(), fontSize = 22.sp, color = Ink, style = NumeralStyle)
                     Text(if (inHours) "小时" else "分钟", fontSize = 11.sp, color = Muted)
                 }
             }

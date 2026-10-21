@@ -35,16 +35,10 @@ import kotlin.math.roundToInt
 
 /** 「刻度」视觉的共用色值与小组件：首页刻度尺、计时表盘、统计图表共用一套。 */
 internal val Ink = Color(0xFF292929)
-internal val RestSlate = Color(0xFF5D6B7C)
-internal val RestSlateDark = Color(0xFF46525F)
-internal val RestSlateSoft = Color(0xFFEDF0F3)
-internal val RulerMajor = Color(0xFFDCA78F)
-internal val RulerMinor = Color(0xFFECC6B5)
-internal val RulerPast = Color(0xFFFBE0D2)
 internal val TickIdle = Color(0xFFD9D9D9)
 internal val TickIdleMajor = Color(0xFFB8B8B8)
-internal val BarIdle = Color(0xFFC8C8C8)
 internal val BarEmpty = Color(0xFFEBEBEB)
+internal val BarIdle = Color(0xFFC8C8C8)
 internal val CATEGORY_COLORS = listOf(Color(0xFFC44E22), Color(0xFFE8AA84), Color(0xFF8B8A98), Color(0xFF7D97B5))
 
 internal object VisualLimits {

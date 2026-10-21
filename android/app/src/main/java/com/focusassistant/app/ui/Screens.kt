@@ -174,14 +174,28 @@ internal fun ProjectsScreen(
     // 「接着学」标在正在计时的项目上；没有计时时标在最近一次完成专注的项目上。
     val currentId = state.timer?.projectId ?: state.sessions.maxByOrNull { it.endedAt }?.projectId
     ScreenBody {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(bottom = 7.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(buildAnnotatedString { append("今天，接着学"); withStyle(SpanStyle(color = Accent)) { append(".") } },
-                    fontSize = 25.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
-                Caption("${today.monthValue}月${today.dayOfMonth}日 ${weekdayLabel(today)}")
+                    fontSize = 26.sp, lineHeight = 36.sp, letterSpacing = (-0.9).sp, fontWeight = FontWeight(650), modifier = Modifier.semantics { heading() })
+                Text("${today.monthValue}月${today.dayOfMonth}日 ${weekdayLabel(today)}", fontSize = 12.sp, letterSpacing = 0.4.sp, lineHeight = 18.sp, color = Muted)
             }
-            IconButton(onClick = onStatistics) { Icon(Icons.Outlined.TrendingUp, "专注统计") }
-            IconButton(onClick = onCreate) { Icon(Icons.Outlined.Add, "新建学习项目") }
+            Box(
+                Modifier.size(44.dp).clip(CircleShape).background(Color.White).border(1.dp, Line, CircleShape)
+                    .clickable(role = Role.Button, onClickLabel = "查看专注统计", onClick = onStatistics)
+                    .semantics { contentDescription = "查看专注统计" },
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(Modifier.size(18.dp)) {
+                    val w = size.width
+                    val h = size.height
+                    drawLine(Muted, Offset(w * 4f / 24, h * 4f / 24), Offset(w * 4f / 24, h * 20f / 24), 1.5.dp.toPx(), StrokeCap.Round)
+                    drawLine(Muted, Offset(w * 4f / 24, h * 20f / 24), Offset(w * 21f / 24, h * 20f / 24), 1.5.dp.toPx(), StrokeCap.Round)
+                    drawLine(Muted, Offset(w * 9f / 24, h * 15f / 24), Offset(w * 9f / 24, h * 11f / 24), 1.5.dp.toPx(), StrokeCap.Round)
+                    drawLine(Muted, Offset(w * 14f / 24, h * 15f / 24), Offset(w * 14f / 24, h * 6f / 24), 1.5.dp.toPx(), StrokeCap.Round)
+                    drawLine(Muted, Offset(w * 19f / 24, h * 15f / 24), Offset(w * 19f / 24, h * 9f / 24), 1.5.dp.toPx(), StrokeCap.Round)
+                }
+            }
         }
         state.timer?.let { timer ->
             Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(14.dp)) {
@@ -204,10 +218,14 @@ internal fun ProjectsScreen(
         } else {
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("持续推进的小目标", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                TextButton(onClick = onCreate, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                    Icon(Icons.Outlined.Add, null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("新建项目", fontSize = 12.sp)
+                Row(
+                    Modifier.clip(RoundedCornerShape(8.dp)).clickable(role = Role.Button, onClick = onCreate)
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Outlined.Add, null, tint = AccentDark, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(3.dp))
+                    Text("新建项目", fontSize = 12.sp, color = AccentDark)
                 }
             }
             state.projects.forEach { project ->
@@ -276,7 +294,8 @@ private fun TodayPanel(sessions: List<FocusSession>, today: LocalDate, reduceMot
 @Composable
 private fun BigFigure(value: String, unit: String) {
     Row {
-        Text(value, fontSize = 46.sp, fontWeight = FontWeight.Light, letterSpacing = (-1).sp, color = Ink, modifier = Modifier.alignByBaseline())
+        Text(value, fontSize = 46.sp, fontWeight = FontWeight.Light, letterSpacing = (-0.92).sp, color = Ink,
+            style = NumeralStyle, modifier = Modifier.alignByBaseline())
         Text(unit, fontSize = 12.sp, color = AccentDark, modifier = Modifier.alignByBaseline().padding(start = 6.dp))
     }
 }
@@ -411,7 +430,7 @@ internal fun TimerScreen(
     val elapsedSeconds = elapsedMillis / UiLimits.MILLIS_PER_SECOND
     val shownSeconds = if (mode == TimerMode.COUNTUP) elapsedSeconds else timer?.remainingSeconds(nowElapsed) ?: targetSeconds ?: 0L
     ScreenBody {
-        PageTitle(if (resting) phaseName(timer!!.phase) else "专注计时", onBack) {
+        PageTitle(if (resting) phaseName(timer!!.phase) else "专注计时", onBack, fontSize = 18.sp) {
             IconButton(onClick = onStatistics) { Icon(Icons.Outlined.TrendingUp, "专注统计") }
             if (project != null) IconButton(onClick = onSettings) { Icon(Icons.Outlined.Settings, "项目计时设置") }
         }
@@ -422,7 +441,7 @@ internal fun TimerScreen(
             Column(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (!resting) Text((timer?.category ?: project?.category).orEmpty(), color = Muted, fontSize = 11.sp, letterSpacing = 2.sp)
                 Text(if (resting) "休息一下，再继续" else timer?.projectTitle ?: project!!.title,
-                    fontSize = 23.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
+                    fontSize = 18.sp, lineHeight = 27.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
             }
             // 计时中收起模式切换与时长入口，避免分心；只有待开始时可调整。
             if (!resting && project != null && timer == null) {
@@ -476,8 +495,9 @@ internal fun TimerScreen(
                             rememberInfiniteTransition(label = "paused-blink").animateFloat(1f, 0.35f,
                                 infiniteRepeatable(tween(VisualLimits.BLINK_MS / 2), RepeatMode.Reverse), label = "paused-alpha").value
                         } else 1f
-                        Text(clockText(shownSeconds), fontSize = if (shownSeconds >= 3600) 44.sp else 60.sp,
-                            fontWeight = FontWeight.Light, letterSpacing = (-1).sp, color = Ink, modifier = Modifier.alpha(blink))
+                        Text(clockText(shownSeconds), fontSize = if (shownSeconds >= 3600) 44.sp else 62.sp,
+                            fontWeight = FontWeight.Light, letterSpacing = (-1.24).sp, color = Ink,
+                            style = NumeralStyle, modifier = Modifier.alpha(blink))
                         Text(caption, color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
                     }
                 }
@@ -633,7 +653,7 @@ internal fun TodosScreen(
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                         Text(buildAnnotatedString { append("待办"); withStyle(SpanStyle(color = Accent)) { append(".") } },
-                            fontSize = 25.sp, fontWeight = FontWeight.SemiBold)
+                            fontSize = 26.sp, lineHeight = 36.sp, letterSpacing = (-0.9).sp, fontWeight = FontWeight.SemiBold)
                         TextButton(onClick = onHelp, contentPadding = PaddingValues(horizontal = 8.dp),
                             modifier = Modifier.padding(start = 8.dp).weight(1f, fill = false).heightIn(min = 48.dp)) {
                             Text("使用指南", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1129,8 +1149,8 @@ internal fun ProgressHistoryDialog(
     val history = state.progress.withIndex().filter { it.value.projectId == projectId }
         .sortedWith(compareByDescending<IndexedValue<ProgressEntry>> { it.value.sessionEndedAt }.thenByDescending { it.value.updatedAt }.thenByDescending { it.index })
     AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("${project?.title ?: state.sessions.find { it.projectId == projectId }?.projectTitle ?: "项目"} · 进度历史") },
+        onDismissRequest = onDismiss, containerColor = Color.White,
+        title = { Text("${project?.title ?: state.sessions.find { it.projectId == projectId }?.projectTitle ?: "项目"} · 进度历史", fontSize = 22.sp, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 if (history.isEmpty()) Text("还没有进度记录。完成专注后可以填写，也可在专注记录里补写。", color = Muted)

@@ -105,10 +105,6 @@ internal object DiaryUiLimits {
 }
 
 /** 日记删除统一淡红，只用于日记，待办删除配色不变。 */
-internal val Danger = Color(0xFFC23B33)
-internal val DangerSoft = Color(0xFFFDECEB)
-internal val DangerLine = Color(0xFFF4C7C3)
-
 internal data class DiaryPhotoViewer(val files: List<String>, val index: Int)
 
 /**
@@ -270,7 +266,7 @@ private fun DiaryHome(state: AppState, ui: DiaryUiState, today: LocalDate, busy:
                 Column(Modifier.weight(1f)) {
                     Text("发生了什么，有什么感受", color = Muted, fontSize = 11.sp)
                     Text(buildAnnotatedString { append("日记"); withStyle(SpanStyle(color = Accent)) { append(".") } },
-                        fontSize = 25.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
+                        fontSize = 26.sp, lineHeight = 36.sp, letterSpacing = (-0.9).sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
                 }
                 Box {
                     IconButton(onClick = { menu = true }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.MoreHoriz, "更多：草稿、回收站与说明") }
@@ -560,7 +556,7 @@ private fun DiaryTrash(state: AppState, ui: DiaryUiState, busy: Boolean, actions
         entries.forEach { entry ->
             item(key = "trash:${entry.id}") {
                 val attachments = diaryAttachments(entry.photos.size, entry.audios.size)
-                Column(Modifier.fillMaxWidth().padding(bottom = 10.dp).clip(RoundedCornerShape(15.dp)).background(Color(0xFFFCFCFC))
+                Column(Modifier.fillMaxWidth().padding(bottom = 10.dp).clip(RoundedCornerShape(15.dp)).background(PanelLine)
                     .border(1.dp, Line, RoundedCornerShape(15.dp)).padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("${timestampText(entry.occurredAt)} · ${entry.deletedAt?.let { timestampText(it).substringBefore(' ') } ?: "—"} 删除", color = Muted, fontSize = 11.sp)
                     if (entry.title.isNotBlank()) Text(entry.title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
@@ -846,7 +842,8 @@ private fun DiaryEditor(session: DiaryEditorSession, entry: DiaryEntry?, ui: Dia
         ui.editor = current.copy(draft = fresh, restoredAt = null, orphan = false)
         actions.dropDraft(current.draft.key, current.draft.files - fresh.files.toSet())
     }
-    if (micSettings) AlertDialog(onDismissRequest = { micSettings = false }, title = { Text("麦克风权限未开启") },
+    if (micSettings) AlertDialog(onDismissRequest = { micSettings = false }, containerColor = Color.White,
+        title = { Text("麦克风权限未开启", fontSize = 22.sp, fontWeight = FontWeight.SemiBold) },
         text = { Text("录音需要麦克风权限。可以在系统设置中开启；文字和照片不受影响。") },
         confirmButton = { TextButton(onClick = {
             micSettings = false

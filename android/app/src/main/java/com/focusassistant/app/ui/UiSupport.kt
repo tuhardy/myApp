@@ -57,6 +57,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.focusassistant.app.domain.*
@@ -95,15 +96,46 @@ internal val AccentSoft = Color(0xFFFFF1E9)
 internal val SoftSurface = Color(0xFFF5F5F5)
 internal val Muted = Color(0xFF626262)
 internal val Line = Color(0xFFE5E5E5)
+internal val Danger = Color(0xFFC23B33)
+internal val DangerSoft = Color(0xFFFDECEB)
+internal val DangerLine = Color(0xFFF4C7C3)
+internal val RulerMajor = Color(0xFFDCA78F)
+internal val RulerMinor = Color(0xFFECC6B5)
+internal val RestSlate = Color(0xFF5D6B7C)
+internal val RestSlateDark = Color(0xFF46525F)
+internal val RestSlateSoft = Color(0xFFEDF0F3)
+internal val RulerPast = Color(0xFFFBE0D2)
+internal val PanelLine = Color(0xFFFCFCFC)
+internal val NumeralStyle = TextStyle(fontFeatureSettings = "'tnum'")
 
 @Composable
 internal fun FocusTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = lightColorScheme(
-            primary = Accent, onPrimary = Color.White, primaryContainer = Color(0xFFFFF0E8),
-            onPrimaryContainer = Color(0xFF873B20), background = Color.White, surface = Color.White,
-            onBackground = Color(0xFF292929), onSurface = Color(0xFF292929),
-            surfaceVariant = SoftSurface, onSurfaceVariant = Muted, outlineVariant = Color(0xFFE5E5E5)
+            primary = Accent, onPrimary = Color.White, primaryContainer = AccentSoft,
+            onPrimaryContainer = AccentDark, secondary = Accent, onSecondary = Color.White,
+            secondaryContainer = AccentSoft, onSecondaryContainer = AccentDark,
+            tertiary = Muted, onTertiary = Color.White, tertiaryContainer = SoftSurface,
+            onTertiaryContainer = Ink, background = Color.White, onBackground = Ink,
+            surface = Color.White, onSurface = Ink, surfaceVariant = SoftSurface,
+            onSurfaceVariant = Muted, surfaceTint = Accent, inverseSurface = Ink,
+            inverseOnSurface = Color.White, inversePrimary = AccentSoft, error = Danger,
+            onError = Color.White, errorContainer = DangerSoft, onErrorContainer = Danger,
+            outline = Line, outlineVariant = Line, scrim = Color(0x52000000),
+            surfaceBright = Color.White, surfaceDim = SoftSurface,
+            surfaceContainer = Color(0xFFFAFAFA), surfaceContainerLow = Color(0xFFFDFDFD),
+            surfaceContainerHigh = SoftSurface, surfaceContainerLowest = Color.White,
+            surfaceContainerHighest = Color(0xFFEFEFEF)
+        ),
+        typography = Typography().copy(
+            bodySmall = TextStyle(fontSize = 11.sp, lineHeight = 17.sp),
+            bodyMedium = TextStyle(fontSize = 13.sp, lineHeight = 20.sp),
+            bodyLarge = TextStyle(fontSize = 15.sp, lineHeight = 24.sp),
+            titleSmall = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold),
+            titleMedium = TextStyle(fontSize = 15.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold),
+            titleLarge = TextStyle(fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.SemiBold),
+            headlineSmall = TextStyle(fontSize = 22.sp, lineHeight = 31.sp, fontWeight = FontWeight.SemiBold),
+            headlineMedium = TextStyle(fontSize = 26.sp, lineHeight = 36.sp, fontWeight = FontWeight.SemiBold)
         ),
         content = content
     )
@@ -149,10 +181,12 @@ internal fun minuteText(seconds: Double): String = String.format(Locale.ROOT, "%
 internal fun timestampText(millis: Long): String = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
 
 @Composable
-internal fun PageTitle(title: String, onBack: (() -> Unit)? = null, actions: @Composable RowScope.() -> Unit = {}) {
+internal fun PageTitle(title: String, onBack: (() -> Unit)? = null, fontSize: TextUnit = 26.sp, actions: @Composable RowScope.() -> Unit = {}) {
     Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, "返回") }
-        Text(title, fontSize = 25.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+        Text(title, fontSize = fontSize, lineHeight = if (fontSize == 18.sp) 27.sp else 36.sp,
+            letterSpacing = if (fontSize == 18.sp) 0.sp else (-0.9).sp,
+            fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
         actions()
     }
 }
@@ -166,7 +200,7 @@ internal fun HelpButton(onClick: () -> Unit) {
 
 @Composable
 internal fun InformationDialog(title: String, lines: List<String>, onDismiss: () -> Unit) {
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(title) }, text = {
+    AlertDialog(onDismissRequest = onDismiss, containerColor = Color.White, title = { Text(title, fontSize = 22.sp, fontWeight = FontWeight.SemiBold) }, text = {
         Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             lines.forEach { Text(it, color = Muted, style = MaterialTheme.typography.bodyMedium) }
         }
@@ -175,7 +209,8 @@ internal fun InformationDialog(title: String, lines: List<String>, onDismiss: ()
 
 @Composable
 internal fun ConfirmDialog(title: String, message: String, busy: Boolean, onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, title = { Text(title) }, text = { Text(message) },
+    AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, containerColor = Color.White,
+        title = { Text(title, fontSize = 22.sp, fontWeight = FontWeight.SemiBold) }, text = { Text(message) },
         confirmButton = { TextButton(enabled = !busy, onClick = onConfirm) { Text(if (busy) "处理中" else "确认") } },
         dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("取消") } })
 }
@@ -271,7 +306,7 @@ private fun DurationStepper(text: String, enabled: Boolean, onText: (String) -> 
             BasicTextField(
                 value = text, enabled = enabled, singleLine = true,
                 onValueChange = { value -> if (value.length <= DurationInput.MAX_DIGITS && value.all(Char::isDigit)) onText(value) },
-                textStyle = TextStyle(fontSize = 34.sp, fontWeight = FontWeight.SemiBold, color = Ink, textAlign = TextAlign.Center),
+                textStyle = TextStyle(fontSize = 34.sp, fontWeight = FontWeight.SemiBold, color = Ink, textAlign = TextAlign.Center, fontFeatureSettings = "'tnum'"),
                 cursorBrush = SolidColor(Accent),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
                 modifier = Modifier.width(96.dp).semantics { contentDescription = "时长（分钟）" }
@@ -781,7 +816,7 @@ internal fun TodoDetailsDialog(
 ) {
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() }, containerColor = Color.White,
-        title = { Text(todo.title) },
+        title = { Text(todo.title, fontSize = 22.sp, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("${todo.category} · ${when { todo.archived -> "已放下"; todo.done -> "已完成"; else -> "待完成" }}", color = Muted)
@@ -819,7 +854,7 @@ internal fun TodoReopenDialog(todo: Todo, busy: Boolean, onDismiss: () -> Unit, 
     val validSelection = selected.intersect(todo.steps.map { it.id }.toSet())
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() }, containerColor = Color.White,
-        title = { Text("重新打开") },
+        title = { Text("重新打开", fontSize = 22.sp, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(todo.title, fontWeight = FontWeight.Medium)
@@ -865,7 +900,7 @@ internal fun TodoMonthDialog(
     val currentMonth = YearMonth.from(today)
     AlertDialog(
         onDismissRequest = onDismiss, containerColor = Color.White,
-        title = { Text("翻到哪一月？") },
+        title = { Text("翻到哪一月？", fontSize = 22.sp, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Box {
@@ -929,7 +964,8 @@ internal fun ProgressEditorDialog(context: Context, session: FocusSession, previ
     var note by rememberSaveable(session.id) { mutableStateOf(ProgressDrafts.note(context, session.id) ?: previous?.note.orEmpty()) }
     var percent by rememberSaveable(session.id) { mutableStateOf(ProgressDrafts.percent(context, session.id) ?: previous?.percent?.toString().orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
-    AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, title = { Text("这一段，推进了什么？") }, text = {
+    AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, containerColor = Color.White,
+        title = { Text("这一段，推进了什么？", fontSize = 22.sp, fontWeight = FontWeight.SemiBold) }, text = {
         Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("${session.projectTitle}\n有效专注 ${durationText(session.durationSeconds)}，时长已保存。", color = Muted, fontSize = 13.sp)
             OutlinedTextField(value = note, onValueChange = {
