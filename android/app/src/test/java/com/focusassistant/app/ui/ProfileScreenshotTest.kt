@@ -67,28 +67,35 @@ class ProfileScreenshotTest {
 
     @Test fun dashboardWithAssetsWishesAndSettings() {
         var opened: Screen? = null
+        var assetsOpened = false
         val hide = mutableStateOf(false)
         compose.setContent {
             FocusTheme {
                 ProfileScreen(AppState(loading = false, assets = book), today, hide.value, life, true, false,
-                    onToggleHide = { hide.value = !hide.value }, onAssets = {}, onUpdate = {}, onAddAccount = {}, onWish = {}, onLife = { opened = it }, actions = noop)
+                    onToggleHide = { hide.value = !hide.value }, onAssets = { assetsOpened = true }, onUpdate = {}, onAddAccount = {}, onWish = {}, onLife = { opened = it }, actions = noop)
             }
         }
         compose.onNode(hasContentDescription("¥21,500")).assertExists()
         compose.onNodeWithText("需授权").assertExists()
-        compose.onNodeWithText("查看趋势").assertExists()
+        compose.onNodeWithContentDescription("查看趋势").assertExists()
         compose.onNodeWithText("近 6 个月").assertDoesNotExist()
+        compose.onNodeWithText("余额历史").assertExists().performClick()
+        assertTrue(assetsOpened)
+        assetsOpened = false
+        compose.onNodeWithText("更新余额").assertExists()
+        compose.onNodeWithText("资产").assertExists()
+        compose.onNodeWithText("负债").assertExists()
         capture("profile-dashboard")
-        compose.onNodeWithText("查看趋势").performClick()
+        compose.onNodeWithContentDescription("查看趋势").performClick()
         compose.onNodeWithText("近 6 个月").assertExists()
-        compose.onNodeWithText("收起趋势").assertExists()
-        compose.onNode(hasContentDescription("${today.year}年", substring = true)).assertExists()
+        compose.onNodeWithContentDescription("收起趋势").assertExists()
+        compose.onNode(hasContentDescription("${today.year}年${today.monthValue}月")).assertExists()
         compose.onNodeWithText("年度").performClick()
         compose.onNode(hasContentDescription("${today.year}年12月")).assertExists()
         capture("profile-networth-annual")
         compose.onNodeWithText("近 6 个月").performClick()
         capture("profile-networth-expanded")
-        compose.onNodeWithText("收起趋势").performClick()
+        compose.onNodeWithContentDescription("收起趋势").performClick()
         compose.onNodeWithText("近 6 个月").assertDoesNotExist()
         compose.onNodeWithText("待办 · 本月完成").performClick()
         assertEquals(Screen.TODOS, opened)
@@ -96,8 +103,8 @@ class ProfileScreenshotTest {
         compose.waitForIdle()
         assertTrue(hide.value)
         compose.onNodeWithText("显示金额").assertExists()
-        compose.onNode(hasContentDescription("金额已隐藏")).assertExists()
-        compose.onNodeWithText("查看趋势").performClick()
+        assertTrue(compose.onAllNodes(hasContentDescription("金额已隐藏")).fetchSemanticsNodes().isNotEmpty())
+        compose.onNodeWithContentDescription("查看趋势").performClick()
         compose.onNodeWithText("年度").performClick()
         compose.onNode(hasContentDescription("${today.year}年12月")).assertExists()
         compose.onNodeWithText("年度变化 · 金额已隐藏").assertExists()
@@ -112,12 +119,32 @@ class ProfileScreenshotTest {
                     {}, {}, {}, {}, {}, {}, noop)
             }
         }
-        compose.onNodeWithText("还没有账户，添加一个开始记录").assertExists()
+        compose.onNodeWithContentDescription("还没有账户，添加一个开始记录").assertExists()
         compose.onNodeWithText("添加账户").assertExists()
-        compose.onNodeWithText("查看趋势").assertExists()
-        compose.onNodeWithText("收起趋势").performClick()
+        compose.onNodeWithContentDescription("查看趋势").assertExists()
+        compose.onNodeWithContentDescription("查看趋势").performClick()
         compose.onNodeWithText("记下余额后即可开始查看历史。").assertExists()
         capture("profile-empty")
+    }
+
+    @Test fun singleMonthTrendExplainsSparseDataInDialog() {
+        val sparse = AssetBook(
+            accounts = listOf(AssetAccount("bank", "工资卡", AssetKind.BANK)),
+            snapshots = listOf(AssetSnapshot("one", "bank", today.toString(), 1_234_567))
+        )
+        compose.setContent {
+            FocusTheme {
+                ProfileScreen(AppState(loading = false, assets = sparse), today, false, life, true, false,
+                    {}, {}, {}, {}, {}, {}, noop)
+            }
+        }
+        compose.onNodeWithContentDescription("查看趋势").performClick()
+        compose.onNodeWithText("已显示单月余额").assertExists()
+        compose.onNodeWithContentDescription("查看单月资产走势说明").assertExists()
+        compose.onNodeWithContentDescription("查看单月资产走势说明").performClick()
+        compose.onNodeWithText("为什么图表只有一个点？").assertExists()
+        compose.onNodeWithText("记录更多月份后，才能看到变化趋势。", substring = true).assertExists()
+        capture("profile-single-month-help", dialog = true)
     }
 
     @Test fun accountWithoutSnapshotsKeepsTrendToggleAtTrailingEdge() {
@@ -130,8 +157,8 @@ class ProfileScreenshotTest {
                 )
             }
         }
-        compose.onNodeWithText("查看趋势").assertExists()
-        compose.onNodeWithText("净资产走势").assertDoesNotExist()
+        compose.onNodeWithContentDescription("查看趋势").assertExists()
+        compose.onNodeWithContentDescription("净资产走势").assertDoesNotExist()
         capture("profile-no-snapshots")
     }
 

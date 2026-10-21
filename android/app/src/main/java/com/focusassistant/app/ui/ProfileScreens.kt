@@ -19,6 +19,7 @@ import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.QueryStats
 import androidx.compose.material.icons.outlined.Restore
@@ -32,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -45,6 +47,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -62,7 +65,7 @@ import java.util.Locale
  * 资产、心愿只来自本机记录，没有记录时显示空状态，不放示例。口径见 rules/profile.md 与 domain/Assets.kt。
  */
 
-private val CardLine = Color(0xFFF2D9CB)
+private val CardLine = Color(0xFFF0E6DF)
 private val RowLine = Color(0xFFEEEEEE)
 private const val HIDDEN_MONEY = "¥ ••••"
 
@@ -144,6 +147,7 @@ private fun NetWorthCard(book: AssetBook, today: LocalDate, hide: Boolean, onTog
     var annual by rememberSaveable { mutableStateOf(false) }
     var year by rememberSaveable(today.year) { mutableIntStateOf(today.year) }
     var selectedMonthKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var showSingleMonthInfo by remember { mutableStateOf(false) }
     val selectedMonth = selectedMonthKey?.let { runCatching { YearMonth.parse(it) }.getOrNull() }
     val summary = AssetRules.summary(book, today)
     val yearSummary = AssetRules.yearSummary(book, year, today)
@@ -153,7 +157,13 @@ private fun NetWorthCard(book: AssetBook, today: LocalDate, hide: Boolean, onTog
     val knownCount = series.count { it.known }
     val empty = book.accounts.isEmpty()
     val change = summary.monthChangeCents
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(AccentSoft).padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 10.dp)) {
+    if (showSingleMonthInfo) AlertDialog(
+        onDismissRequest = { showSingleMonthInfo = false },
+        title = { Text("为什么图表只有一个点？") },
+        text = { Text("目前只有一个月份有可用的余额记录，因此图表显示单点。记录更多月份后，才能看到变化趋势。\n\n这里展示的是账户余额变化，不是收入、支出或投资收益统计。") },
+        confirmButton = { TextButton(onClick = { showSingleMonthInfo = false }) { Text("知道了") } }
+    )
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White).border(1.dp, CardLine, RoundedCornerShape(18.dp)).padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("净资产", fontSize = 12.sp, color = Muted, modifier = Modifier.weight(1f))
             Text("手动记录 · 非收支统计", fontSize = 10.sp, color = Muted)
@@ -172,7 +182,10 @@ private fun NetWorthCard(book: AssetBook, today: LocalDate, hide: Boolean, onTog
             } else {
                 Spacer(Modifier.weight(1f))
             }
-            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.heightIn(min = 44.dp)) {
+            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.heightIn(min = 44.dp).clearAndSetSemantics {
+                contentDescription = if (expanded) "收起趋势" else "查看趋势"
+                stateDescription = if (expanded) "已展开" else "已收起"
+            }) {
                 Text(if (expanded) "收起趋势" else "查看趋势", color = AccentDark, fontSize = 12.sp)
             }
         }
@@ -190,8 +203,11 @@ private fun NetWorthCard(book: AssetBook, today: LocalDate, hide: Boolean, onTog
                     TextButton(enabled = year < today.year, onClick = { year++; selectedMonthKey = null }) { Text("›") }
                 }
                 val trend = series.filter { it.known }.joinToString("，") { "${it.month.monthValue}月 ${AssetRules.money(it.netCents)}" }
-                Sparkline(series, Modifier.fillMaxWidth().padding(top = 4.dp).height(48.dp)
-                    .clearAndSetSemantics { contentDescription = "${if (annual) "$year 年" else "近 6 个月"}净资产走势${if (hide || trend.isEmpty()) "" else "：$trend"}" })
+                Box(Modifier.fillMaxWidth().padding(top = 4.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFFFFFDFB)).border(1.dp, CardLine, RoundedCornerShape(12.dp)).padding(horizontal = 8.dp, vertical = 5.dp)) {
+                    Sparkline(series, Modifier.fillMaxWidth().height(80.dp).clearAndSetSemantics {
+                        contentDescription = "${if (annual) "$year 年" else "近 6 个月"}净资产走势${if (hide || trend.isEmpty()) "" else "：$trend"}"
+                    }, selected?.month, showGrid = true)
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     series.forEach { point ->
                         Box(
@@ -200,7 +216,7 @@ private fun NetWorthCard(book: AssetBook, today: LocalDate, hide: Boolean, onTog
                             }.semantics { contentDescription = "${point.month.year}年${point.month.monthValue}月" },
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("${point.month.monthValue}月", fontSize = 9.sp, color = if (point.month == selected?.month) AccentDark else Muted, maxLines = 1)
+                            Text("${point.month.monthValue}月", fontSize = 9.sp, color = if (point.month == selected?.month) AccentDark else Muted, maxLines = 1, softWrap = false)
                         }
                     }
                 }
@@ -210,23 +226,47 @@ private fun NetWorthCard(book: AssetBook, today: LocalDate, hide: Boolean, onTog
                         contentDescription = selected?.let { "${it.month.year}年${it.month.monthValue}月 · ${if (hide) "金额已隐藏" else AssetRules.money(it.netCents)}" }
                             ?: "还没有余额记录。添加账户并记下余额后，这里会显示历史。"
                     })
-                Text(if (knownCount == 0) "记下余额后即可开始查看历史。" else if (knownCount == 1) "目前只有一个月份的记录，已显示单点；积累更多月份后可查看变化趋势。" else "点选月份查看余额；实心点表示当月记录含备注。", fontSize = 10.sp, color = Muted, modifier = Modifier.padding(top = 2.dp))
+                Row(Modifier.fillMaxWidth().heightIn(min = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (knownCount == 0) "记下余额后即可开始查看历史。" else if (knownCount == 1) "已显示单月余额" else "点选图表或月份查看净资产", fontSize = 10.sp, color = Muted, modifier = Modifier.weight(1f))
+                    if (knownCount == 1) {
+                        IconButton(onClick = { showSingleMonthInfo = true }, modifier = Modifier.size(44.dp)) {
+                            Icon(Icons.Outlined.Info, contentDescription = "查看单月资产走势说明", tint = AccentDark, modifier = Modifier.size(19.dp))
+                        }
+                    }
+                }
             }
         }
-        Row(Modifier.fillMaxWidth().padding(top = if (expanded) 8.dp else 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("资产 ${shownMoney(summary.assetsCents, hide)} · 负债 ${shownMoney(summary.debtsCents, hide)}", fontSize = 11.sp, color = Muted,
-                modifier = Modifier.weight(1f).clearAndSetSemantics { contentDescription = if (hide) "资产与负债金额已隐藏" else "资产 ${AssetRules.money(summary.assetsCents)} · 负债 ${AssetRules.money(summary.debtsCents)}" })
-            SoftButton("历史明细", onClick = onAssets)
-            SoftButton(if (empty) "添加账户" else "更新余额", onClick = if (empty) onAdd else onUpdate)
+        Column(Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFFFFFDFB)).border(1.dp, CardLine, RoundedCornerShape(12.dp)).padding(horizontal = 11.dp)) {
+            listOf("资产" to summary.assetsCents, "负债" to summary.debtsCents).forEachIndexed { index, (label, amount) ->
+                Row(Modifier.fillMaxWidth().heightIn(min = 38.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(label, fontSize = 11.sp, color = Muted, modifier = Modifier.weight(1f))
+                    Text(shownMoney(amount, hide), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Ink, maxLines = 1, softWrap = false,
+                        modifier = Modifier.clearAndSetSemantics { contentDescription = if (hide) "金额已隐藏" else "$label ${AssetRules.money(amount)}" })
+                }
+                if (index == 0) HorizontalDivider(color = CardLine)
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp).heightIn(min = 48.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SoftButton("余额历史", Modifier.weight(1f).heightIn(min = 48.dp), onClick = onAssets)
+            Box(Modifier.weight(1f)) {
+                if (empty) PrimaryButton("添加账户", true, Modifier.fillMaxWidth(), onAdd)
+                else PrimaryButton("更新余额", true, Modifier.fillMaxWidth(), onUpdate)
+            }
         }
     }
 }
 
 /** 已知点连线；单个已知月份也绘制为实心/空心点。 */
 @Composable
-private fun Sparkline(series: List<NetWorthPoint>, modifier: Modifier) {
+private fun Sparkline(series: List<NetWorthPoint>, modifier: Modifier, selectedMonth: YearMonth? = null, showGrid: Boolean = false) {
     Canvas(modifier) {
         val known = series.withIndex().filter { it.value.known }
+        if (showGrid) {
+            listOf(.25f, .5f, .75f).forEach { fraction ->
+                val y = size.height * fraction
+                drawLine(CardLine.copy(alpha = .8f), Offset(0f, y), Offset(size.width, y), strokeWidth = 1.dp.toPx())
+            }
+        }
         if (known.isEmpty()) return@Canvas
         val pad = 6.dp.toPx()
         val min = known.minOf { it.value.netCents }
@@ -237,6 +277,11 @@ private fun Sparkline(series: List<NetWorthPoint>, modifier: Modifier) {
             val y = if (max == min) size.height / 2 else size.height - pad - (point.netCents - min).toFloat() / span * (size.height - pad * 2)
             Offset(x, y) to point
         }
+        if (showGrid) {
+            points.firstOrNull { it.second.month == selectedMonth }?.first?.let { x ->
+                drawLine(Color(0xFFD9C5B8), Offset(x.x, pad), Offset(x.x, size.height - pad), strokeWidth = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 4.dp.toPx())))
+            }
+        }
         if (points.size > 1) {
             val path = Path().apply { points.forEachIndexed { i, (offset, _) -> if (i == 0) moveTo(offset.x, offset.y) else lineTo(offset.x, offset.y) } }
             drawPath(path, Accent, style = Stroke(width = 2.dp.toPx(), join = StrokeJoin.Round))
@@ -244,8 +289,10 @@ private fun Sparkline(series: List<NetWorthPoint>, modifier: Modifier) {
         points.forEach { (offset, point) ->
             val noted = point.notes.isNotEmpty()
             val radius = (if (noted) 3.5f else 2.5f) * density
+            val selected = point.month == selectedMonth
+            if (selected && showGrid) drawCircle(Color.White, radius + 2.dp.toPx(), offset)
             drawCircle(if (noted) Accent else Color.White, radius, offset)
-            if (!noted) drawCircle(Accent, radius, offset, style = Stroke(1.5f * density))
+            if (!noted || selected) drawCircle(Accent, radius, offset, style = Stroke((if (selected) 2f else 1.5f) * density))
         }
     }
 }
