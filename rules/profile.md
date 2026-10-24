@@ -4,9 +4,9 @@
 
 ## 布局
 
-- 自上而下：轻量页头（我的与金额显隐）→ 净资产卡 → 心愿 → 生活概览 2×2 → 设置分组 → 隐私小字 → 版本注记。设置下沉，不再放在页首。
+- 自上而下：轻量页头（我的与金额显隐）→ 净资产卡 → 求职辅助卡（见 `rules/automation.md`）→ 心愿 → 生活概览 2×2 → 设置分组 → 隐私小字 → 版本注记。设置下沉，不再放在页首。
 - 浏览器与 Android 的净资产卡默认摘要优先：净资产、本月变化、真实近 6 个月迷你趋势与「查看趋势」；完整周期/月度交互默认收起，展开后保留已选周期与月份。Android 只用本机记录；没有余额时迷你趋势为空，不得造点或放示例。
-- 设置行的 id（`backup-button`、`permissions-button`、`preferences-button`、`automation-button`）不要改，其他检查依赖它们。
+- 设置行的 id（`backup-button`、`permissions-button`、`preferences-button`）与求职辅助卡 `job-entry-card` 不要改，其他检查依赖它们。
 
 ## 资产口径
 

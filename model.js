@@ -1385,6 +1385,13 @@
     return { preview, records: added, stopReason: stopReason ?? (dryRun ? `发简历试运行完成：识别 ${conversations.length} 个会话，其中 ${sending} 个会发简历；未点击任何按钮` : "没有更多待发简历的新回复，已停止") };
   }
 
+  /** 「我的」入口卡与全局状态条共用：task 为 null / "contact" / "resume"，只汇总已有计数，不新增口径。 */
+  function autoApplyEntry({ task = null, paused = false, stopReason = null, contacted = 0, resumes = 0, awaiting = 0, limit }) {
+    const state = task ? (paused ? "paused" : "running") : stopReason ? "stopped" : "idle";
+    const label = { running: task === "resume" ? "自动发简历中" : "自动沟通中", paused: "已暂停", stopped: "已停止", idle: "空闲" }[state];
+    return { state, label, summary: `沟通 ${contacted}/${limit} · 简历 ${resumes}/${limit} · 待回复 ${awaiting}` };
+  }
+
   const api = Object.freeze({
     LIMITS, MODES, CATEGORIES, USAGE, sampleUsageSegments, focusSpans, usageDaySummary, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, daysBetween, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
@@ -1394,7 +1401,7 @@
     DIARY_LIMITS, initialDiaryEntries, diaryEntryDate, parseDiaryDateQuery, validateDiaryEntry, selectDiaryEntries, trashedDiaryEntries, listDiaryDrafts, moveDiaryToTrash, restoreDiaryEntry,
     diaryStreak, JOB_ASSIST_LIMITS, JOB_ASSIST_STATUS, validateJobOpportunity, markJobCopied, markJobAppliedByUser,
     AUTO_APPLY_LIMITS, defaultAutoApplySettings, parseKeywordList, salaryLowerK, autoApplyJobKey, validateAutoApplySettings, autoApplyDecision, autoApplyContactedOn, simulateAutoApply,
-    pickResume, upsertResume, moveResume, resumeNameMatches, sameCompany, awaitingResume, resumesSentOn, simulateResumeRun,
+    pickResume, upsertResume, moveResume, resumeNameMatches, sameCompany, awaitingResume, resumesSentOn, simulateResumeRun, autoApplyEntry,
     ASSET_KINDS, ASSET_LIMITS, assetKind, validateAssetAccount, validateAssetSnapshot, validateWish,
     latestSnapshot, latestBalance, assetSummary, netWorthSeries, netWorthYearSummary, assetBalanceAt, wishProgress, initialAssetAccounts, initialAssetSnapshots, initialWishes,
   });

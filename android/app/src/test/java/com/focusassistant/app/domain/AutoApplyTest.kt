@@ -342,4 +342,15 @@ class AutoApplyTest {
         assertEquals(JobAssistStatus.AUTO_RESUME_SENT, JobAssistRules.markAutoContacted(listOf(sent), record()).single().status)
         assertEquals("自动化已发送简历", JobAssistRules.statusLabel(JobAssistStatus.AUTO_RESUME_SENT))
     }
+
+    @Test fun entrySharesLabelsAndCountsWithBrowser() {
+        fun entry(running: Boolean = false, resume: Boolean = false, paused: Boolean = false, stop: String? = null) =
+            AutoApplyRules.entry(running, resume, paused, stop, 3, 1, 2, 30)
+        assertEquals(AutoApplyEntry(AutoApplyEntryState.IDLE, "空闲", "沟通 3/30 · 简历 1/30 · 待回复 2"), entry())
+        assertEquals("自动沟通中", entry(running = true).label)
+        assertEquals("自动发简历中", entry(running = true, resume = true).label)
+        assertEquals(AutoApplyEntryState.PAUSED, entry(running = true, paused = true).state)
+        assertEquals(AutoApplyEntryState.STOPPED, entry(stop = "遇到验证页").state)
+        assertEquals(AutoApplyEntryState.RUNNING, entry(running = true, stop = "旧原因").state)
+    }
 }

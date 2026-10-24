@@ -17,7 +17,6 @@ import androidx.compose.material.icons.outlined.Alarm
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
@@ -101,6 +100,7 @@ internal fun ProfileScreen(
     today: LocalDate,
     hideAmounts: Boolean,
     life: LifeOverview,
+    jobEntry: AutoApplyEntry,
     notificationAllowed: Boolean,
     exactAllowed: Boolean,
     onToggleHide: () -> Unit,
@@ -124,6 +124,7 @@ internal fun ProfileScreen(
             ) { Text(if (hideAmounts) "显示金额" else "隐藏金额", color = Muted, fontSize = 11.sp, maxLines = 1) }
         }
         NetWorthCard(state.assets, today, hideAmounts, onToggleHide, onAssets, onUpdate, onAddAccount)
+        JobEntryCard(jobEntry, actions.onAutomation)
         SectionHeading("心愿", "单个账户或所有资产")
         WishRow(state.assets, today, hideAmounts, onWish)
         SectionHeading("生活概览", "点开看详情")
@@ -403,8 +404,7 @@ private fun SettingsGroup(state: AppState, notificationAllowed: Boolean, exactAl
         SettingItem(Icons.Outlined.Alarm, "精确闹钟", if (exactAllowed) "已允许 · 管理系统授权" else "未允许 · 后台到时提醒可能延迟", actions.onExactAlarm),
         SettingItem(Icons.Outlined.QueryStats, "使用情况访问", if (usageAllowed) "已允许 · 读取应用前台用时" else "未允许 · 无法读取手机用时", actions.onUsagePermission),
         SettingItem(Icons.Outlined.Backup, "导出完整备份", "项目、待办、专注、进度与偏好；不含日记和资产", actions.onBackup),
-        SettingItem(Icons.Outlined.Restore, "从文件恢复", "需先确认，当前计时须先结束；不改动日记和资产", actions.onRestore),
-        SettingItem(Icons.Outlined.Code, "求职辅助", "本机职位草稿 · 发送由你确认", actions.onAutomation)
+        SettingItem(Icons.Outlined.Restore, "从文件恢复", "需先确认，当前计时须先结束；不改动日记和资产", actions.onRestore)
     )
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(17.dp)).background(Color.White).border(1.dp, Line, RoundedCornerShape(17.dp)).padding(horizontal = 13.dp)) {
         rows.forEachIndexed { index, item ->
@@ -424,6 +424,27 @@ private fun SettingsGroup(state: AppState, notificationAllowed: Boolean, exactAl
                 Icon(Icons.Outlined.ChevronRight, "打开${item.title}", tint = Muted, modifier = Modifier.size(18.dp))
             }
         }
+    }
+}
+
+/** 求职辅助入口卡：与浏览器 #job-entry-card 同一层级，状态与计数来自 AutoApplyRules.entry。 */
+@Composable
+private fun JobEntryCard(entry: AutoApplyEntry, onOpen: () -> Unit) {
+    val running = entry.state == AutoApplyEntryState.RUNNING
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White).border(1.dp, Line, RoundedCornerShape(18.dp))
+            .clickable(role = Role.Button, onClickLabel = "打开求职辅助", onClick = onOpen)
+            .semantics(mergeDescendants = true) {}.padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("求职辅助", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text(entry.label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = if (running) AccentDark else Muted,
+                modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(if (running) AccentSoft else SoftSurface).padding(horizontal = 8.dp, vertical = 2.dp))
+            Icon(Icons.Outlined.ChevronRight, null, tint = Muted, modifier = Modifier.size(18.dp))
+        }
+        Text(entry.summary, fontSize = 12.sp, color = Muted, style = NumeralStyle)
+        Text("BOSS 自动沟通 · 自动发简历 · 职位草稿", fontSize = 11.sp, color = Muted)
     }
 }
 

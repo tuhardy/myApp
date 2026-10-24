@@ -152,6 +152,7 @@
     });
     $("phone-content").scrollTop = safePage === "tasks" && state.filter === "done" ? taskHistoryView().scrollTop : 0;
     if (updateHash && location.hash !== `#${safePage}`) location.hash = safePage;
+    renderJobEntry();
   }
 
   function currentFocusItem() {
@@ -3508,6 +3509,28 @@
     renderAutoContact(auto, settings, today);
     renderAutoResume(auto, settings, today);
     renderAutoRecords(auto);
+    renderJobEntry();
+  }
+
+  /** 「我的」页入口卡与全局状态条：运行或暂停时在详情页以外的页面显示状态条。 */
+  function renderJobEntry() {
+    const auto = state.autoApply;
+    const today = localDateKey(new Date());
+    const entry = FocusModel.autoApplyEntry({
+      task: auto.run?.kind ?? null, paused: Boolean(auto.run?.paused), stopReason: auto.stopReason,
+      contacted: FocusModel.autoApplyContactedOn(auto.records, today), resumes: FocusModel.resumesSentOn(auto.records, today),
+      awaiting: FocusModel.awaitingResume(auto.records).length, limit: auto.settings.dailyLimit,
+    });
+    $("job-entry-card").dataset.state = entry.state;
+    $("job-entry-badge").textContent = entry.label;
+    $("job-entry-summary").textContent = entry.summary;
+    $("job-entry-card").setAttribute("aria-label", `求职辅助，${entry.label}，${entry.summary}`);
+    const bar = $("job-run-bar");
+    bar.hidden = !auto.run || !$("page-job-assist").hidden;
+    bar.dataset.state = entry.state;
+    $("job-run-bar-text").textContent = `${entry.label} · ${entry.summary}`;
+    $("job-run-bar-open").setAttribute("aria-label", `${entry.label}，打开求职辅助`);
+    $("job-run-bar-pause").textContent = auto.run?.paused ? "继续" : "暂停";
   }
 
   function autoApplyRiskDialog() {
@@ -4421,7 +4444,9 @@
     "恢复：选择备份文件，校验格式和版本，预览数据数量，再确认恢复。正式版会在覆盖前提示风险。",
     "这里仅展示计划中的流程，不读写文件。本原型的改动只保留在当前页面，刷新后恢复示例。",
   ]));
-  $("automation-button").addEventListener("click", () => navigate("job-assist"));
+  $("job-entry-card").addEventListener("click", () => navigate("job-assist"));
+  $("job-run-bar-open").addEventListener("click", () => navigate("job-assist"));
+  $("job-run-bar-pause").addEventListener("click", toggleAutoPause);
   $("job-assist-back").addEventListener("click", () => navigate("profile"));
   $("job-assist-add").addEventListener("click", () => jobOpportunityEditor());
   document.querySelectorAll("[data-job-tab]").forEach(tab => {

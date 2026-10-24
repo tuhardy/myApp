@@ -1586,3 +1586,14 @@ test("资产示例数据相对今天生成，不出现未来快照，心愿指�
     assert.ok(assetSummary(accounts, snaps, now).net > 0);
   }
 });
+
+test("求职辅助入口状态：运行、暂停、停止、空闲共用一套标签与计数", () => {
+  const { autoApplyEntry } = require("./model.js");
+  const counts = { contacted: 3, resumes: 1, awaiting: 2, limit: 30 };
+  assert.deepEqual(autoApplyEntry({ ...counts }), { state: "idle", label: "空闲", summary: "沟通 3/30 · 简历 1/30 · 待回复 2" });
+  assert.equal(autoApplyEntry({ ...counts, task: "contact" }).label, "自动沟通中");
+  assert.equal(autoApplyEntry({ ...counts, task: "resume" }).label, "自动发简历中");
+  assert.equal(autoApplyEntry({ ...counts, task: "resume", paused: true }).state, "paused");
+  assert.equal(autoApplyEntry({ ...counts, stopReason: "遇到验证页" }).state, "stopped");
+  assert.equal(autoApplyEntry({ ...counts, task: "contact", stopReason: "旧原因" }).state, "running");
+});

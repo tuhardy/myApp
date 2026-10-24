@@ -221,6 +221,7 @@
               </div>
               <div class="asset-foot"><button class="secondary-button" id="asset-open-history" type="button">余额历史</button><button class="secondary-button" id="asset-update" type="button">更新余额</button></div>
             </div>
+            <button type="button" class="job-entry-card" id="job-entry-card" data-state="idle"><div class="job-entry-top"><strong>求职辅助</strong><span class="job-entry-badge" id="job-entry-badge">空闲</span><svg class="icon arrow"><use href="#i-arrow"/></svg></div><small id="job-entry-summary"></small><small class="job-entry-note">BOSS 自动沟通 · 自动发简历 · 职位草稿（原型模拟）</small></button>
             <div class="section-heading"><h3>心愿</h3><small id="wish-caption">单个账户或所有资产</small></div>
             <div class="wish-list" id="wish-list"></div>
             <div class="section-heading"><h3>生活概览</h3><small>点开看详情</small></div>
@@ -231,7 +232,7 @@
               <button type="button" data-life-page="usage"><small>用屏 · 今日示例</small><strong id="life-usage"></strong></button>
             </div>
             <div class="section-heading"><h3>设置</h3></div>
-            <div class="settings-group"><button class="settings-row" id="backup-button"><span class="setting-icon"><svg class="icon"><use href="#i-backup"/></svg></span><div><strong>备份与恢复</strong><small>JSON 文件 · 流程预览</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button><button class="settings-row" id="permissions-button"><span class="setting-icon"><svg class="icon"><use href="#i-shield"/></svg></span><div><strong>权限管理</strong><small>按需授权，始终由你掌控</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button><button class="settings-row" id="preferences-button"><span class="setting-icon"><svg class="icon"><use href="#i-settings"/></svg></span><div><strong>休息偏好</strong><small id="preferences-caption">短休息 5 分钟 / 长休息 15 分钟</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button><button class="settings-row" id="automation-button"><span class="setting-icon"><svg class="icon"><use href="#i-code"/></svg></span><div><strong>求职辅助</strong><small>本地职位草稿 · 发送由你确认</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button></div>
+            <div class="settings-group"><button class="settings-row" id="backup-button"><span class="setting-icon"><svg class="icon"><use href="#i-backup"/></svg></span><div><strong>备份与恢复</strong><small>JSON 文件 · 流程预览</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button><button class="settings-row" id="permissions-button"><span class="setting-icon"><svg class="icon"><use href="#i-shield"/></svg></span><div><strong>权限管理</strong><small>按需授权，始终由你掌控</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button><button class="settings-row" id="preferences-button"><span class="setting-icon"><svg class="icon"><use href="#i-settings"/></svg></span><div><strong>休息偏好</strong><small id="preferences-caption">短休息 5 分钟 / 长休息 15 分钟</small></div><svg class="icon arrow"><use href="#i-arrow"/></svg></button></div>
             <p class="privacy-note">你的时间与资产，只属于你。正式版计划在本机保存个人数据；本原型仅使用内存，刷新即恢复示例。</p>
             <p class="version-note">专注助手 · 界面原型 V0.4<br>更少打扰，更多属于你的时间</p>
           </section>
@@ -303,6 +304,7 @@
           </section>
         </div>
         <div id="task-undo" role="region" aria-label="操作撤销" hidden><span id="task-undo-message" role="status"></span><button id="undo-task" type="button">撤销</button><button id="dismiss-task-undo" type="button" aria-label="关闭提示">关闭提示</button></div>
+        <div id="job-run-bar" data-state="running" hidden><button type="button" id="job-run-bar-open"><span class="job-run-dot" aria-hidden="true"></span><span id="job-run-bar-text"></span></button><button type="button" id="job-run-bar-pause">暂停</button></div>
         <nav class="bottom-nav" aria-label="主导航"><button data-page="focus" class="active" aria-current="page"><span><svg class="icon"><use href="#i-focus"/></svg></span>专注</button><button data-page="tasks"><span><svg class="icon"><use href="#i-tasks"/></svg></span>待办</button><button data-page="diary"><span><svg class="icon"><use href="#i-diary"/></svg></span>日记</button><button data-page="usage"><span><svg class="icon"><use href="#i-chart"/></svg></span>用时</button><button data-page="profile"><span><svg class="icon"><use href="#i-user"/></svg></span>我的</button></nav>
         <div class="home-indicator" aria-hidden="true"></div>
       </div>

@@ -984,3 +984,27 @@ internal fun ProgressEditorDialog(context: Context, session: FocusSession, previ
         }
     }) { Text(if (busy) "保存中" else "保存进度") } }, dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("稍后再写") } })
 }
+
+/** 求职辅助运行或暂停时，详情页以外的页面在底部导航上方显示；与浏览器 #job-run-bar 同一交互。 */
+@Composable
+internal fun JobRunBar(entry: AutoApplyEntry, onOpen: () -> Unit, onTogglePause: () -> Unit) {
+    val paused = entry.state == AutoApplyEntryState.PAUSED
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).clip(RoundedCornerShape(14.dp)).background(Color.White)
+            .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(start = 4.dp, end = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp))
+                .clickable(role = Role.Button, onClickLabel = "打开求职辅助", onClick = onOpen)
+                .semantics(mergeDescendants = true) { contentDescription = "${entry.label}，${entry.summary}" }.padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(Modifier.size(8.dp).clip(RoundedCornerShape(50)).background(if (paused) Muted else Accent))
+            Text("${entry.label} · ${entry.summary}", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, style = NumeralStyle)
+        }
+        TextButton(onClick = onTogglePause, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text(if (paused) "继续" else "暂停", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = AccentDark)
+        }
+    }
+}

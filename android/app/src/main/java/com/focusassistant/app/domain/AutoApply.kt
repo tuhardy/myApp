@@ -161,6 +161,23 @@ object AutoApplyRules {
     fun resumesSentOn(records: List<AutoApplyRecord>, day: LocalDate, zone: ZoneId): Int =
         records.count { it.result == AutoApplyResult.RESUME_SENT && localDay(it.at, zone) == day }
 
+    /** 「我的」入口卡与全局状态条共用，与浏览器 FocusModel.autoApplyEntry 同一口径。 */
+    fun entry(running: Boolean, resume: Boolean, paused: Boolean, stopReason: String?, contacted: Int, resumes: Int, awaiting: Int, limit: Int): AutoApplyEntry {
+        val state = when {
+            running && paused -> AutoApplyEntryState.PAUSED
+            running -> AutoApplyEntryState.RUNNING
+            stopReason != null -> AutoApplyEntryState.STOPPED
+            else -> AutoApplyEntryState.IDLE
+        }
+        val label = when (state) {
+            AutoApplyEntryState.RUNNING -> if (resume) "自动发简历中" else "自动沟通中"
+            AutoApplyEntryState.PAUSED -> "已暂停"
+            AutoApplyEntryState.STOPPED -> "已停止"
+            AutoApplyEntryState.IDLE -> "空闲"
+        }
+        return AutoApplyEntry(state, label, "沟通 $contacted/$limit · 简历 $resumes/$limit · 待回复 $awaiting")
+    }
+
     fun validateSettings(value: AutoApplySettings) {
         fun words(list: List<String>, label: String) {
             require(list.size <= MAX_KEYWORDS) { "${label}最多 $MAX_KEYWORDS 个" }
@@ -634,3 +651,7 @@ object ResumeEngine {
         return ResumeStep(run.copy(seen = seen, idleScrolls = idle, phaseSince = now), ResumeAction.ScrollList, log = skipLog)
     }
 }
+
+enum class AutoApplyEntryState { IDLE, RUNNING, PAUSED, STOPPED }
+
+data class AutoApplyEntry(val state: AutoApplyEntryState, val label: String, val summary: String)

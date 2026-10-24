@@ -269,6 +269,9 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
     val bossStatus by BossAutomation.status.collectAsStateWithLifecycle()
     val bossServiceEnabled = remember(refresh, bossStatus.connected) { BossAutomation.enabled(context) }
     val bossVersion = remember(refresh) { BossUiMap.installedVersion(context) }
+    val jobEntry = AutoApplyRules.entry(bossStatus.task?.live == true, bossStatus.task?.resume == true, bossStatus.paused != null, bossStatus.stopReason,
+        AutoApplyRules.contactedOn(state.autoApply.records, today, ZoneId.systemDefault()), AutoApplyRules.resumesSentOn(state.autoApply.records, today, ZoneId.systemDefault()),
+        AutoApplyRules.awaitingResume(state.autoApply.records).size, state.autoApply.settings.dailyLimit)
     val currentProject = state.projects.find { it.id == ui.projectId } ?: state.projects.find { it.id == state.timer?.projectId }
 
     val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
@@ -453,36 +456,39 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
 
     FocusTheme {
         Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
-            // 全屏编辑日记时隐藏底部导航。
-            if (!writingDiary && ui.screen != Screen.JOB_ASSIST) NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surface,
-                modifier = Modifier.drawBehind {
-                    drawLine(Line, start = Offset(0f, 0f), end = Offset(size.width, 0f), strokeWidth = 1.dp.toPx())
-                }
-            ) {
-                val selected = when (ui.screen) { Screen.TIMER, Screen.STATISTICS -> Screen.PROJECTS; else -> ui.screen }
-                listOf(Screen.PROJECTS, Screen.TODOS, Screen.DIARY, Screen.USAGE, Screen.SETTINGS).forEach { page ->
-                    val label = when (page) { Screen.PROJECTS -> "专注"; Screen.TODOS -> "待办"; Screen.DIARY -> "日记"; Screen.USAGE -> "用时"; else -> "我的" }
-                    val image = when (page) {
-                        Screen.PROJECTS -> Icons.Outlined.Timer
-                        Screen.TODOS -> Icons.Outlined.AssignmentTurnedIn
-                        Screen.DIARY -> Icons.Outlined.Book
-                        Screen.USAGE -> Icons.Outlined.BarChart
-                        else -> Icons.Outlined.PersonOutline
+            // 全屏编辑日记时隐藏底部导航；求职辅助运行或暂停时，在导航上方显示状态条。
+            if (!writingDiary && ui.screen != Screen.JOB_ASSIST) Column {
+                if (bossStatus.task?.live == true) JobRunBar(jobEntry, onOpen = { ui.screen = Screen.JOB_ASSIST }, onTogglePause = { BossAutomation.togglePause() })
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.drawBehind {
+                        drawLine(Line, start = Offset(0f, 0f), end = Offset(size.width, 0f), strokeWidth = 1.dp.toPx())
                     }
-                    val colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = AccentDark, selectedTextColor = AccentDark,
-                        indicatorColor = AccentSoft, unselectedIconColor = Muted, unselectedTextColor = Muted
-                    )
-                    NavigationBarItem(selected = selected == page, alwaysShowLabel = true, onClick = {
-                        // 已在日记页时再点「日记」：二级页回首页，已在首页则滚回顶部；从别的页签切回仍回到离开时的页面。
-                        if (page == Screen.DIARY && ui.screen == Screen.DIARY) {
-                            if (ui.diary.reselect()) navScope.launch { ui.diary.homeList.animateScrollToItem(0) }
-                        } else ui.screen = page
-                    }, icon = { Icon(image, label, modifier = Modifier.size(20.dp)) },
-                        label = { Text(label, fontSize = 12.sp) }, colors = colors,
-                        modifier = Modifier.heightIn(min = 64.dp)
-                    )
+                ) {
+                    val selected = when (ui.screen) { Screen.TIMER, Screen.STATISTICS -> Screen.PROJECTS; else -> ui.screen }
+                    listOf(Screen.PROJECTS, Screen.TODOS, Screen.DIARY, Screen.USAGE, Screen.SETTINGS).forEach { page ->
+                        val label = when (page) { Screen.PROJECTS -> "专注"; Screen.TODOS -> "待办"; Screen.DIARY -> "日记"; Screen.USAGE -> "用时"; else -> "我的" }
+                        val image = when (page) {
+                            Screen.PROJECTS -> Icons.Outlined.Timer
+                            Screen.TODOS -> Icons.Outlined.AssignmentTurnedIn
+                            Screen.DIARY -> Icons.Outlined.Book
+                            Screen.USAGE -> Icons.Outlined.BarChart
+                            else -> Icons.Outlined.PersonOutline
+                        }
+                        val colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = AccentDark, selectedTextColor = AccentDark,
+                            indicatorColor = AccentSoft, unselectedIconColor = Muted, unselectedTextColor = Muted
+                        )
+                        NavigationBarItem(selected = selected == page, alwaysShowLabel = true, onClick = {
+                            // 已在日记页时再点「日记」：二级页回首页，已在首页则滚回顶部；从别的页签切回仍回到离开时的页面。
+                            if (page == Screen.DIARY && ui.screen == Screen.DIARY) {
+                                if (ui.diary.reselect()) navScope.launch { ui.diary.homeList.animateScrollToItem(0) }
+                            } else ui.screen = page
+                        }, icon = { Icon(image, label, modifier = Modifier.size(20.dp)) },
+                            label = { Text(label, fontSize = 12.sp) }, colors = colors,
+                            modifier = Modifier.heightIn(min = 64.dp)
+                        )
+                    }
                 }
             }
         }) { padding ->
@@ -562,7 +568,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                             else ui.perform { repository.saveSettings(state.settings.copy(usageReminders = enabled)); if (enabled && !notificationAllowed) ui.message("请在我的页面授权通知，否则超时提醒不可见。") }
                         }, { ui.open("usage-help") }, today)
                     Screen.SETTINGS -> ProfileScreen(state, today, ui.hideAmounts, lifeOverview(state, today, profileUsage, usageAllowed),
-                        notificationAllowed, exactAllowed,
+                        jobEntry, notificationAllowed, exactAllowed,
                         onToggleHide = { ui.hideAmounts = !ui.hideAmounts }, onAssets = { ui.open("assets") },
                         onUpdate = { ui.open("asset-update") }, onAddAccount = { ui.open("asset-account") },
                         onWish = { id -> ui.open("wish", id) },

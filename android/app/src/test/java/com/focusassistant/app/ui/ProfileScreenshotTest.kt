@@ -64,6 +64,7 @@ class ProfileScreenshotTest {
     }
 
     private val noop = ProfileActions({}, {}, {}, {}, {}, {}, {})
+    private val idleJob = AutoApplyRules.entry(false, false, false, null, 0, 0, 0, 30)
 
     @Test fun dashboardWithAssetsWishesAndSettings() {
         var opened: Screen? = null
@@ -71,7 +72,7 @@ class ProfileScreenshotTest {
         val hide = mutableStateOf(false)
         compose.setContent {
             FocusTheme {
-                ProfileScreen(AppState(loading = false, assets = book), today, hide.value, life, true, false,
+                ProfileScreen(AppState(loading = false, assets = book), today, hide.value, life, idleJob, true, false,
                     onToggleHide = { hide.value = !hide.value }, onAssets = { assetsOpened = true }, onUpdate = {}, onAddAccount = {}, onWish = {}, onLife = { opened = it }, actions = noop)
             }
         }
@@ -115,7 +116,7 @@ class ProfileScreenshotTest {
     @Test fun emptyStateShowsNoSampleData() {
         compose.setContent {
             FocusTheme {
-                ProfileScreen(AppState(loading = false), today, false, LifeOverview(0, 0, 0, null, true), true, true,
+                ProfileScreen(AppState(loading = false), today, false, LifeOverview(0, 0, 0, null, true), idleJob, true, true,
                     {}, {}, {}, {}, {}, {}, noop)
             }
         }
@@ -134,7 +135,7 @@ class ProfileScreenshotTest {
         )
         compose.setContent {
             FocusTheme {
-                ProfileScreen(AppState(loading = false, assets = sparse), today, false, life, true, false,
+                ProfileScreen(AppState(loading = false, assets = sparse), today, false, life, idleJob, true, false,
                     {}, {}, {}, {}, {}, {}, noop)
             }
         }
@@ -152,7 +153,7 @@ class ProfileScreenshotTest {
             FocusTheme {
                 ProfileScreen(
                     AppState(loading = false, assets = AssetBook(accounts = listOf(AssetAccount("bank", "工资卡", AssetKind.BANK)))),
-                    today, false, LifeOverview(0, 0, 0, null, true), true, true,
+                    today, false, LifeOverview(0, 0, 0, null, true), idleJob, true, true,
                     {}, {}, {}, {}, {}, {}, noop
                 )
             }
@@ -170,5 +171,29 @@ class ProfileScreenshotTest {
         compose.onNodeWithText("保存").performClick()
         compose.waitForIdle()
         assertEquals(listOf("card" to 120_000L), saved?.map { it.accountId to it.amountCents })
+    }
+
+    @Test fun jobEntryCardAndRunBarOpenAssistant() {
+        var opened = 0
+        var toggled = 0
+        val running = AutoApplyRules.entry(true, false, false, null, 3, 1, 2, 30)
+        compose.setContent {
+            FocusTheme {
+                androidx.compose.foundation.layout.Column {
+                    JobRunBar(running, onOpen = { opened++ }, onTogglePause = { toggled++ })
+                    ProfileScreen(AppState(loading = false), today, false, LifeOverview(0, 0, 0, null, true), running, true, true,
+                        {}, {}, {}, {}, {}, {}, ProfileActions({}, {}, {}, {}, {}, {}, { opened++ }))
+                }
+            }
+        }
+        compose.onNodeWithText("沟通 3/30 · 简历 1/30 · 待回复 2").assertExists()
+        compose.onAllNodesWithText("自动沟通中", substring = true).onFirst().assertExists()
+        compose.onNodeWithText("求职辅助").performClick()
+        compose.onNodeWithContentDescription("自动沟通中，沟通 3/30 · 简历 1/30 · 待回复 2").performClick()
+        compose.onNodeWithText("暂停").performClick()
+        assertEquals(2, opened)
+        assertEquals(1, toggled)
+        compose.onNodeWithText("本机职位草稿 · 发送由你确认").assertDoesNotExist()
+        capture("profile-job-entry")
     }
 }
