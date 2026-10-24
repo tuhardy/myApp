@@ -1,0 +1,60 @@
+package com.focusassistant.app.platform
+
+import android.content.Context
+import android.content.pm.PackageManager
+import android.view.accessibility.AccessibilityNodeInfo
+import com.focusassistant.app.domain.AutoApplyRules
+import com.focusassistant.app.domain.BossScreenReader
+import com.focusassistant.app.domain.UiNode
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** BOSS 直聘界面的读取与诊断导出。识别规则在 domain/BossScreenReader，这里只做节点转换和按路径找回节点。 */
+internal object BossUiMap {
+    /** 预期包名，需在真机用诊断导出核对；与 boss_automation_service.xml、清单 <queries> 保持一致。 */
+    const val PACKAGE = "com.hpbr.bosszhipin"
+    private const val MAX_DEPTH = 40
+    private const val MAX_NODES = 3000
+
+    /** 诊断导出只保留这些界面固定文字的命中情况，不记录职位、公司、聊天等正文。 */
+    private val knownLabels = listOf("立即沟通", "继续沟通", "发送", "常用语", "发简历", "选择附件简历", "确定", "消息", "安全验证", "滑动验证", "拖动滑块", "请完成验证", "手机号登录", "验证码登录", "上限", "推荐", "附近", "最新")
+
+    fun installedVersion(context: Context): String? = try {
+        context.packageManager.getPackageInfo(PACKAGE, 0).versionName ?: "unknown"
+    } catch (_: PackageManager.NameNotFoundException) { null }
+
+    fun snapshot(root: AccessibilityNodeInfo): UiNode {
+        var count = 0
+        fun convert(node: AccessibilityNodeInfo, path: List<Int>): UiNode {
+            count++
+            val children = if (path.size >= MAX_DEPTH) emptyList() else (0 until node.childCount).mapNotNull { index ->
+                // 跳过屏幕外的子树（列表预加载项等），避免点到看不见的节点；路径仍按原始下标记录。
+                if (count >= MAX_NODES) null else node.getChild(index)?.takeIf { it.isVisibleToUser }?.let { convert(it, path + index) }
+            }
+            return UiNode(path, node.viewIdResourceName.orEmpty(), node.className?.toString().orEmpty(), node.text?.toString().orEmpty(),
+                node.contentDescription?.toString().orEmpty(), node.isClickable, node.isEditable, node.isScrollable, children)
+        }
+        return convert(root, emptyList())
+    }
+
+    fun find(root: AccessibilityNodeInfo, path: List<Int>): AccessibilityNodeInfo? {
+        var node: AccessibilityNodeInfo = root
+        for (index in path) node = node.getChild(index) ?: return null
+        return node
+    }
+
+    /** 一页界面的结构摘要：viewId、类名、文字长度与是否像薪资，不含正文。 */
+    fun diagnostic(root: UiNode, version: String?, at: Long): JSONObject {
+        val nodes = JSONArray()
+        root.walk().forEach { node ->
+            nodes.put(JSONObject().put("path", JSONArray(node.path)).put("id", node.viewId).put("cls", node.className.substringAfterLast('.'))
+                .put("textLen", node.text.length).put("descLen", node.description.length)
+                .put("label", knownLabels.firstOrNull { node.label.contains(it) } ?: JSONObject.NULL)
+                .put("salaryLike", node.text.isNotBlank() && AutoApplyRules.isSalaryText(node.text))
+                .put("click", node.clickable).put("edit", node.editable).put("scroll", node.scrollable).put("children", node.children.size))
+        }
+        val reading = BossScreenReader.read(root, at)
+        return JSONObject().put("bossVersion", version ?: JSONObject.NULL).put("at", at)
+            .put("recognized", reading.observation.screen.name).put("cards", reading.observation.cards.size).put("nodes", nodes)
+    }
+}

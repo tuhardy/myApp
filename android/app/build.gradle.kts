@@ -24,8 +24,8 @@ android {
         applicationId = "com.focusassistant.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 26
-        versionName = "0.9.6"
+        versionCode = 30
+        versionName = "0.9.10"
     }
 
     buildTypes {

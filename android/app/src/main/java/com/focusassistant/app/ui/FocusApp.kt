@@ -56,7 +56,7 @@ import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
 
-internal enum class Screen { PROJECTS, TIMER, TODOS, DIARY, STATISTICS, USAGE, SETTINGS }
+internal enum class Screen { PROJECTS, TIMER, TODOS, DIARY, STATISTICS, USAGE, SETTINGS, JOB_ASSIST }
 
 internal object TodoUiLimits {
     const val FINISH_HOLD_MS = 680L
@@ -180,6 +180,7 @@ class NativeUiModel : ViewModel() {
     var hideAmounts by mutableStateOf(false)
     var pendingProject by mutableStateOf<Project?>(null)
     var pendingBackup by mutableStateOf<BackupData?>(null)
+    var pendingJobCopyId by mutableStateOf<String?>(null)
     var pendingExport: String? = null
     var notificationRequested = false
     private val channel = Channel<String>(Channel.BUFFERED)
@@ -193,6 +194,7 @@ class NativeUiModel : ViewModel() {
         dialogId = ""
         if (previous == "progress-auto") screen = Screen.PROJECTS
         if (previous == "project") pendingProject = null
+        if (previous == "job-copy-confirm") pendingJobCopyId = null
     }
     internal fun stopTodoAnimation(id: String) {
         todoAnimations.remove(id)?.cancel()
@@ -264,6 +266,9 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
     val notificationAllowed = remember(refresh) { NotificationManagerCompat.from(context).areNotificationsEnabled() }
     val usageAllowed = remember(refresh) { usageMonitor.hasPermission() }
     val exactAllowed = remember(refresh) { TimerAlarmScheduler.canScheduleExactAlarms(context) }
+    val bossStatus by BossAutomation.status.collectAsStateWithLifecycle()
+    val bossServiceEnabled = remember(refresh, bossStatus.connected) { BossAutomation.enabled(context) }
+    val bossVersion = remember(refresh) { BossUiMap.installedVersion(context) }
     val currentProject = state.projects.find { it.id == ui.projectId } ?: state.projects.find { it.id == state.timer?.projectId }
 
     val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
@@ -350,6 +355,17 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
         if (uri != null && payload != null) ui.perform { DocumentFiles.write(appContext, uri, payload); ui.message("CSV 已保存，可使用 Excel 打开。") }
         else if (uri != null) ui.message("导出内容已失效，请重新导出。")
     }
+    val diagnosticLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) ui.perform { DocumentFiles.write(appContext, uri, BossAutomation.diagnosticExport()); ui.message("诊断文件已保存；其中只有控件结构，不含职位与聊天正文。") }
+    }
+    fun startBoss(task: BossTask) {
+        if (task != BossTask.DIAGNOSE && !state.autoApply.settings.riskAccepted) { ui.open("auto-risk"); return }
+        if (Build.VERSION.SDK_INT >= 33 && !notificationAllowed && !ui.notificationRequested) {
+            ui.notificationRequested = true
+            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        BossAutomation.start(context, task)?.let(ui::message)
+    }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) ui.perform {
             ui.pendingBackup = DocumentFiles.readBackup(appContext, uri)
@@ -431,12 +447,14 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { null }
     }
-    BackHandler(enabled = ui.dialog.isEmpty() && ui.screen !in setOf(Screen.PROJECTS, Screen.TODOS, Screen.DIARY, Screen.USAGE, Screen.SETTINGS)) { ui.screen = Screen.PROJECTS }
+    BackHandler(enabled = ui.dialog.isEmpty() && ui.screen !in setOf(Screen.PROJECTS, Screen.TODOS, Screen.DIARY, Screen.USAGE, Screen.SETTINGS)) {
+        ui.screen = if (ui.screen == Screen.JOB_ASSIST) Screen.SETTINGS else Screen.PROJECTS
+    }
 
     FocusTheme {
         Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
             // 全屏编辑日记时隐藏底部导航。
-            if (!writingDiary) NavigationBar(
+            if (!writingDiary && ui.screen != Screen.JOB_ASSIST) NavigationBar(
                 containerColor = MaterialTheme.colorScheme.surface,
                 modifier = Modifier.drawBehind {
                     drawLine(Line, start = Offset(0f, 0f), end = Offset(size.width, 0f), strokeWidth = 1.dp.toPx())
@@ -555,7 +573,34 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                             }, {
                                 if (state.timer != null) ui.message("请先结束或放弃当前计时，再恢复备份。")
                                 else importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
-                            }, { ui.open("rest-settings") }, { ui.open("automation") }))
+                            }, { ui.open("rest-settings") }, { ui.screen = Screen.JOB_ASSIST }))
+                    Screen.JOB_ASSIST -> JobAssistScreen(state.jobOpportunities, ui.busy,
+                        auto = AutoApplyPanel(state.autoApply.settings, AutoApplyRules.contactedOn(state.autoApply.records, today, ZoneId.systemDefault()),
+                            bossStatus, bossServiceEnabled, bossVersion, AutoApplyRules.resumesSentOn(state.autoApply.records, today, ZoneId.systemDefault()),
+                            AutoApplyRules.awaitingResume(state.autoApply.records).size, state.autoApply.records.sortedByDescending { it.at }),
+                        autoActions = AutoApplyActions(
+                            openAccessibility = { context.startActivity(BossAutomation.settingsIntent()) },
+                            acceptRisk = { ui.open("auto-risk") },
+                            editRules = { ui.open("auto-rules") },
+                            diagnose = { startBoss(BossTask.DIAGNOSE) },
+                            exportDiagnostics = { diagnosticLauncher.launch("BOSS界面诊断_${LocalDate.now()}.json") },
+                            dryRun = { startBoss(BossTask.DRY_RUN) },
+                            start = { ui.open("auto-start") },
+                            stop = { BossAutomation.stop() },
+                            togglePause = { BossAutomation.togglePause() },
+                            resumeDryRun = { startBoss(BossTask.RESUME_DRY_RUN) },
+                            resumeStart = { ui.open("auto-resume-start") },
+                            addResume = { ui.open("resume-edit") },
+                            editResume = { ui.open("resume-edit", it) },
+                            deleteResume = { ui.open("resume-delete", it) },
+                            moveResumeUp = { id -> ui.perform { repository.moveResumeProfile(id, up = true) } },
+                            clearRecords = { ui.open("auto-records-clear") }),
+                        onBack = { ui.screen = Screen.SETTINGS },
+                        onAdd = { ui.open("job-edit") },
+                        onEdit = { ui.open("job-edit", it) },
+                        onDelete = { ui.open("job-delete", it) },
+                        onReview = { id -> ui.pendingJobCopyId = id; ui.open("job-copy-confirm", id) },
+                        onRecordApplied = { ui.open("job-applied-confirm", it) })
                 }
                 if (ui.busy) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
             }
@@ -564,6 +609,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
         val dialogProject = ui.pendingProject ?: state.projects.find { it.id == ui.dialogId }
         val session = state.sessions.find { it.id == ui.dialogId }
         val dialogTodo = state.todos.find { it.id == ui.dialogId }
+        val dialogJob = state.jobOpportunities.find { it.id == ui.dialogId }
         when (ui.dialog) {
             "project", "project-duration" -> ProjectEditorDialog(dialogProject, ui.busy, durationOnly = ui.dialog == "project-duration", onDismiss = { ui.close() }) { project ->
                 if (state.timer?.projectId == project.id) { ui.pendingProject = project; ui.open("save-project-confirm", project.id) }
@@ -724,7 +770,87 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                     if (wish != null) ui.perform { repository.saveWish(wish.copy(archived = true)); ui.close(); ui.message("心愿已归档") }
                 })
             }
-            "automation" -> InformationDialog("自动化扩展", listOf("此版本仅预留自动化入口，尚未接入任何脚本引擎。", "后续根据你的具体手机脚本和工具确定接入方式，不默认申请 root、无障碍或其他应用控制权限。"), { ui.close() })
+            "job-edit" -> {
+                if (ui.dialogId.isNotBlank() && dialogJob == null) InformationDialog("职位记录已不存在", listOf("可能已在其他窗口删除。"), { ui.close() })
+                else JobOpportunityEditorDialog(dialogJob, ui.busy, { ui.close() }) { value ->
+                    ui.perform { repository.saveJobOpportunity(value); ui.close(); ui.message("职位草稿已保存") }
+                }
+            }
+            "job-copy-confirm" -> {
+                val job = dialogJob
+                if (job == null) InformationDialog("职位记录已不存在", listOf("可能已在其他窗口删除。"), { ui.close() })
+                else JobOpportunityReviewDialog(job, ui.busy, { ui.close() }) {
+                    ui.perform {
+                        copyJobMessage(context, job)
+                        try {
+                            repository.markJobCopied(job.id)
+                            ui.message("已复制到剪贴板；请在招聘平台自行复核并发送")
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            ui.message("文案已复制，但状态保存失败：${error.message ?: "请稍后重试"}")
+                        }
+                        ui.close()
+                    }
+                }
+            }
+            "job-applied-confirm" -> {
+                val job = dialogJob
+                if (job == null) InformationDialog("职位记录已不存在", listOf("可能已在其他窗口删除。"), { ui.close() })
+                else ConfirmDialog("记录本人已投递？", "这只记录你的手动说明，本应用无法读取或核验招聘平台上的投递状态。", ui.busy, { ui.close() }) {
+                    ui.perform { repository.markJobAppliedByUser(job.id); ui.close(); ui.message("已记录为本人说明 · 未核验") }
+                }
+            }
+            "auto-risk" -> AutoApplyRiskDialog(ui.busy, { ui.close() }) {
+                ui.perform { repository.saveAutoApplySettings(state.autoApply.settings.copy(riskAccepted = true)); ui.close(); ui.message("已确认风险。建议先做界面诊断和试运行。") }
+            }
+            "auto-rules" -> AutoApplyRulesDialog(state.autoApply.settings, ui.busy, { ui.close() }) { value ->
+                ui.perform { repository.saveAutoApplySettings(value); ui.close(); ui.message("沟通规则已保存") }
+            }
+            "resume-edit" -> {
+                val resumes = state.autoApply.settings.resumes
+                val existing = resumes.find { it.id == ui.dialogId }
+                if (ui.dialogId.isNotBlank() && existing == null) InformationDialog("简历已不存在", listOf("可能已被删除。"), { ui.close() })
+                else ResumeEditDialog(existing, ui.busy, { ui.close() },
+                    onSave = { value -> ui.perform { repository.saveResumeProfile(value); ui.close(); ui.message(if (existing == null) "简历已添加" else "简历已更新") } },
+                    validate = { value -> AutoApplyRules.validateSettings(state.autoApply.settings.copy(resumes = AutoApplyRules.upsertResume(resumes, value))) })
+            }
+            "resume-delete" -> {
+                val resume = state.autoApply.settings.resumes.find { it.id == ui.dialogId }
+                if (resume == null) InformationDialog("简历已不存在", listOf("可能已被删除。"), { ui.close() })
+                else ConfirmDialog("删除简历？", "“${resume.name}”将从「我的简历」移除，只删除本应用里的名称和关键词，不影响 BOSS 里的附件。", ui.busy, { ui.close() }) {
+                    ui.perform { repository.deleteResumeProfile(resume.id); ui.close(); ui.message("简历已删除") }
+                }
+            }
+            "auto-records-clear" -> ConfirmDialog("清空投递记录？", "将删除全部 ${state.autoApply.records.size} 条记录。清空后去重和今日计数一并重置：之前沟通过的职位可能再次沟通，" +
+                "等待回复的会话也不会再自动发简历。此操作无法撤销。", ui.busy, { ui.close() }) {
+                ui.perform { repository.clearAutoApplyRecords(); ui.close(); ui.message("投递记录已清空") }
+            }
+            "auto-start" -> {
+                val settings = state.autoApply.settings
+                val left = settings.dailyLimit - AutoApplyRules.contactedOn(state.autoApply.records, today, ZoneId.systemDefault())
+                ConfirmDialog("开始自动沟通？", "将切换到 BOSS 直聘，界面变化后执行下一步（两步至少间隔 ${settings.stepDelayMs / 1000} 秒），今天最多再发起 ${maxOf(left, 0)} 条沟通。" +
+                    "请先打开职位推荐列表。运行中保持亮屏；触碰 BOSS、离开 BOSS 或熄屏会暂停，可从悬浮按钮继续或停止。", ui.busy, { ui.close() }) {
+                    ui.close()
+                    startBoss(BossTask.LIVE)
+                }
+            }
+            "auto-resume-start" -> {
+                val settings = state.autoApply.settings
+                val left = settings.dailyLimit - AutoApplyRules.resumesSentOn(state.autoApply.records, today, ZoneId.systemDefault())
+                ConfirmDialog("开始自动发简历？", "将切换到 BOSS 直聘消息页，只处理本应用自动沟通过、且对方有新消息的会话，按岗位选择简历名称后发送；" +
+                    "今天最多再发 ${maxOf(left, 0)} 份。不读取聊天内容；找不到同名附件简历会停止。运行中保持亮屏；触碰 BOSS、离开 BOSS 或熄屏会暂停，可从悬浮按钮继续或停止。", ui.busy, { ui.close() }) {
+                    ui.close()
+                    startBoss(BossTask.RESUME_LIVE)
+                }
+            }
+            "job-delete" -> {
+                val job = dialogJob
+                if (job == null) InformationDialog("职位记录已不存在", listOf("可能已在其他窗口删除。"), { ui.close() })
+                else ConfirmDialog("删除职位记录？", "“${job.company} · ${job.position}”及其文案将从本机删除。此操作无法撤销。", ui.busy, { ui.close() }) {
+                    ui.perform { repository.deleteJobOpportunity(job.id); ui.close(); ui.message("职位记录已删除") }
+                }
+            }
             "export" -> AlertDialog(onDismissRequest = { if (!ui.busy) ui.close() }, containerColor = Color.White,
                 title = { Text(if (ui.statsAll) "导出全部记录" else "导出当前周期", fontSize = 22.sp, fontWeight = FontWeight.SemiBold) }, text = { Text("CSV 适合 Excel，JSON 包含活动片段、进度历史及累计总览。仅导出当前周期的完整记录，不受分页限制。") },
                 confirmButton = { TextButton(enabled = !ui.busy, onClick = { exportStatistics(false) }) { Text("JSON") } }, dismissButton = { TextButton(enabled = !ui.busy, onClick = { exportStatistics(true) }) { Text("CSV") } })

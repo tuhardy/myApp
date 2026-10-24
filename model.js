@@ -1181,6 +1181,210 @@
     return [{ id: "wish-sample-trip", name: "去云南旅行", target: 12000, deadline, accountId: "asset-sample-trip", archived: false }];
   }
 
+  const JOB_ASSIST_LIMITS = Object.freeze({ maxCompany: 100, maxPosition: 120, maxDescription: 10000, maxMessage: 3000, maxJobs: 500 });
+  const JOB_ASSIST_STATUS = Object.freeze({ draft: "draft", copied: "copied", appliedSelfReported: "applied-self-reported", autoContacted: "auto-contacted", autoResumeSent: "auto-resume-sent" });
+
+  function validateJobOpportunity(input) {
+    const company = String(input?.company ?? "").trim();
+    const position = String(input?.position ?? "").trim();
+    const description = String(input?.description ?? "").trim();
+    const message = String(input?.message ?? "").trim();
+    if (!company || company.length > JOB_ASSIST_LIMITS.maxCompany) throw new Error(`公司名称须为 1–${JOB_ASSIST_LIMITS.maxCompany} 个字符。`);
+    if (!position || position.length > JOB_ASSIST_LIMITS.maxPosition) throw new Error(`岗位名称须为 1–${JOB_ASSIST_LIMITS.maxPosition} 个字符。`);
+    if (description.length > JOB_ASSIST_LIMITS.maxDescription) throw new Error(`职位描述最多 ${JOB_ASSIST_LIMITS.maxDescription} 个字符。`);
+    if (message.length > JOB_ASSIST_LIMITS.maxMessage) throw new Error(`沟通文案最多 ${JOB_ASSIST_LIMITS.maxMessage} 个字符。`);
+    const id = String(input?.id ?? "");
+    if (!id || id.length > 128) throw new Error("职位标识无效。");
+    const createdAt = String(input?.createdAt ?? "");
+    const updatedAt = String(input?.updatedAt ?? createdAt);
+    if (!Number.isFinite(Date.parse(createdAt)) || !Number.isFinite(Date.parse(updatedAt)) || updatedAt < createdAt) throw new Error("职位记录时间无效。");
+    const status = Object.values(JOB_ASSIST_STATUS).includes(input?.status) ? input.status : JOB_ASSIST_STATUS.draft;
+    return { id, company, position, description, message, status, createdAt, updatedAt };
+  }
+
+  function markJobCopied(job, now = new Date()) {
+    const value = validateJobOpportunity(job);
+    if (!value.message) throw new Error("请先填写求职沟通文案。");
+    const updatedAt = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    if (updatedAt < value.createdAt) throw new Error("操作时间无效。");
+    return { ...value, status: JOB_ASSIST_STATUS.copied, updatedAt };
+  }
+
+  function markJobAppliedByUser(job, now = new Date()) {
+    const value = validateJobOpportunity(job);
+    const updatedAt = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    if (updatedAt < value.createdAt) throw new Error("操作时间无效。");
+    return { ...value, status: JOB_ASSIST_STATUS.appliedSelfReported, updatedAt };
+  }
+
+  // 自动投递规则与 Android domain/AutoApply.kt 同口径；原型只用来模拟试运行，不操作任何 App。
+  const AUTO_APPLY_LIMITS = Object.freeze({ defaultDailyLimit: 30, maxDailyLimit: 100, defaultStepDelaySeconds: 1, minStepDelaySeconds: 1, maxStepDelaySeconds: 30, maxKeywords: 30, maxKeyword: 30, maxCity: 20, maxGreeting: 300, maxSalaryK: 1000, maxResumes: 10, maxResumeName: 80 });
+  const AUTO_APPLY_SALARY = /^\s*(\d+(?:\.\d+)?)\s*(?:[-~]\s*(\d+(?:\.\d+)?))?\s*([Kk]|万|元\/(?:天|时|小时|月))/;
+
+  function defaultAutoApplySettings() {
+    return { includeKeywords: [], excludeKeywords: [], minSalaryK: null, city: "", companyBlacklist: [], dailyLimit: AUTO_APPLY_LIMITS.defaultDailyLimit, stepDelaySeconds: AUTO_APPLY_LIMITS.defaultStepDelaySeconds, greeting: "", riskAccepted: false, resumes: [] };
+  }
+
+  function parseKeywordList(text) {
+    return [...new Set(String(text ?? "").split(/[,，、;；\n]/).map(item => item.trim()).filter(Boolean))];
+  }
+
+  function salaryLowerK(text) {
+    const match = AUTO_APPLY_SALARY.exec(String(text ?? ""));
+    if (!match) return null;
+    const low = Number(match[1]);
+    if (match[3] === "K" || match[3] === "k") return Math.trunc(low);
+    if (match[3] === "万") return Math.trunc(low * 10);
+    if (match[3] === "元/月") return Math.trunc(low / 1000);
+    return null;
+  }
+
+  function autoApplyJobKey(card) {
+    return [card.company, card.position, card.salary].map(item => String(item ?? "").trim().toLowerCase()).join("|");
+  }
+
+  function validateAutoApplySettings(input) {
+    const value = { ...defaultAutoApplySettings(), ...input };
+    const words = (list, label) => {
+      if (!Array.isArray(list) || list.length > AUTO_APPLY_LIMITS.maxKeywords) throw new Error(`${label}最多 ${AUTO_APPLY_LIMITS.maxKeywords} 个。`);
+      if (list.some(item => !String(item).trim() || String(item).length > AUTO_APPLY_LIMITS.maxKeyword)) throw new Error(`${label}每个最多 ${AUTO_APPLY_LIMITS.maxKeyword} 个字符。`);
+    };
+    words(value.includeKeywords, "关键词");
+    words(value.excludeKeywords, "排除词");
+    words(value.companyBlacklist, "公司黑名单");
+    if (value.minSalaryK !== null && !(Number.isInteger(value.minSalaryK) && value.minSalaryK >= 1 && value.minSalaryK <= AUTO_APPLY_LIMITS.maxSalaryK)) throw new Error(`最低薪资须为 1–${AUTO_APPLY_LIMITS.maxSalaryK} K。`);
+    if (String(value.city).length > AUTO_APPLY_LIMITS.maxCity) throw new Error(`城市最多 ${AUTO_APPLY_LIMITS.maxCity} 个字符。`);
+    if (!Number.isInteger(value.dailyLimit) || value.dailyLimit < 1 || value.dailyLimit > AUTO_APPLY_LIMITS.maxDailyLimit) throw new Error(`每日上限须为 1–${AUTO_APPLY_LIMITS.maxDailyLimit}。`);
+    if (!Number.isInteger(value.stepDelaySeconds) || value.stepDelaySeconds < AUTO_APPLY_LIMITS.minStepDelaySeconds || value.stepDelaySeconds > AUTO_APPLY_LIMITS.maxStepDelaySeconds) throw new Error(`步骤间隔须为 ${AUTO_APPLY_LIMITS.minStepDelaySeconds}–${AUTO_APPLY_LIMITS.maxStepDelaySeconds} 秒。`);
+    if (String(value.greeting).length > AUTO_APPLY_LIMITS.maxGreeting) throw new Error(`招呼语最多 ${AUTO_APPLY_LIMITS.maxGreeting} 个字符。`);
+    if (!Array.isArray(value.resumes) || value.resumes.length > AUTO_APPLY_LIMITS.maxResumes) throw new Error(`简历最多 ${AUTO_APPLY_LIMITS.maxResumes} 份。`);
+    if (value.resumes.filter(item => item.isDefault).length > 1) throw new Error("只能有一份默认简历。");
+    if (new Set(value.resumes.map(item => bareResumeName(item.name))).size !== value.resumes.length) throw new Error("简历名称不能重复。");
+    value.resumes.forEach(resume => {
+      if (!String(resume?.id ?? "").trim() || String(resume.id).length > 64) throw new Error("简历标识无效。");
+      const name = String(resume.name ?? "").trim();
+      if (!name || name.length > AUTO_APPLY_LIMITS.maxResumeName) throw new Error(`简历名称须为 1–${AUTO_APPLY_LIMITS.maxResumeName} 个字符。`);
+      if (!Array.isArray(resume.keywords)) throw new Error("简历关键词无效。");
+      if (!resume.isDefault && !resume.keywords.length) throw new Error(`「${name}」至少要有一个岗位关键词，或设为默认简历。`);
+      words(resume.keywords, "简历关键词");
+    });
+    return { ...value, city: String(value.city).trim(), greeting: String(value.greeting).trim(), riskAccepted: Boolean(value.riskAccepted) };
+  }
+
+  /** records: [{ jobKey, company, day: "YYYY-MM-DD", result: "contacted" | "already" | "failed" }] */
+  function autoApplyDecision(card, settings, records, day) {
+    const includes = (text, word) => String(text).toLowerCase().includes(String(word).toLowerCase());
+    if (!String(card.position ?? "").trim() || !String(card.company ?? "").trim()) return { apply: false, reason: "未识别出职位或公司" };
+    const key = autoApplyJobKey(card);
+    if (records.some(item => item.jobKey === key && item.result !== "failed")) return { apply: false, reason: "已沟通过" };
+    const company = String(card.company).trim().toLowerCase();
+    if (records.some(item => item.result === "contacted" && String(item.company).trim().toLowerCase() === company && item.day === day)) return { apply: false, reason: "今天已联系过这家公司" };
+    const black = settings.companyBlacklist.find(word => includes(card.company, word));
+    if (black) return { apply: false, reason: `公司在黑名单「${black}」` };
+    const excluded = settings.excludeKeywords.find(word => includes(card.position, word));
+    if (excluded) return { apply: false, reason: `包含排除词「${excluded}」` };
+    if (settings.includeKeywords.length && !settings.includeKeywords.some(word => includes(card.position, word))) return { apply: false, reason: "岗位不含关键词" };
+    if (settings.city && card.city && !String(card.city).includes(settings.city)) return { apply: false, reason: "城市不符" };
+    if (settings.minSalaryK !== null) {
+      const low = salaryLowerK(card.salary);
+      if (low === null) return { apply: false, reason: "薪资无法识别" };
+      if (low < settings.minSalaryK) return { apply: false, reason: `薪资低于 ${settings.minSalaryK}K` };
+    }
+    return { apply: true, reason: "" };
+  }
+
+  function autoApplyContactedOn(records, day) {
+    return records.filter(item => item.result === "contacted" && item.day === day).length;
+  }
+
+  /** 模拟一次运行：按顺序决定，达到每日上限即停止；dryRun 时不产生记录。 */
+  function simulateAutoApply(cards, settings, records, day, dryRun) {
+    const preview = [];
+    const added = [];
+    let stopReason = null;
+    for (const card of cards) {
+      const all = records.concat(added);
+      if (!dryRun && autoApplyContactedOn(all, day) >= settings.dailyLimit) { stopReason = `已达到今日上限 ${settings.dailyLimit} 条，已停止`; break; }
+      const decision = autoApplyDecision(card, settings, all, day);
+      preview.push({ card, ...decision });
+      if (!dryRun && decision.apply) added.push({ jobKey: autoApplyJobKey(card), company: card.company, position: card.position, salary: card.salary, day, result: "contacted" });
+    }
+    const applying = preview.filter(item => item.apply).length;
+    return { preview, records: added, stopReason: stopReason ?? (dryRun ? `试运行完成：识别 ${preview.length} 个职位，其中 ${applying} 个符合条件；未点击任何按钮` : "列表没有更多新职位，已停止") };
+  }
+
+  /** 先按列表顺序找关键词命中的简历，再退回默认简历；都没有时返回 null（跳过）。 */
+  function pickResume(position, resumes) {
+    const text = String(position ?? "").toLowerCase();
+    const hit = resumes.find(resume => resume.keywords.some(word => text.includes(String(word).toLowerCase()))) ?? resumes.find(resume => resume.isDefault);
+    return hit?.name ?? null;
+  }
+
+  /** 保存一份简历：同 id 覆盖，否则追加；设为默认时取消其他简历的默认。 */
+  function upsertResume(resumes, value) {
+    const cleaned = { ...value, name: String(value.name ?? "").trim(), keywords: [...new Set(value.keywords.map(word => String(word).trim()).filter(Boolean))], isDefault: Boolean(value.isDefault) };
+    const next = resumes.some(item => item.id === cleaned.id) ? resumes.map(item => item.id === cleaned.id ? cleaned : item) : [...resumes, cleaned];
+    return cleaned.isDefault ? next.map(item => item.id !== cleaned.id && item.isDefault ? { ...item, isDefault: false } : item) : next;
+  }
+
+  /** 调整优先级：up 为 true 时与上一份交换。 */
+  function moveResume(resumes, id, up) {
+    const index = resumes.findIndex(item => item.id === id);
+    const other = up ? index - 1 : index + 1;
+    if (index < 0 || other < 0 || other >= resumes.length) return resumes;
+    const next = [...resumes];
+    [next[index], next[other]] = [next[other], next[index]];
+    return next;
+  }
+
+  function bareResumeName(text) {
+    return String(text ?? "").trim().replace(/\.(pdf|docx?|jpe?g|png)$/i, "").trim().toLowerCase();
+  }
+
+  /** 简历只按整名比较（忽略大小写和扩展名）。 */
+  function resumeNameMatches(option, name) {
+    return Boolean(bareResumeName(name)) && bareResumeName(option) === bareResumeName(name);
+  }
+
+  /** 公司按整名比较（去掉空白和括号内容），避免「华为」误配「华为云计算」。 */
+  function sameCompany(a, b) {
+    const key = text => String(text ?? "").replace(/[(（[【][^)）\]】]*[)）\]】]/g, "").replace(/\s/g, "").toLowerCase();
+    return Boolean(key(a)) && key(a) === key(b);
+  }
+
+  /** 已自动发起沟通、还没发过简历的职位，每个职位一条。 */
+  function awaitingResume(records) {
+    const sent = new Set(records.filter(item => item.result === "resume-sent").map(item => item.jobKey));
+    const seen = new Set();
+    return records.filter(item => {
+      if (item.result !== "contacted" || sent.has(item.jobKey) || seen.has(item.jobKey)) return false;
+      seen.add(item.jobKey);
+      return true;
+    });
+  }
+
+  function resumesSentOn(records, day) {
+    return records.filter(item => item.result === "resume-sent" && item.day === day).length;
+  }
+
+  /** 模拟发简历：conversations 为 [{ company, unread }]，只处理有未读、且自动沟通过的公司；不涉及消息内容。 */
+  function simulateResumeRun(conversations, settings, records, day, dryRun) {
+    const preview = [];
+    const added = [];
+    let stopReason = null;
+    for (const chat of conversations) {
+      const all = records.concat(added);
+      const target = chat.unread ? awaitingResume(all).find(item => sameCompany(item.company, chat.company)) : null;
+      if (!target) continue;
+      if (!dryRun && resumesSentOn(all, day) >= settings.dailyLimit) { stopReason = `已达到今日发简历上限 ${settings.dailyLimit} 份，已停止`; break; }
+      const resumeName = pickResume(target.position, settings.resumes);
+      preview.push({ company: chat.company, position: target.position, resumeName, reason: resumeName ? "" : "没有匹配的简历" });
+      if (!dryRun && resumeName) added.push({ jobKey: target.jobKey, company: target.company, position: target.position, salary: target.salary, day, result: "resume-sent", note: `简历：${resumeName}` });
+    }
+    const sending = preview.filter(item => item.resumeName).length;
+    return { preview, records: added, stopReason: stopReason ?? (dryRun ? `发简历试运行完成：识别 ${conversations.length} 个会话，其中 ${sending} 个会发简历；未点击任何按钮` : "没有更多待发简历的新回复，已停止") };
+  }
+
   const api = Object.freeze({
     LIMITS, MODES, CATEGORIES, USAGE, sampleUsageSegments, focusSpans, usageDaySummary, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, daysBetween, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
@@ -1188,7 +1392,10 @@
     allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,
     completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks,
     DIARY_LIMITS, initialDiaryEntries, diaryEntryDate, parseDiaryDateQuery, validateDiaryEntry, selectDiaryEntries, trashedDiaryEntries, listDiaryDrafts, moveDiaryToTrash, restoreDiaryEntry,
-    diaryStreak, ASSET_KINDS, ASSET_LIMITS, assetKind, validateAssetAccount, validateAssetSnapshot, validateWish,
+    diaryStreak, JOB_ASSIST_LIMITS, JOB_ASSIST_STATUS, validateJobOpportunity, markJobCopied, markJobAppliedByUser,
+    AUTO_APPLY_LIMITS, defaultAutoApplySettings, parseKeywordList, salaryLowerK, autoApplyJobKey, validateAutoApplySettings, autoApplyDecision, autoApplyContactedOn, simulateAutoApply,
+    pickResume, upsertResume, moveResume, resumeNameMatches, sameCompany, awaitingResume, resumesSentOn, simulateResumeRun,
+    ASSET_KINDS, ASSET_LIMITS, assetKind, validateAssetAccount, validateAssetSnapshot, validateWish,
     latestSnapshot, latestBalance, assetSummary, netWorthSeries, netWorthYearSummary, assetBalanceAt, wishProgress, initialAssetAccounts, initialAssetSnapshots, initialWishes,
   });
   if (typeof module !== "undefined" && module.exports) module.exports = api;

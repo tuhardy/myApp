@@ -36,6 +36,12 @@ internal data class AssetAccountRow(@PrimaryKey val id: String, val payload: Str
 internal data class AssetSnapshotRow(@PrimaryKey val id: String, val payload: String, val position: Int)
 @Entity(tableName = "wishes")
 internal data class WishRow(@PrimaryKey val id: String, val payload: String, val position: Int)
+@Entity(tableName = "job_opportunities")
+internal data class JobOpportunityRow(@PrimaryKey val id: String, val payload: String, val position: Int)
+@Entity(tableName = "auto_apply_records")
+internal data class AutoApplyRecordRow(@PrimaryKey val id: String, val payload: String, val position: Int)
+@Entity(tableName = "auto_apply_settings")
+internal data class AutoApplySettingsRow(@PrimaryKey val id: Int = 1, val payload: String)
 
 @Dao
 internal interface FocusDao {
@@ -75,9 +81,17 @@ internal interface FocusDao {
     @Query("SELECT * FROM wishes ORDER BY position") suspend fun wishes(): List<WishRow>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putWishes(rows: List<WishRow>)
     @Query("DELETE FROM wishes WHERE id IN (:ids)") suspend fun removeWishes(ids: List<String>)
+    @Query("SELECT * FROM job_opportunities ORDER BY position") suspend fun jobOpportunities(): List<JobOpportunityRow>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putJobOpportunities(rows: List<JobOpportunityRow>)
+    @Query("DELETE FROM job_opportunities WHERE id IN (:ids)") suspend fun removeJobOpportunities(ids: List<String>)
+    @Query("SELECT * FROM auto_apply_records ORDER BY position") suspend fun autoApplyRecords(): List<AutoApplyRecordRow>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putAutoApplyRecords(rows: List<AutoApplyRecordRow>)
+    @Query("DELETE FROM auto_apply_records WHERE id IN (:ids)") suspend fun removeAutoApplyRecords(ids: List<String>)
+    @Query("SELECT * FROM auto_apply_settings WHERE id = 1") suspend fun autoApplySettings(): AutoApplySettingsRow?
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putAutoApplySettings(row: AutoApplySettingsRow)
 }
 
-@Database(entities = [ProjectRow::class, TodoRow::class, SessionRow::class, ProgressRow::class, SettingsRow::class, TimerRow::class, RevisionRow::class, DiaryRow::class, DiaryDraftRow::class, AssetAccountRow::class, AssetSnapshotRow::class, WishRow::class], version = 4, exportSchema = false)
+@Database(entities = [ProjectRow::class, TodoRow::class, SessionRow::class, ProgressRow::class, SettingsRow::class, TimerRow::class, RevisionRow::class, DiaryRow::class, DiaryDraftRow::class, AssetAccountRow::class, AssetSnapshotRow::class, WishRow::class, JobOpportunityRow::class, AutoApplyRecordRow::class, AutoApplySettingsRow::class], version = 6, exportSchema = false)
 internal abstract class FocusDatabase : RoomDatabase() {
     abstract fun dao(): FocusDao
 
@@ -100,6 +114,19 @@ internal abstract class FocusDatabase : RoomDatabase() {
                 listOf("asset_accounts", "asset_snapshots", "wishes").forEach {
                     db.execSQL("CREATE TABLE IF NOT EXISTS `$it` (`id` TEXT NOT NULL, `payload` TEXT NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`id`))")
                 }
+            }
+        }
+        /** v4 → v5 只新增本地求职职位表，现有数据不动。 */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `job_opportunities` (`id` TEXT NOT NULL, `payload` TEXT NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+            }
+        }
+        /** v5 → v6 只新增自动投递记录与设置表，现有数据不动。 */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `auto_apply_records` (`id` TEXT NOT NULL, `payload` TEXT NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `auto_apply_settings` (`id` INTEGER NOT NULL, `payload` TEXT NOT NULL, PRIMARY KEY(`id`))")
             }
         }
     }

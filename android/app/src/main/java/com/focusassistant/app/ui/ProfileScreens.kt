@@ -404,7 +404,7 @@ private fun SettingsGroup(state: AppState, notificationAllowed: Boolean, exactAl
         SettingItem(Icons.Outlined.QueryStats, "使用情况访问", if (usageAllowed) "已允许 · 读取应用前台用时" else "未允许 · 无法读取手机用时", actions.onUsagePermission),
         SettingItem(Icons.Outlined.Backup, "导出完整备份", "项目、待办、专注、进度与偏好；不含日记和资产", actions.onBackup),
         SettingItem(Icons.Outlined.Restore, "从文件恢复", "需先确认，当前计时须先结束；不改动日记和资产", actions.onRestore),
-        SettingItem(Icons.Outlined.Code, "自动化扩展", "为手机自动化脚本留一个位置", actions.onAutomation, tag = "规划中")
+        SettingItem(Icons.Outlined.Code, "求职辅助", "本机职位草稿 · 发送由你确认", actions.onAutomation)
     )
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(17.dp)).background(Color.White).border(1.dp, Line, RoundedCornerShape(17.dp)).padding(horizontal = 13.dp)) {
         rows.forEachIndexed { index, item ->

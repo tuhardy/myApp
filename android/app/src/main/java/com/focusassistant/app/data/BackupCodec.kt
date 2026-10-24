@@ -83,6 +83,10 @@ internal fun JSONObject.objects(key: String, limit: Int): List<JSONObject> {
     require(array.length() <= limit) { "$key 记录过多" }
     return (0 until array.length()).map { array.getJSONObject(it) }
 }
+internal fun JSONObject.strings(key: String): List<String> {
+    val array = getJSONArray(key)
+    return (0 until array.length()).map { index -> array.get(index).let { require(it is String) { "$key 必须为文字列表" }; it } }
+}
 
 internal object JsonCodec {
     private fun nullable(value: Any?): Any = value ?: JSONObject.NULL
@@ -151,6 +155,34 @@ internal object JsonCodec {
         if (value.isNull("deadline")) null else value.string("deadline"),
         if (value.has("accountId") && !value.isNull("accountId")) value.string("accountId") else if (!value.has("scope") || value.string("scope") == WishScope.ACCOUNT.name) "" else null,
         value.boolean("archived"), if (value.has("scope")) WishScope.valueOf(value.string("scope")) else WishScope.ACCOUNT).also { AssetRules.validateWish(it) }
+    fun jobOpportunity(value: JobOpportunity): JSONObject = JSONObject().put("id", value.id).put("company", value.company).put("position", value.position)
+        .put("description", value.description).put("message", value.message).put("status", value.status.name)
+        .put("createdAt", value.createdAt).put("updatedAt", value.updatedAt)
+    fun readJobOpportunity(value: JSONObject) = JobOpportunity(value.string("id"), value.string("company"), value.string("position"),
+        value.string("description"), value.string("message"), JobAssistStatus.valueOf(value.string("status")), value.long("createdAt"), value.long("updatedAt"))
+        .also { JobAssistRules.validate(it) }
+    fun autoApplySettings(value: AutoApplySettings): JSONObject = JSONObject()
+        .put("includeKeywords", JSONArray(value.includeKeywords)).put("excludeKeywords", JSONArray(value.excludeKeywords))
+        .put("minSalaryK", nullable(value.minSalaryK)).put("city", value.city).put("companyBlacklist", JSONArray(value.companyBlacklist))
+        .put("dailyLimit", value.dailyLimit).put("stepDelayMs", value.stepDelayMs).put("greeting", value.greeting)
+        .put("riskAccepted", value.riskAccepted).put("calibratedVersion", nullable(value.calibratedVersion))
+        .put("resumes", JSONArray(value.resumes.map { JSONObject().put("id", it.id).put("name", it.name).put("keywords", JSONArray(it.keywords)).put("isDefault", it.isDefault) }))
+        .put("resumeCalibratedVersion", nullable(value.resumeCalibratedVersion))
+    fun readAutoApplySettings(value: JSONObject) = AutoApplySettings(value.strings("includeKeywords"), value.strings("excludeKeywords"),
+        value.nullableInteger("minSalaryK"), value.string("city"), value.strings("companyBlacklist"), value.integer("dailyLimit"), value.long("stepDelayMs"),
+        value.string("greeting"), value.boolean("riskAccepted"), if (value.isNull("calibratedVersion")) null else value.string("calibratedVersion"),
+        // 0.9.8 没有简历字段；0.9.9 存的是「关键词=简历名称」规则，转换为不设默认的简历。
+        when {
+            value.has("resumes") -> value.objects("resumes", AutoApplyRules.MAX_RESUMES).map { ResumeProfile(it.string("id"), it.string("name"), it.strings("keywords"), it.boolean("isDefault")) }
+            value.has("resumeRules") -> value.objects("resumeRules", AutoApplyRules.MAX_RESUMES).mapIndexed { index, it -> ResumeProfile("legacy-$index", it.string("resumeName"), it.strings("keywords")) }
+            else -> emptyList()
+        },
+        if (!value.has("resumeCalibratedVersion") || value.isNull("resumeCalibratedVersion")) null else value.string("resumeCalibratedVersion"))
+        .also { AutoApplyRules.validateSettings(it) }
+    fun autoApplyRecord(value: AutoApplyRecord): JSONObject = JSONObject().put("id", value.id).put("jobKey", value.jobKey).put("company", value.company)
+        .put("position", value.position).put("salary", value.salary).put("at", value.at).put("result", value.result.name).put("note", value.note)
+    fun readAutoApplyRecord(value: JSONObject) = AutoApplyRecord(value.string("id"), value.string("jobKey"), value.string("company"), value.string("position"),
+        value.string("salary"), value.long("at"), AutoApplyResult.valueOf(value.string("result")), value.string("note")).also { AutoApplyRules.validateRecord(it) }
     fun readTimer(value: JSONObject) = ActiveTimer(value.string("sessionId"), value.string("projectId"), value.string("projectTitle"), value.string("category"), TimerMode.valueOf(value.string("timerMode")), value.nullableInteger("targetMinutes"),
         TimerPhase.valueOf(value.string("phase")), TimerStatus.valueOf(value.string("status")), value.long("startedAt"),
         value.long("accumulatedMs"), value.long("anchorElapsed"), value.long("anchorWall"), value.integer("bootCount"), value.objects("segments", 10000).map(::readSegment), value.boolean("targetNotified"), value.boolean("recoveryPending"))

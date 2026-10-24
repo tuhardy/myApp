@@ -11,6 +11,97 @@ const { completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTas
 const { execFileSync } = require("node:child_process");
 const { initialFocusItems, validateFocusItem, focusHourDistribution, validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary } = require("./model.js");
 const { initialDiaryEntries, selectDiaryEntries, trashedDiaryEntries, moveDiaryToTrash, restoreDiaryEntry, parseDiaryDateQuery, validateDiaryEntry, listDiaryDrafts } = require("./model.js");
+const { JOB_ASSIST_STATUS, validateJobOpportunity, markJobCopied, markJobAppliedByUser } = require("./model.js");
+
+test("求职草稿只有明确复核确认后才标记复制，手动投递仅记录为未核验自述", () => {
+  const job = validateJobOpportunity({ id: "job-1", company: " 示例公司 ", position: " 产品经理 ", description: "职位描述", message: "您好，我想了解该岗位。", createdAt: "2026-09-28T00:00:00.000Z", updatedAt: "2026-09-28T00:00:00.000Z" });
+  assert.equal(job.company, "示例公司");
+  assert.equal(job.status, JOB_ASSIST_STATUS.draft);
+  assert.equal(markJobCopied(job, new Date("2026-09-28T01:00:00.000Z")).status, JOB_ASSIST_STATUS.copied);
+  assert.equal(markJobAppliedByUser(job, new Date("2026-09-28T02:00:00.000Z")).status, JOB_ASSIST_STATUS.appliedSelfReported);
+  assert.throws(() => markJobCopied({ ...job, message: " " }), /文案/);
+  assert.throws(() => validateJobOpportunity({ ...job, position: "" }), /岗位/);
+});
+
+const { AUTO_APPLY_LIMITS, defaultAutoApplySettings, parseKeywordList, salaryLowerK, autoApplyJobKey, validateAutoApplySettings, autoApplyDecision, simulateAutoApply } = require("./model.js");
+
+test("自动投递规则与 Android 同口径：薪资、关键词、黑名单、去重、每日上限与试运行", () => {
+  const card = { position: "Android 开发工程师", company: "示例科技", salary: "15-25K·13薪", city: "上海" };
+  const day = "2026-10-22";
+  const base = defaultAutoApplySettings();
+  assert.equal(base.dailyLimit, 30);
+  assert.equal(base.stepDelaySeconds, 1);
+  assert.equal(AUTO_APPLY_LIMITS.maxDailyLimit, 100);
+  assert.equal(salaryLowerK("15-25K·13薪"), 15);
+  assert.equal(salaryLowerK("1-1.5万"), 10);
+  assert.equal(salaryLowerK("200-300元/天"), null);
+  assert.deepEqual(parseKeywordList(" Java 开发，Kotlin;Kotlin "), ["Java 开发", "Kotlin"]);
+  assert.equal(autoApplyDecision(card, base, [], day).apply, true);
+  assert.equal(autoApplyDecision(card, { ...base, includeKeywords: ["iOS"] }, [], day).apply, false);
+  assert.equal(autoApplyDecision(card, { ...base, minSalaryK: 16 }, [], day).reason, "薪资低于 16K");
+  assert.equal(autoApplyDecision(card, { ...base, companyBlacklist: ["示例"] }, [], day).reason, "公司在黑名单「示例」");
+  const contacted = { jobKey: autoApplyJobKey(card), company: card.company, day: "2026-09-01", result: "contacted" };
+  assert.equal(autoApplyDecision(card, base, [contacted], day).reason, "已沟通过");
+  assert.equal(autoApplyDecision(card, base, [{ ...contacted, result: "failed" }], day).apply, true);
+  assert.equal(autoApplyDecision(card, base, [{ jobKey: "other", company: "示例科技", day, result: "contacted" }], day).reason, "今天已联系过这家公司");
+  assert.throws(() => validateAutoApplySettings({ dailyLimit: 101 }), /每日上限/);
+  assert.throws(() => validateAutoApplySettings({ stepDelaySeconds: 0 }), /步骤间隔/);
+  assert.throws(() => validateAutoApplySettings({ stepDelaySeconds: 31 }), /步骤间隔/);
+  validateAutoApplySettings({ stepDelaySeconds: 1 });
+  const cards = [card, { ...card, company: "另一家", salary: "20-30K" }, { ...card, company: "第三家", salary: "18-22K" }];
+  const dry = simulateAutoApply(cards, base, [], day, true);
+  assert.equal(dry.records.length, 0);
+  assert.match(dry.stopReason, /未点击任何按钮/);
+  const live = simulateAutoApply(cards, { ...base, dailyLimit: 2 }, [], day, false);
+  assert.equal(live.records.length, 2);
+  assert.match(live.stopReason, /今日上限 2 条/);
+});
+
+test("我的简历与 Android 同口径：关键词优先、默认兜底、单一默认、名称不重复、调整优先级", () => {
+  const { pickResume, upsertResume, moveResume, sameCompany } = require("./model.js");
+  const rules = [{ id: "a", name: "张三-Android", keywords: ["Android", "Kotlin"], isDefault: false }, { id: "b", name: "张三-后端.pdf", keywords: ["后端"], isDefault: false }];
+  const withDefault = [...rules, { id: "c", name: "张三-通用", keywords: [], isDefault: true }];
+  assert.equal(pickResume("产品经理", rules), null);
+  assert.equal(pickResume("产品经理", withDefault), "张三-通用");
+  assert.equal(pickResume("Java 后端", withDefault), "张三-后端.pdf");
+  validateAutoApplySettings({ resumes: withDefault });
+  assert.throws(() => validateAutoApplySettings({ resumes: [{ id: "x", name: "无关键词", keywords: [], isDefault: false }] }), /至少要有一个/);
+  assert.throws(() => validateAutoApplySettings({ resumes: [{ id: "x", name: "甲", keywords: [], isDefault: true }, { id: "y", name: "乙", keywords: [], isDefault: true }] }), /默认简历/);
+  assert.throws(() => validateAutoApplySettings({ resumes: [{ id: "x", name: "同名.pdf", keywords: ["a"] }, { id: "y", name: "同名", keywords: ["b"] }] }), /不能重复/);
+  assert.throws(() => validateAutoApplySettings({ resumes: Array.from({ length: 11 }, (_, i) => ({ id: `${i}`, name: `简历${i}`, keywords: ["a"] })) }), /最多 10 份/);
+  const upserted = upsertResume(withDefault, { id: "a", name: " 张三-Android ", keywords: ["Android", " ", "Android"], isDefault: true });
+  assert.deepEqual(upserted[0], { id: "a", name: "张三-Android", keywords: ["Android"], isDefault: true });
+  assert.deepEqual(upserted.map(item => item.isDefault), [true, false, false]);
+  assert.deepEqual(moveResume(rules, "b", true).map(item => item.id), ["b", "a"]);
+  assert.equal(moveResume(rules, "a", true), rules);
+  assert.equal(sameCompany("示例科技（北京）", "示例 科技"), true);
+  assert.equal(sameCompany("华为", "华为云计算"), false);
+  assert.equal(sameCompany("", ""), false);
+});
+
+test("自动发简历与 Android 同口径：按岗位选简历名称、只处理自动沟通过且有新消息的会话、每个职位只发一次", () => {
+  const { pickResume, resumeNameMatches, awaitingResume, simulateResumeRun } = require("./model.js");
+  const day = "2026-10-22";
+  const rules = [{ id: "a", name: "张三-Android", keywords: ["Android", "Kotlin"], isDefault: false }, { id: "b", name: "张三-后端.pdf", keywords: ["后端"], isDefault: false }];
+  assert.equal(pickResume("高级 android 开发", rules), "张三-Android");
+  assert.equal(resumeNameMatches("张三-Android.PDF", "张三-Android"), true);
+  assert.equal(resumeNameMatches("张三-Android-旧版.pdf", "张三-Android"), false);
+  const contacted = { jobKey: "k1", company: "示例科技", position: "Android 开发", salary: "15-25K", day, result: "contacted" };
+  const other = { jobKey: "k2", company: "乙公司", position: "运营", salary: "8K", day, result: "contacted" };
+  assert.equal(awaitingResume([contacted, { ...contacted, result: "resume-sent" }]).length, 0);
+  const settings = { ...defaultAutoApplySettings(), resumes: rules };
+  const chats = [{ company: "陌生公司", unread: true }, { company: "乙公司", unread: true }, { company: "示例科技", unread: true }, { company: "丙公司", unread: false }];
+  const dry = simulateResumeRun(chats, settings, [contacted, other], day, true);
+  assert.equal(dry.records.length, 0);
+  assert.deepEqual(dry.preview.map(item => item.resumeName), [null, "张三-Android"]);
+  assert.match(dry.stopReason, /未点击任何按钮/);
+  const live = simulateResumeRun(chats, settings, [contacted, other], day, false);
+  assert.deepEqual(live.records.map(item => [item.jobKey, item.result]), [["k1", "resume-sent"]]);
+  assert.equal(simulateResumeRun(chats, settings, [contacted, other, ...live.records], day, false).records.length, 0);
+  // 公司严格匹配：「示例」不会配到「示例科技」。
+  assert.equal(simulateResumeRun([{ company: "示例", unread: true }], settings, [contacted], day, true).preview.length, 0);
+  assert.match(simulateResumeRun(chats, { ...settings, dailyLimit: 1 }, [contacted, { ...live.records[0], jobKey: "old" }], day, false).stopReason, /发简历上限 1 份/);
+});
 
 test("日记草稿按最后编辑倒序，区分新日记、修改与原日记已删除", () => {
   const entries = [{ id: "a", deletedAt: null }, { id: "b", deletedAt: "2026-09-28T00:00:00.000Z" }];

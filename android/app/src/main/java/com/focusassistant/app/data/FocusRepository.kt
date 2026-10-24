@@ -25,7 +25,7 @@ import org.json.JSONObject
 class FocusRepository(context: Context, scope: CoroutineScope) {
     private val appContext = context.applicationContext
     private val database = Room.databaseBuilder(appContext, FocusDatabase::class.java, "focus-assistant.db")
-        .addMigrations(FocusDatabase.MIGRATION_1_2, FocusDatabase.MIGRATION_2_3, FocusDatabase.MIGRATION_3_4)
+        .addMigrations(FocusDatabase.MIGRATION_1_2, FocusDatabase.MIGRATION_2_3, FocusDatabase.MIGRATION_3_4, FocusDatabase.MIGRATION_4_5, FocusDatabase.MIGRATION_5_6)
         .enableMultiInstanceInvalidation().build()
     private val dao = database.dao()
     private val mutex = Mutex()
@@ -222,7 +222,7 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
             mutate { current ->
                 require(current.timer == null) { "请先结束或确认放弃当前计时，再恢复备份" }
                 // 现有备份不含日记与资产：恢复时原样保留本机记录，不能因为备份里没有而清空。
-                AppState(backup.projects.toList(), backup.todos.toList(), backup.sessions.map { it.copy(progressPrompted = true, segments = it.segments.toList()) }, backup.progress.toList(), backup.settings, loading = false, diaries = current.diaries, diaryDrafts = current.diaryDrafts, assets = current.assets)
+                AppState(backup.projects.toList(), backup.todos.toList(), backup.sessions.map { it.copy(progressPrompted = true, segments = it.segments.toList()) }, backup.progress.toList(), backup.settings, loading = false, diaries = current.diaries, diaryDrafts = current.diaryDrafts, assets = current.assets, jobOpportunities = current.jobOpportunities, autoApply = current.autoApply)
             }
         }
     }
@@ -323,6 +323,61 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         mutateAssets { book -> book.copy(wishes = upsert(book.wishes, stored) { it.id }) }
     }
     suspend fun deleteWish(id: String) = mutateAssets { book -> book.copy(wishes = book.wishes.filterNot { it.id == id }) }
+    suspend fun saveJobOpportunity(value: JobOpportunity) {
+        val now = System.currentTimeMillis()
+        val normalized = value.copy(company = value.company.trim(), position = value.position.trim(), description = value.description.trim(), message = value.message.trim())
+        mutate { current ->
+            val previous = current.jobOpportunities.find { it.id == normalized.id }
+            val unchanged = previous?.let {
+                it.company == normalized.company && it.position == normalized.position && it.description == normalized.description && it.message == normalized.message
+            } == true
+            val stored = normalized.copy(
+                createdAt = previous?.createdAt ?: normalized.createdAt,
+                updatedAt = now,
+                status = if (unchanged) previous!!.status else JobAssistStatus.DRAFT
+            )
+            JobAssistRules.validate(stored)
+            current.copy(jobOpportunities = upsert(current.jobOpportunities, stored) { it.id })
+                .also { JobAssistRules.validateAll(it.jobOpportunities) }
+        }
+    }
+    suspend fun markJobCopied(id: String) = updateJobOpportunity(id) { JobAssistRules.markCopied(it, System.currentTimeMillis()) }
+    suspend fun markJobAppliedByUser(id: String) = updateJobOpportunity(id) { JobAssistRules.markAppliedByUser(it, System.currentTimeMillis()) }
+    suspend fun deleteJobOpportunity(id: String) {
+        mutate { current -> current.copy(jobOpportunities = current.jobOpportunities.filterNot { it.id == id }) }
+    }
+    private suspend fun updateJobOpportunity(id: String, change: (JobOpportunity) -> JobOpportunity) {
+        mutate { current ->
+            val value = current.jobOpportunities.find { it.id == id } ?: error("职位记录不存在")
+            val updated = change(value)
+            JobAssistRules.validate(updated)
+            current.copy(jobOpportunities = current.jobOpportunities.map { if (it.id == id) updated else it })
+        }
+    }
+    suspend fun saveAutoApplySettings(value: AutoApplySettings) {
+        val normalized = value.copy(city = value.city.trim(), greeting = value.greeting.trim())
+        AutoApplyRules.validateSettings(normalized)
+        mutate { current -> current.copy(autoApply = current.autoApply.copy(settings = normalized)) }
+    }
+    suspend fun saveResumeProfile(value: ResumeProfile) = mutateResumes { AutoApplyRules.upsertResume(it, value) }
+    suspend fun deleteResumeProfile(id: String) = mutateResumes { list -> list.filterNot { it.id == id } }
+    suspend fun moveResumeProfile(id: String, up: Boolean) = mutateResumes { AutoApplyRules.moveResume(it, id, up) }
+    private suspend fun mutateResumes(change: (List<ResumeProfile>) -> List<ResumeProfile>) {
+        mutate { current ->
+            val settings = current.autoApply.settings.copy(resumes = change(current.autoApply.settings.resumes))
+            AutoApplyRules.validateSettings(settings)
+            current.copy(autoApply = current.autoApply.copy(settings = settings))
+        }
+    }
+    /** 无障碍服务每处理完一个职位写入一条记录；去重与每日上限都以这里持久化的记录为准。 */
+    suspend fun addAutoApplyRecord(record: AutoApplyRecord) {
+        mutate { current ->
+            current.copy(autoApply = AutoApplyRules.addRecord(current.autoApply, record), jobOpportunities = JobAssistRules.markAutoContacted(current.jobOpportunities, record))
+        }
+    }
+    suspend fun clearAutoApplyRecords() {
+        mutate { current -> current.copy(autoApply = current.autoApply.copy(records = emptyList())) }
+    }
     private suspend fun mutateAssets(change: (AssetBook) -> AssetBook) {
         mutate { current ->
             val next = change(current.assets)
@@ -360,7 +415,11 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         diaryDrafts = dao.diaryDrafts().map { JsonCodec.readDiaryDraft(JSONObject(it.payload)) },
         assets = AssetBook(dao.assetAccounts().map { JsonCodec.readAssetAccount(JSONObject(it.payload)) },
             dao.assetSnapshots().map { JsonCodec.readAssetSnapshot(JSONObject(it.payload)) },
-            dao.wishes().map { JsonCodec.readWish(JSONObject(it.payload)) }))
+            dao.wishes().map { JsonCodec.readWish(JSONObject(it.payload)) }),
+        jobOpportunities = dao.jobOpportunities().map { JsonCodec.readJobOpportunity(JSONObject(it.payload)) },
+        autoApply = AutoApplyBook(dao.autoApplySettings()?.let { JsonCodec.readAutoApplySettings(JSONObject(it.payload)) } ?: AutoApplySettings(),
+            dao.autoApplyRecords().map { JsonCodec.readAutoApplyRecord(JSONObject(it.payload)) })
+    )
 
     private suspend fun persist(old: AppState, next: AppState) {
         if (old == next) return
@@ -373,6 +432,9 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         sync(old.assets.accounts, next.assets.accounts, { it.id }, dao::removeAssetAccounts) { changed -> dao.putAssetAccounts(changed.map { (index, item) -> AssetAccountRow(item.id, JsonCodec.assetAccount(item).toString(), index) }) }
         sync(old.assets.snapshots, next.assets.snapshots, { it.id }, dao::removeAssetSnapshots) { changed -> dao.putAssetSnapshots(changed.map { (index, item) -> AssetSnapshotRow(item.id, JsonCodec.assetSnapshot(item).toString(), index) }) }
         sync(old.assets.wishes, next.assets.wishes, { it.id }, dao::removeWishes) { changed -> dao.putWishes(changed.map { (index, item) -> WishRow(item.id, JsonCodec.wish(item).toString(), index) }) }
+        sync(old.jobOpportunities, next.jobOpportunities, { it.id }, dao::removeJobOpportunities) { changed -> dao.putJobOpportunities(changed.map { (index, item) -> JobOpportunityRow(item.id, JsonCodec.jobOpportunity(item).toString(), index) }) }
+        sync(old.autoApply.records, next.autoApply.records, { it.id }, dao::removeAutoApplyRecords) { changed -> dao.putAutoApplyRecords(changed.map { (index, item) -> AutoApplyRecordRow(item.id, JsonCodec.autoApplyRecord(item).toString(), index) }) }
+        if (old.autoApply.settings != next.autoApply.settings) dao.putAutoApplySettings(AutoApplySettingsRow(payload = JsonCodec.autoApplySettings(next.autoApply.settings).toString()))
         if (old.settings != next.settings) dao.putSettings(SettingsRow(payload = JsonCodec.settings(next.settings).toString()))
         if (old.timer != next.timer) {
             if (next.timer == null) dao.clearTimer() else dao.putTimer(TimerRow(payload = JsonCodec.timer(next.timer).toString()))

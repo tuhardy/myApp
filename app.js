@@ -21,7 +21,7 @@
   const DURATION_PRESETS = [15, 25, 45, 60];
   const DURATION_STEP = 5;
   const MODAL_VARIANTS = ["todo-guide-sheet", "focus-item-sheet", "usage-zoom-sheet", "asset-sheet"];
-  const PAGES = ["focus", "timer", "statistics", "tasks", "diary", "usage", "profile"];
+  const PAGES = ["focus", "timer", "statistics", "tasks", "diary", "usage", "profile", "job-assist"];
   const DIARY_UI = Object.freeze({ visiblePhotos: 3, photoTones: 3, nameLength: 16, pickCounts: [1, 3] });
   const DIARY_VIEWS = ["home", "trash", "drafts", "detail", "editor"];
   const MIC = Object.freeze({ prompt: "prompt", granted: "granted", denied: "denied" });
@@ -37,6 +37,8 @@
     statsPeriod: "day", statsAnchor: new Date(), includeSamples: true, recordLimit: UI.recordPageSize,
     statsPickerOpen: false, statsPickerCursor: null, statsSelection: {}, statsBins: {}, openRecords: new Set(),
     focusItems: initialFocusItems(), selectedFocusItem: "focus-reading", nextFocusItemId: 1,
+    jobOpportunities: [], nextJobOpportunityId: 1,
+    autoApply: { settings: FocusModel.defaultAutoApplySettings(), records: [], preview: [], log: [], stopReason: null, calibrated: false, resumePreview: null, resumeCalibrated: false, tab: "contact", run: null, nextResumeId: 1 },
     reminders: false, nextTaskId: 1, nextRecordId: 1, nextStepId: 1,
     openProjects: new Set(), progressEntries: [], progressDrafts: new Map(), nextProgressId: 1,
     pendingProgressPrompts: [], progressDialogRecord: null, progressReturnHome: false,
@@ -139,6 +141,7 @@
     if (safePage === "diary") renderDiary();
     if (safePage === "usage") renderUsage();
     if (safePage === "profile") renderProfile();
+    if (safePage === "job-assist") renderJobAssist();
     closeSwipes();
     showTaskUndo();
     document.querySelectorAll("[data-page]").forEach(button => {
@@ -3305,6 +3308,575 @@
     renderAssetChart();
   }
 
+  function jobStatusLabel(status) {
+    const STATUS = FocusModel.JOB_ASSIST_STATUS;
+    if (status === STATUS.copied) return "文案已复制 · 待本人处理";
+    if (status === STATUS.appliedSelfReported) return "本人记录已投递 · 未核验";
+    if (status === STATUS.autoContacted) return "自动化已发起沟通";
+    if (status === STATUS.autoResumeSent) return "自动化已发送简历";
+    return "准备中";
+  }
+
+  // 模拟的 BOSS 职位列表，仅用于演示规则匹配；不代表真实职位。
+  const AUTO_APPLY_SAMPLE_CARDS = Object.freeze([
+    { position: "Android 开发工程师", company: "示例科技", salary: "15-25K·13薪", city: "上海" },
+    { position: "Kotlin 客户端开发", company: "演示网络", salary: "20-30K", city: "上海" },
+    { position: "iOS 开发工程师", company: "样例互动", salary: "18-28K", city: "上海" },
+    { position: "Android 实习生", company: "示例外包服务", salary: "150-200元/天", city: "上海" },
+    { position: "移动端开发（Android）", company: "演示数据", salary: "12-15K", city: "杭州" },
+  ]);
+
+  // 原型没有真实消息页：已模拟沟通的公司中，排在单数位的视为“对方有新消息”，用于演示发简历流程。
+  function autoResumeSampleConversations(records) {
+    return FocusModel.awaitingResume(records).map((record, index) => ({ company: record.company, unread: index % 2 === 0 }));
+  }
+
+  function autoApplyLog(line) {
+    const stamp = new Date().toTimeString().slice(0, 8);
+    state.autoApply.log = [...state.autoApply.log, `${stamp}  ${line}`].slice(-80);
+  }
+
+  const AUTO_TASK_LABELS = Object.freeze({ contact: "自动沟通中", resume: "自动发简历中" });
+  const AUTO_RESULT_LABELS = Object.freeze({ contacted: "已沟通", already: "之前沟通过", failed: "失败", "resume-sent": "已发简历" });
+  const AUTO_SHOWN_RECORDS = 30;
+
+  function autoHint(id, reason) {
+    $(id).hidden = !reason;
+    $(id).textContent = reason ?? "";
+  }
+
+  function renderAutoStatus(auto, settings, today) {
+    const run = auto.run;
+    const card = $("auto-status");
+    card.classList.toggle("running", Boolean(run));
+    $("auto-status-headline").textContent = run ? (run.paused ? "已暂停" : AUTO_TASK_LABELS[run.kind]) : "空闲";
+    const detail = run
+      ? run.paused ? "原型模拟暂停。Android 上触碰 BOSS、离开 BOSS 或熄屏也会暂停，可从悬浮按钮继续或停止。"
+        : `原型每 ${settings.stepDelaySeconds} 秒模拟一步，还剩 ${run.queue.length} 步；Android 运行中保持亮屏，可从悬浮按钮暂停或停止。`
+      : auto.stopReason ? `最近停止：${auto.stopReason}` : "";
+    $("auto-status-detail").hidden = !detail;
+    $("auto-status-detail").textContent = detail;
+    $("auto-apply-count").textContent = `${FocusModel.autoApplyContactedOn(auto.records, today)}/${settings.dailyLimit}`;
+    $("auto-resume-count").textContent = `${FocusModel.resumesSentOn(auto.records, today)}/${settings.dailyLimit}`;
+    $("auto-awaiting-count").textContent = String(FocusModel.awaitingResume(auto.records).length);
+    $("auto-status-actions").hidden = !run;
+    $("auto-pause").textContent = run?.paused ? "继续" : "暂停";
+  }
+
+  function renderAutoReadiness(auto, settings) {
+    const running = Boolean(auto.run);
+    const steps = [
+      [false, "原型未检测 BOSS 直聘（Android 读取已安装版本）", null],
+      [false, "原型无无障碍服务（Android 需在系统设置中手动开启）", null],
+      [settings.riskAccepted, settings.riskAccepted ? "已确认风险" : "阅读并确认自动化风险", ["auto-apply-risk", "确认", autoApplyRiskDialog, true]],
+      [auto.calibrated, auto.calibrated ? "已试运行" : "在职位列表页做一次沟通试运行", ["auto-ready-dry-run", "试运行", () => runAutoApply(true), settings.riskAccepted]],
+    ];
+    $("auto-ready-heading").textContent = `准备 ${steps.filter(step => step[0]).length}/${steps.length}`;
+    $("auto-apply-checklist").replaceChildren(...steps.map(([ok, text, action], index) => {
+      const item = element("li", ok ? "done" : "");
+      item.append(element("span", "auto-step-number", ok ? "✓" : String(index + 1)), element("span", "auto-step-text", text));
+      if (!ok && action) {
+        const [id, label, handler, enabled] = action;
+        const button = element("button", "secondary-button", label);
+        button.type = "button";
+        button.id = id;
+        button.disabled = running || !enabled;
+        button.addEventListener("click", handler);
+        item.append(button);
+      }
+      return item;
+    }));
+  }
+
+  function renderAutoTabs(auto) {
+    document.querySelectorAll("[data-job-tab]").forEach(tab => {
+      const active = tab.dataset.jobTab === auto.tab;
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+      $(tab.getAttribute("aria-controls")).hidden = !active;
+    });
+  }
+
+  function chooseJobTab(tab, focus = false) {
+    state.autoApply.tab = tab;
+    renderAutoTabs(state.autoApply);
+    if (focus) $(`job-tab-${tab}`).focus();
+  }
+
+  function renderAutoContact(auto, settings, today) {
+    const running = Boolean(auto.run);
+    $("auto-apply-today").textContent = `今日 ${FocusModel.autoApplyContactedOn(auto.records, today)}/${settings.dailyLimit}`;
+    $("auto-apply-rules").textContent = [
+      settings.includeKeywords.length ? `关键词：${settings.includeKeywords.join("、")}` : "关键词：不限",
+      settings.excludeKeywords.length ? `排除：${settings.excludeKeywords.join("、")}` : null,
+      settings.minSalaryK !== null ? `最低 ${settings.minSalaryK}K` : null,
+      settings.city ? `城市：${settings.city}` : null,
+      settings.companyBlacklist.length ? `黑名单 ${settings.companyBlacklist.length} 家` : null,
+      `每日 ${settings.dailyLimit} 条`,
+      `间隔 ${settings.stepDelaySeconds} 秒`,
+      settings.greeting ? "自定义招呼语" : "BOSS 默认招呼语",
+    ].filter(Boolean).join(" · ");
+    $("auto-apply-edit-rules").disabled = running;
+    $("auto-apply-dry-run").disabled = running;
+    $("auto-apply-start").disabled = running || !auto.calibrated;
+    autoHint("auto-apply-hint", running ? "有任务在运行，先暂停或停止" : !auto.calibrated ? "先试运行一次，核对清单后才能开始" : null);
+    const preview = $("auto-apply-preview");
+    preview.hidden = !auto.preview.length;
+    preview.replaceChildren(...(auto.preview.length ? [element("strong", "", "试运行清单（未点击）")] : []),
+      ...auto.preview.map(item => element("p", item.apply ? "apply" : "", `${item.apply ? "会沟通" : "跳过"} · ${item.card.position} · ${item.card.company} · ${item.card.salary}${item.apply ? "" : `（${item.reason}）`}`)));
+  }
+
+  function renderAutoResume(auto, settings, today) {
+    const running = Boolean(auto.run);
+    const resumes = settings.resumes;
+    $("auto-resume-today").textContent = `今日 ${FocusModel.resumesSentOn(auto.records, today)}/${settings.dailyLimit} · 待回复 ${FocusModel.awaitingResume(auto.records).length}`;
+    $("auto-resume-total").textContent = `${resumes.length}/${FocusModel.AUTO_APPLY_LIMITS.maxResumes}`;
+    const list = $("auto-resume-list");
+    if (!resumes.length) list.replaceChildren(element("li", "auto-resume-empty", "还没有简历。名称要和 BOSS「附件简历」里的文件名一致，例如「张三-Android.pdf」。"));
+    else list.replaceChildren(...resumes.map((resume, index) => {
+      const item = element("li", "auto-resume-item");
+      const head = element("div", "auto-resume-item-head");
+      const name = element("strong", "", resume.name);
+      head.append(name);
+      if (resume.isDefault) head.append(element("span", "auto-resume-badge", "默认"));
+      const tools = element("div", "auto-resume-tools");
+      [["↑", `提高「${resume.name}」的优先级`, index === 0, () => {
+        state.autoApply.settings = { ...state.autoApply.settings, resumes: FocusModel.moveResume(state.autoApply.settings.resumes, resume.id, true) };
+        renderAutoApply();
+      }], ["编辑", `编辑「${resume.name}」`, false, () => resumeEditor(resume)],
+      ["删除", `删除「${resume.name}」`, false, () => confirmAction("删除简历？", `“${resume.name}”将从「我的简历」移除，只删除本应用里的名称和关键词，不影响 BOSS 里的附件。`, () => {
+        state.autoApply.settings = { ...state.autoApply.settings, resumes: state.autoApply.settings.resumes.filter(entry => entry.id !== resume.id) };
+        renderAutoApply();
+        toast("简历已删除");
+      }, "删除")]].forEach(([label, aria, disabled, handler]) => {
+        const button = element("button", "text-button", label);
+        button.type = "button";
+        button.setAttribute("aria-label", aria);
+        button.disabled = running || disabled;
+        button.addEventListener("click", handler);
+        tools.append(button);
+      });
+      head.append(tools);
+      const chips = element("div", "auto-chips");
+      if (resume.keywords.length) chips.append(...resume.keywords.map(word => element("span", "auto-chip", word)));
+      else chips.append(element("small", "", "无关键词 · 只在其他简历都不命中时使用"));
+      item.append(head, chips);
+      return item;
+    }));
+    $("auto-resume-add").disabled = running || resumes.length >= FocusModel.AUTO_APPLY_LIMITS.maxResumes;
+    $("auto-resume-default-hint").hidden = !resumes.length || resumes.some(resume => resume.isDefault);
+    $("auto-resume-dry-run").disabled = running || !resumes.length;
+    $("auto-resume-start").disabled = running || !resumes.length || !auto.resumeCalibrated;
+    autoHint("auto-resume-hint", running ? "有任务在运行，先暂停或停止" : !resumes.length ? "先添加至少一份简历" : !auto.resumeCalibrated ? "先做一次发简历试运行，核对清单后才能开始" : null);
+    const resumePreview = $("auto-resume-preview");
+    resumePreview.hidden = auto.resumePreview === null;
+    resumePreview.replaceChildren(...(auto.resumePreview === null ? [] : [
+      element("strong", "", "发简历试运行清单（未点击）"),
+      ...(auto.resumePreview.length ? auto.resumePreview.map(item => element("p", item.resumeName ? "apply" : "",
+        item.resumeName ? `会发送「${item.resumeName}」 · ${item.position} · ${item.company}` : `跳过 · ${item.position} · ${item.company}（${item.reason}）`))
+        : [element("p", "", "没有找到自动沟通过且有新消息的会话")]),
+    ]));
+  }
+
+  function renderAutoRecords(auto) {
+    const records = [...auto.records].sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+    $("auto-records-count").textContent = `共 ${records.length} 条`;
+    const list = $("auto-records-list");
+    if (!records.length) list.replaceChildren(element("li", "auto-resume-empty", "还没有记录。自动沟通和发简历的结果会出现在这里。"));
+    else list.replaceChildren(...records.slice(0, AUTO_SHOWN_RECORDS).map(record => {
+      const item = element("li", "");
+      const head = element("div", "auto-record-head");
+      head.append(element("strong", "", `${record.position} · ${record.company}`), element("span", record.result === "failed" ? "failed" : "", AUTO_RESULT_LABELS[record.result] ?? record.result));
+      const time = record.at ? new Date(record.at) : null;
+      const stamp = time ? `${String(time.getMonth() + 1).padStart(2, "0")}-${String(time.getDate()).padStart(2, "0")} ${time.toTimeString().slice(0, 5)}` : record.day;
+      item.append(head, element("small", "", [stamp, record.salary, record.note].filter(Boolean).join(" · ")));
+      return item;
+    }));
+    autoHint("auto-records-more", records.length > AUTO_SHOWN_RECORDS ? `只显示最近 ${AUTO_SHOWN_RECORDS} 条` : null);
+    $("auto-records-clear").disabled = Boolean(auto.run) || !records.length;
+    const log = $("auto-apply-log");
+    log.replaceChildren(...(auto.log.length ? [...auto.log].reverse().slice(0, 30).map(line => element("li", "", line)) : [element("li", "", "还没有运行日志")]));
+  }
+
+  function renderAutoApply() {
+    const auto = state.autoApply;
+    const today = localDateKey(new Date());
+    const settings = auto.settings;
+    renderAutoStatus(auto, settings, today);
+    renderAutoReadiness(auto, settings);
+    renderAutoTabs(auto);
+    renderAutoContact(auto, settings, today);
+    renderAutoResume(auto, settings, today);
+    renderAutoRecords(auto);
+  }
+
+  function autoApplyRiskDialog() {
+    const content = element("div", "modal-copy auto-apply-risk-dialog");
+    [
+      "自动操作招聘 App 可能违反 BOSS 直聘用户协议，账号可能被限制沟通或封禁，后果由你自行承担。",
+      "本功能不会识别或绕过验证码、不伪装设备、不随机化节奏；平台出现验证、登录或次数上限时会立即停止。",
+      "运行中会保持亮屏，建议插上充电器；触碰 BOSS 界面、离开 BOSS 或熄屏会暂停，可从悬浮按钮继续。",
+      "只操作你手机上已登录的 BOSS 直聘，不联网、不读取或保存账号与 Cookie。",
+      "“自动化已发起沟通”只表示界面上已发出，不代表对方已读或投递成功。",
+    ].forEach(text => content.append(element("p", "", `· ${text}`)));
+    const label = element("label", "auto-apply-check");
+    const box = element("input");
+    box.type = "checkbox";
+    box.id = "auto-apply-risk-check";
+    label.append(box, document.createTextNode("我已了解并自行承担风险"));
+    content.append(label);
+    const actions = element("div", "modal-actions");
+    const cancel = element("button", "secondary-button", "取消");
+    cancel.type = "button";
+    cancel.addEventListener("click", closeModal);
+    const confirm = element("button", "primary-button", "确认");
+    confirm.type = "button";
+    confirm.id = "auto-apply-risk-confirm";
+    confirm.disabled = true;
+    box.addEventListener("change", () => { confirm.disabled = !box.checked; });
+    confirm.addEventListener("click", () => {
+      state.autoApply.settings = { ...state.autoApply.settings, riskAccepted: true };
+      closeModal();
+      renderAutoApply();
+      toast("已确认风险。建议先试运行。");
+    });
+    actions.append(cancel, confirm);
+    content.append(actions);
+    showModal("自动投递风险", content);
+  }
+
+  function autoApplyRulesDialog() {
+    const settings = state.autoApply.settings;
+    const L = FocusModel.AUTO_APPLY_LIMITS;
+    const form = element("form", "job-assist-form");
+    const fields = [
+      ["includeKeywords", "岗位关键词（逗号分隔，留空不限）", settings.includeKeywords.join("，")],
+      ["excludeKeywords", "排除词", settings.excludeKeywords.join("，")],
+      ["minSalaryK", "最低月薪（K，留空不限）", settings.minSalaryK ?? ""],
+      ["city", "城市（留空不限）", settings.city],
+      ["companyBlacklist", "公司黑名单", settings.companyBlacklist.join("，")],
+      ["dailyLimit", `每日上限（1–${L.maxDailyLimit}）`, settings.dailyLimit],
+      ["stepDelaySeconds", `步骤最短间隔（${L.minStepDelaySeconds}–${L.maxStepDelaySeconds} 秒，固定不随机）`, settings.stepDelaySeconds],
+      ["greeting", "自定义招呼语（留空用 BOSS 默认）", settings.greeting],
+    ];
+    const inputs = {};
+    fields.forEach(([key, label, value]) => {
+      const field = element("label", "field job-assist-field", label);
+      const input = key === "greeting" ? element("textarea") : element("input");
+      input.name = key;
+      input.value = String(value);
+      if (key !== "greeting") input.type = ["minSalaryK", "dailyLimit", "stepDelaySeconds"].includes(key) ? "number" : "text";
+      if (key === "greeting") input.maxLength = L.maxGreeting;
+      if (key === "city") input.maxLength = L.maxCity;
+      field.append(input);
+      form.append(field);
+      inputs[key] = input;
+    });
+    form.append(element("p", "job-assist-privacy", "Android 上 BOSS 界面一变化就进入下一步，两步之间至少间隔上面的秒数。"));
+    form.append(element("p", "job-assist-privacy", "同一职位只沟通一次、只发一次简历，同一公司每天只联系一次；每日上限对沟通和发简历分别计算。"));
+    const actions = element("div", "modal-actions");
+    const cancel = element("button", "secondary-button", "取消");
+    cancel.type = "button";
+    cancel.addEventListener("click", closeModal);
+    const save = element("button", "primary-button", "保存");
+    save.type = "submit";
+    actions.append(cancel, save);
+    form.append(actions);
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      const number = value => value.trim() === "" ? null : Number(value);
+      try {
+        state.autoApply.settings = FocusModel.validateAutoApplySettings({
+          ...settings,
+          includeKeywords: FocusModel.parseKeywordList(inputs.includeKeywords.value),
+          excludeKeywords: FocusModel.parseKeywordList(inputs.excludeKeywords.value),
+          minSalaryK: number(inputs.minSalaryK.value),
+          city: inputs.city.value,
+          companyBlacklist: FocusModel.parseKeywordList(inputs.companyBlacklist.value),
+          dailyLimit: number(inputs.dailyLimit.value) ?? 0,
+          stepDelaySeconds: number(inputs.stepDelaySeconds.value) ?? 0,
+          greeting: inputs.greeting.value,
+        });
+        closeModal();
+        renderAutoApply();
+        toast("沟通规则已保存");
+      } catch (error) { toast(error.message); }
+    });
+    showModal("沟通规则", form);
+  }
+
+  function resumeEditor(existing = null) {
+    const L = FocusModel.AUTO_APPLY_LIMITS;
+    const form = element("form", "job-assist-form");
+    const nameField = element("label", "field job-assist-field", "简历名称（与 BOSS 附件简历文件名一致，可省略扩展名）");
+    const name = element("input");
+    name.name = "resumeName";
+    name.maxLength = L.maxResumeName;
+    name.placeholder = "张三-Android.pdf";
+    name.value = existing?.name ?? "";
+    nameField.append(name);
+    const keywordField = element("label", "field job-assist-field", "岗位关键词（逗号分隔，岗位名包含任一个就用这份）");
+    const keywords = element("input");
+    keywords.name = "resumeKeywords";
+    keywords.placeholder = "Android，Kotlin";
+    keywords.value = existing?.keywords.join("，") ?? "";
+    keywordField.append(keywords);
+    const defaultLabel = element("label", "auto-apply-check");
+    const isDefault = element("input");
+    isDefault.type = "checkbox";
+    isDefault.name = "resumeDefault";
+    isDefault.checked = Boolean(existing?.isDefault);
+    defaultLabel.append(isDefault, document.createTextNode("设为默认简历（关键词都没命中时使用）"));
+    form.append(nameField, keywordField, defaultLabel, element("p", "job-assist-privacy", "按列表顺序取第一份关键词命中的简历；只能有一份默认简历，设为默认会取消其他简历的默认。"));
+    const actions = element("div", "modal-actions");
+    const cancel = element("button", "secondary-button", "取消");
+    cancel.type = "button";
+    cancel.addEventListener("click", closeModal);
+    const save = element("button", "primary-button", "保存");
+    save.type = "submit";
+    actions.append(cancel, save);
+    form.append(actions);
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      const auto = state.autoApply;
+      const value = { id: existing?.id ?? `resume-${auto.nextResumeId}`, name: name.value, keywords: FocusModel.parseKeywordList(keywords.value), isDefault: isDefault.checked };
+      try {
+        const resumes = FocusModel.upsertResume(auto.settings.resumes, value);
+        auto.settings = FocusModel.validateAutoApplySettings({ ...auto.settings, resumes });
+        if (!existing) auto.nextResumeId += 1;
+        closeModal();
+        renderAutoApply();
+        toast(existing ? "简历已更新" : "简历已添加");
+      } catch (error) { toast(error.message); }
+    });
+    showModal(existing ? "编辑简历" : "添加简历", form);
+  }
+
+  function markJobs(record, status) {
+    const same = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
+    state.jobOpportunities = state.jobOpportunities.map(job => same(job.company, record.company) && same(job.position, record.position)
+      && (status === FocusModel.JOB_ASSIST_STATUS.autoResumeSent || job.status !== FocusModel.JOB_ASSIST_STATUS.autoResumeSent)
+      ? { ...job, status, updatedAt: new Date().toISOString() } : job);
+  }
+
+  function runAutoApply(dryRun) {
+    const auto = state.autoApply;
+    if (auto.run) return;
+    if (!auto.settings.riskAccepted) { autoApplyRiskDialog(); return; }
+    const today = localDateKey(new Date());
+    autoApplyLog(dryRun ? "试运行：只读取模拟职位列表，不点击任何按钮" : `开始模拟沟通，每日上限 ${auto.settings.dailyLimit} 条`);
+    const result = FocusModel.simulateAutoApply(AUTO_APPLY_SAMPLE_CARDS, auto.settings, auto.records, today, dryRun);
+    if (!dryRun) { startAutoRun("contact", result); return; }
+    auto.preview = result.preview;
+    auto.calibrated = true;
+    auto.stopReason = result.stopReason;
+    autoApplyLog(result.stopReason);
+    renderJobAssist();
+    toast("试运行完成（原型模拟）。");
+  }
+
+  function runAutoResume(dryRun) {
+    const auto = state.autoApply;
+    if (auto.run) return;
+    if (!auto.settings.riskAccepted) { autoApplyRiskDialog(); return; }
+    const today = localDateKey(new Date());
+    autoApplyLog(dryRun ? "发简历试运行：只读取模拟消息列表，不点击任何按钮" : `开始模拟发简历，每日上限 ${auto.settings.dailyLimit} 份`);
+    const result = FocusModel.simulateResumeRun(autoResumeSampleConversations(auto.records), auto.settings, auto.records, today, dryRun);
+    if (!dryRun) {
+      result.preview.filter(item => !item.resumeName).forEach(item => autoApplyLog(`没有匹配的简历，跳过「${item.position} · ${item.company}」`));
+      startAutoRun("resume", result);
+      return;
+    }
+    auto.resumePreview = result.preview;
+    auto.resumeCalibrated = true;
+    auto.stopReason = result.stopReason;
+    autoApplyLog(result.stopReason);
+    renderJobAssist();
+    toast("发简历试运行完成（原型模拟）。");
+  }
+
+  // 原型一次算好本次结果，再按步骤间隔逐条写入，用来演示暂停与继续；不操作任何 App。
+  function startAutoRun(kind, result) {
+    state.autoApply.run = { kind, queue: [...result.records], stopReason: result.stopReason, paused: false, timer: null };
+    if (result.records.length) scheduleAutoStep();
+    else finishAutoRun(result.stopReason);
+    renderJobAssist();
+  }
+
+  function scheduleAutoStep() {
+    const run = state.autoApply.run;
+    if (!run || run.paused) return;
+    clearTimeout(run.timer);
+    run.timer = setTimeout(autoStep, state.autoApply.settings.stepDelaySeconds * 1000);
+  }
+
+  function autoStep() {
+    const auto = state.autoApply;
+    const run = auto.run;
+    if (!run || run.paused) return;
+    const record = run.queue.shift();
+    if (record) {
+      auto.records = [...auto.records, { ...record, at: Date.now() }];
+      if (run.kind === "contact") {
+        autoApplyLog(`已发起沟通「${record.position} · ${record.company}」（模拟）`);
+        markJobs(record, FocusModel.JOB_ASSIST_STATUS.autoContacted);
+      } else {
+        autoApplyLog(`已发送简历「${record.note.replace("简历：", "")}」给「${record.position} · ${record.company}」（模拟）`);
+        markJobs(record, FocusModel.JOB_ASSIST_STATUS.autoResumeSent);
+      }
+    }
+    if (run.queue.length) scheduleAutoStep();
+    else finishAutoRun(run.stopReason);
+    renderJobAssist();
+  }
+
+  function finishAutoRun(reason) {
+    const auto = state.autoApply;
+    clearTimeout(auto.run?.timer);
+    auto.run = null;
+    auto.stopReason = reason;
+    autoApplyLog(reason);
+  }
+
+  function toggleAutoPause() {
+    const run = state.autoApply.run;
+    if (!run) return;
+    run.paused = !run.paused;
+    if (run.paused) clearTimeout(run.timer);
+    autoApplyLog(run.paused ? "已暂停（模拟）" : "已继续（模拟）");
+    scheduleAutoStep();
+    renderAutoApply();
+  }
+
+  function stopAutoRun() {
+    if (!state.autoApply.run) return;
+    finishAutoRun("已手动停止");
+    renderJobAssist();
+  }
+
+  function renderJobAssist() {
+    renderAutoApply();
+    const list = $("job-assist-list");
+    if (!state.jobOpportunities.length) {
+      const empty = element("div", "job-assist-empty");
+      empty.append(element("strong", "", "还没有职位草稿"), element("p", "", "可以先在招聘平台查看职位，再把公司、岗位和描述手动粘贴到这里。"));
+      const add = element("button", "primary-button", "新增职位");
+      add.type = "button";
+      add.addEventListener("click", () => jobOpportunityEditor());
+      empty.append(add);
+      list.replaceChildren(empty);
+      return;
+    }
+    list.replaceChildren(...state.jobOpportunities.map(job => {
+      const card = element("article", "job-assist-card");
+      const heading = element("div", "job-assist-card-heading");
+      const title = element("div");
+      title.append(element("strong", "", job.position), element("small", "", job.company));
+      heading.append(title, element("span", "job-assist-status", jobStatusLabel(job.status)));
+      card.append(heading);
+      if (job.message) card.append(element("p", "job-assist-preview", job.message));
+      const actions = element("div", "job-assist-actions");
+      const review = element("button", "secondary-button", "复核文案");
+      review.addEventListener("click", () => reviewJobOpportunity(job.id));
+      const edit = element("button", "secondary-button", "编辑");
+      edit.addEventListener("click", () => jobOpportunityEditor(job.id));
+      const applied = element("button", "secondary-button", "本人记录已投递");
+      applied.disabled = job.status === FocusModel.JOB_ASSIST_STATUS.appliedSelfReported;
+      applied.addEventListener("click", () => confirmJobApplied(job.id));
+      const remove = element("button", "secondary-button danger-button", "删除");
+      remove.addEventListener("click", () => confirmJobDelete(job.id));
+      actions.append(review, edit, applied, remove);
+      card.append(actions);
+      return card;
+    }));
+  }
+
+  function jobOpportunityEditor(id = null) {
+    const original = state.jobOpportunities.find(item => item.id === id);
+    if (id && !original) { toast("职位记录已不存在。"); return; }
+    const form = element("form", "job-assist-form");
+    const fields = [
+      ["company", "公司", original?.company ?? "", "text"],
+      ["position", "岗位", original?.position ?? "", "text"],
+      ["description", "职位描述（可粘贴）", original?.description ?? "", "textarea"],
+      ["message", "沟通文案（自行编辑）", original?.message ?? "", "textarea"],
+    ];
+    const inputs = {};
+    fields.forEach(([key, label, value, type]) => {
+      const field = element("label", "field job-assist-field", label);
+      const input = type === "textarea" ? element("textarea") : element("input");
+      input.name = key;
+      input.value = value;
+      input.maxLength = key === "company" ? FocusModel.JOB_ASSIST_LIMITS.maxCompany : key === "position" ? FocusModel.JOB_ASSIST_LIMITS.maxPosition : key === "description" ? FocusModel.JOB_ASSIST_LIMITS.maxDescription : FocusModel.JOB_ASSIST_LIMITS.maxMessage;
+      if (type !== "textarea") input.type = "text";
+      field.append(input);
+      form.append(field);
+      inputs[key] = input;
+    });
+    form.append(element("p", "job-assist-privacy", "首版只保存你输入的内容，不联网生成、不读取其他应用。"));
+    const actions = element("div", "modal-actions");
+    const cancel = element("button", "secondary-button", "取消");
+    cancel.type = "button";
+    cancel.addEventListener("click", closeModal);
+    const save = element("button", "primary-button", "保存");
+    save.type = "submit";
+    actions.append(cancel, save);
+    form.append(actions);
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      const now = new Date().toISOString();
+      try {
+        const value = FocusModel.validateJobOpportunity({ id: original?.id ?? `job-${state.nextJobOpportunityId}`, ...Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value])), status: original?.status ?? FocusModel.JOB_ASSIST_STATUS.draft, createdAt: original?.createdAt ?? now, updatedAt: now });
+        if (original) state.jobOpportunities = state.jobOpportunities.map(item => item.id === original.id ? value : item);
+        else { state.nextJobOpportunityId++; state.jobOpportunities.unshift(value); }
+        closeModal();
+        renderJobAssist();
+        toast("职位草稿已保存。刷新页面后会清空。");
+      } catch (error) { toast(error.message); }
+    });
+    showModal(original ? "编辑职位" : "新增职位", form);
+  }
+
+  function reviewJobOpportunity(id) {
+    const job = state.jobOpportunities.find(item => item.id === id);
+    if (!job) { toast("职位记录已不存在。"); return; }
+    const content = element("div", "job-assist-review");
+    content.append(element("strong", "", `${job.company} · ${job.position}`));
+    content.append(element("p", "job-assist-review-message", job.message || "还没有沟通文案，请先编辑并保存。"));
+    content.append(element("p", "job-assist-privacy", "确认后只会复制到剪贴板，不会发送消息、打开或控制招聘平台。浏览器原型不读取或写入系统剪贴板。"));
+    const actions = element("div", "modal-actions");
+    const cancel = element("button", "secondary-button", "取消");
+    cancel.addEventListener("click", closeModal);
+    const confirm = element("button", "primary-button", "确认并模拟复制");
+    confirm.disabled = !job.message.trim();
+    confirm.addEventListener("click", () => {
+      state.jobOpportunities = state.jobOpportunities.map(item => item.id === id ? FocusModel.markJobCopied(item) : item);
+      closeModal();
+      renderJobAssist();
+      toast("原型状态已模拟更新；没有访问剪贴板或招聘平台。");
+    });
+    actions.append(cancel, confirm);
+    content.append(actions);
+    showModal("复核后手动交接", content);
+  }
+
+  function confirmJobApplied(id) {
+    confirmAction("本人记录已投递？", "这只记录你的手动说明；本原型无法读取或核验招聘平台上的投递状态。", () => {
+      state.jobOpportunities = state.jobOpportunities.map(item => item.id === id ? FocusModel.markJobAppliedByUser(item) : item);
+      renderJobAssist();
+      toast("已模拟记录为本人说明 · 未核验");
+    }, "本人已投递");
+  }
+
+  function confirmJobDelete(id) {
+    const job = state.jobOpportunities.find(item => item.id === id);
+    if (!job) return;
+    confirmAction("删除职位记录？", `“${job.company} · ${job.position}”及其文案将从当前演示中删除。`, () => {
+      state.jobOpportunities = state.jobOpportunities.filter(item => item.id !== id);
+      renderJobAssist();
+    }, "删除");
+  }
+
   function renderProfile() {
     const now = new Date();
     const summary = FocusModel.assetSummary(state.assetAccounts, state.assetSnapshots, now);
@@ -3849,11 +4421,40 @@
     "恢复：选择备份文件，校验格式和版本，预览数据数量，再确认恢复。正式版会在覆盖前提示风险。",
     "这里仅展示计划中的流程，不读写文件。本原型的改动只保留在当前页面，刷新后恢复示例。",
   ]));
-  $("automation-button").addEventListener("click", () => information("自动化，留待下一步", [
-    "这里是未来的脚本扩展入口，目前没有接入任何脚本引擎或自动化工具。",
-    "后续会根据你的具体场景，确定支持的手机端工具、参数和权限。不会默认获得控制其他应用的能力。",
-    "计划提供动作列表、执行前确认和结果记录。此原型不会下载、执行脚本或发出手机控制指令。",
-  ]));
+  $("automation-button").addEventListener("click", () => navigate("job-assist"));
+  $("job-assist-back").addEventListener("click", () => navigate("profile"));
+  $("job-assist-add").addEventListener("click", () => jobOpportunityEditor());
+  document.querySelectorAll("[data-job-tab]").forEach(tab => {
+    tab.addEventListener("click", () => chooseJobTab(tab.dataset.jobTab));
+    tab.addEventListener("keydown", event => {
+      const tabs = [...document.querySelectorAll("[data-job-tab]")].map(node => node.dataset.jobTab);
+      const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+      if (!step) return;
+      event.preventDefault();
+      chooseJobTab(tabs[(tabs.indexOf(tab.dataset.jobTab) + step + tabs.length) % tabs.length], true);
+    });
+  });
+  $("auto-pause").addEventListener("click", toggleAutoPause);
+  $("auto-stop").addEventListener("click", stopAutoRun);
+  $("auto-apply-edit-rules").addEventListener("click", autoApplyRulesDialog);
+  $("auto-apply-dry-run").addEventListener("click", () => runAutoApply(true));
+  $("auto-apply-start").addEventListener("click", () => {
+    const settings = state.autoApply.settings;
+    const left = Math.max(settings.dailyLimit - FocusModel.autoApplyContactedOn(state.autoApply.records, localDateKey(new Date())), 0);
+    confirmAction("开始自动沟通？", `Android 版将切换到 BOSS 直聘，界面变化后执行下一步（两步至少间隔 ${settings.stepDelaySeconds} 秒），今天最多再发起 ${left} 条沟通。运行中保持亮屏；触碰 BOSS、离开 BOSS 或熄屏会暂停，可从悬浮按钮继续或停止。原型只模拟结果，不操作任何 App。`, () => runAutoApply(false), "开始");
+  });
+  $("auto-resume-add").addEventListener("click", () => resumeEditor());
+  $("auto-resume-dry-run").addEventListener("click", () => runAutoResume(true));
+  $("auto-resume-start").addEventListener("click", () => {
+    const settings = state.autoApply.settings;
+    const left = Math.max(settings.dailyLimit - FocusModel.resumesSentOn(state.autoApply.records, localDateKey(new Date())), 0);
+    confirmAction("开始自动发简历？", `Android 版将切换到 BOSS 直聘消息页，只处理本应用自动沟通过、且对方有新消息的会话，按岗位选择简历后发送；今天最多再发 ${left} 份。不读取聊天内容；找不到同名附件简历会停止。运行中保持亮屏；触碰 BOSS、离开 BOSS 或熄屏会暂停，可从悬浮按钮继续或停止。原型只模拟结果，不操作任何 App。`, () => runAutoResume(false), "开始");
+  });
+  $("auto-records-clear").addEventListener("click", () => confirmAction("清空投递记录？", `将删除全部 ${state.autoApply.records.length} 条记录。清空后去重和今日计数一并重置：之前沟通过的职位可能再次沟通，等待回复的会话也不会再自动发简历。此操作无法撤销。`, () => {
+    state.autoApply.records = [];
+    renderAutoApply();
+    toast("投递记录已清空");
+  }, "清空"));
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) { tickTimer(); queueMicrotask(pumpProgressPrompts); }
   });
