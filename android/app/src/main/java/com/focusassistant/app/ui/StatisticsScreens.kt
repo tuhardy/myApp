@@ -309,24 +309,25 @@ private suspend fun PointerInputScope.scrubIndex(count: Int, onIndex: (Int) -> U
     }
 }
 
-/** 可交互柱状图：默认读数为峰值，点按或滑动后显示所选一列，其余柱子变淡。 */
+/** 可交互柱状图：默认读数为峰值，点按或滑动后显示所选一列，其余柱子变淡。valueLabel 默认按秒显示时长，求职复盘传次数。 */
 @Composable
-private fun ScrubBars(values: List<Long>, labelFor: (Int) -> String, defaultPrefix: String, emptyText: String, title: String, gap: Dp, axis: @Composable () -> Unit) {
+internal fun ScrubBars(values: List<Long>, labelFor: (Int) -> String, defaultPrefix: String, emptyText: String, title: String, gap: Dp,
+    valueLabel: (Long) -> String = ::minutesLabel, chartHeight: Dp = 124.dp, axis: @Composable () -> Unit) {
     var selected by remember(values) { mutableStateOf<Int?>(null) }
     val peak = values.maxOrNull() ?: 0L
     val index = selected ?: values.indexOf(peak).takeIf { peak > 0 && it >= 0 }
     val readout = when {
         index == null -> emptyText
-        selected == null -> "$defaultPrefix ${labelFor(index)} · ${minutesLabel(values[index])}"
-        else -> "${labelFor(index)} · ${minutesLabel(values[index])}"
+        selected == null -> "$defaultPrefix ${labelFor(index)} · ${valueLabel(values[index])}"
+        else -> "${labelFor(index)} · ${valueLabel(values[index])}"
     }
     Column {
         Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             Text(readout, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AccentDark, textAlign = TextAlign.End)
         }
-        Text(if (peak > 0) minutesLabel(peak) else "", fontSize = 11.sp, color = Muted, modifier = Modifier.align(Alignment.End))
-        Canvas(Modifier.fillMaxWidth().height(124.dp)
+        Text(if (peak > 0) valueLabel(peak) else "", fontSize = 11.sp, color = Muted, modifier = Modifier.align(Alignment.End))
+        Canvas(Modifier.fillMaxWidth().height(chartHeight)
             .pointerInput(values) { scrubIndex(values.size) { selected = it } }
             .semantics {
                 contentDescription = title

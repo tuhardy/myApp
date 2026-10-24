@@ -161,8 +161,8 @@ class AutoApplyTest {
         val saved = record()
         assertEquals(saved, JsonCodec.readAutoApplyRecord(JSONObject(JsonCodec.autoApplyRecord(saved).toString())))
         val job = JobOpportunity("j", card.company, card.position, "", "", JobAssistStatus.DRAFT, 1, 1)
-        assertEquals(JobAssistStatus.AUTO_CONTACTED, JobAssistRules.markAutoContacted(listOf(job), saved).single().status)
-        assertEquals(JobAssistStatus.DRAFT, JobAssistRules.markAutoContacted(listOf(job), saved.copy(result = AutoApplyResult.FAILED)).single().status)
+        assertEquals(JobAssistStatus.AUTO_CONTACTED, JobAssistRules.upsertFromRecord(listOf(job), saved, "n").single().status)
+        assertEquals(JobAssistStatus.DRAFT, JobAssistRules.upsertFromRecord(listOf(job), saved.copy(result = AutoApplyResult.FAILED), "n").single().status)
         assertEquals("自动化已发起沟通", JobAssistRules.statusLabel(JobAssistStatus.AUTO_CONTACTED))
         val backup = BackupCodec.encode(AppState(loading = false, autoApply = AutoApplyBook(settings, listOf(saved))))
         assertFalse(backup.contains(card.company))
@@ -337,9 +337,9 @@ class AutoApplyTest {
         }
         assertEquals(listOf(ResumeProfile("legacy-0", "张三-Android", listOf("Android"))), JsonCodec.readAutoApplySettings(v099).resumes)
         val job = JobOpportunity("j", card.company, card.position, "", "", JobAssistStatus.DRAFT, 1, 1)
-        val sent = JobAssistRules.markAutoContacted(listOf(job), record(result = AutoApplyResult.RESUME_SENT)).single()
+        val sent = JobAssistRules.upsertFromRecord(listOf(job), record(result = AutoApplyResult.RESUME_SENT), "n").single()
         assertEquals(JobAssistStatus.AUTO_RESUME_SENT, sent.status)
-        assertEquals(JobAssistStatus.AUTO_RESUME_SENT, JobAssistRules.markAutoContacted(listOf(sent), record()).single().status)
+        assertEquals(JobAssistStatus.AUTO_RESUME_SENT, JobAssistRules.upsertFromRecord(listOf(sent), record(), "n").single().status)
         assertEquals("自动化已发送简历", JobAssistRules.statusLabel(JobAssistStatus.AUTO_RESUME_SENT))
     }
 
@@ -352,5 +352,73 @@ class AutoApplyTest {
         assertEquals(AutoApplyEntryState.PAUSED, entry(running = true, paused = true).state)
         assertEquals(AutoApplyEntryState.STOPPED, entry(stop = "遇到验证页").state)
         assertEquals(AutoApplyEntryState.RUNNING, entry(running = true, stop = "旧原因").state)
+    }
+
+    @Test fun presetsSaveApplyDeleteAndKeepGlobalSettings() {
+        var settings = AutoApplySettings(includeKeywords = listOf("Android"), city = "北京", companyBlacklist = listOf("外包"), dailyLimit = 5)
+        settings = AutoApplyRules.savePreset(settings, "Android·北京", "p1")
+        assertEquals("Android·北京", AutoApplyRules.activePresetName(settings))
+        settings = AutoApplyRules.savePreset(settings.copy(includeKeywords = listOf("Kotlin"), city = "", minSalaryK = 20), "Kotlin·远程", "p2")
+        settings = AutoApplyRules.applyPreset(settings, "p1")
+        assertEquals(listOf("Android"), settings.includeKeywords)
+        assertEquals("北京", settings.city)
+        assertNull(settings.minSalaryK)
+        assertEquals("黑名单不随方案切换", listOf("外包"), settings.companyBlacklist)
+        assertEquals(5, settings.dailyLimit)
+        settings = AutoApplyRules.savePreset(settings.copy(city = "上海"), " android·北京 ", "p3")
+        assertEquals(2, settings.presets.size)
+        assertEquals("同名覆盖保留原名", "Android·北京", settings.presets.first().name)
+        assertEquals("上海", settings.presets.first().city)
+        AutoApplyRules.validateSettings(settings)
+        assertEquals(settings, JsonCodec.readAutoApplySettings(JSONObject(JsonCodec.autoApplySettings(settings).toString())))
+        val removed = AutoApplyRules.deletePreset(settings, "p1")
+        assertNull(removed.activePresetId)
+        assertEquals("上海", removed.city)
+        assertThrows(IllegalArgumentException::class.java) { AutoApplyRules.applyPreset(removed, "p1") }
+        assertNull(AutoApplyRules.savePreset(settings, "  ", "p9").activePresetId)
+        assertThrows(IllegalArgumentException::class.java) { AutoApplyRules.savePreset(settings, "超".repeat(AutoApplyRules.MAX_PRESET_NAME + 1), "p9") }
+        var many = AutoApplySettings()
+        repeat(AutoApplyRules.MAX_PRESETS) { many = AutoApplyRules.savePreset(many, "方案$it", "m$it") }
+        assertThrows(IllegalArgumentException::class.java) { AutoApplyRules.savePreset(many, "再来一个", "m99") }
+        assertThrows(IllegalArgumentException::class.java) { AutoApplyRules.validateSettings(many.copy(activePresetId = "ghost")) }
+        assertThrows(IllegalArgumentException::class.java) { AutoApplyRules.validateSettings(many.copy(presets = many.presets.dropLast(1) + many.presets.first().copy(id = "dup"))) }
+        // 0.9.11 及以前没有方案字段。
+        val legacy = JsonCodec.autoApplySettings(AutoApplySettings()).apply { remove("presets"); remove("activePresetId") }
+        assertEquals(AutoApplySettings(), JsonCodec.readAutoApplySettings(legacy))
+        val legacyRecord = JsonCodec.autoApplyRecord(record()).apply { remove("preset") }
+        assertEquals(record(), JsonCodec.readAutoApplyRecord(legacyRecord))
+    }
+
+    @Test fun liveContactRecordCarriesActivePresetName() {
+        val settings = AutoApplyRules.savePreset(AutoApplySettings(includeKeywords = listOf("Android"), greeting = "您好"), "北京", "p1")
+        var step = AutoApplyEngine.step(AutoApplyEngine.start(AutoApplyMode.LIVE, noon), obs(BossScreen.JOB_LIST, cards = listOf(card)), settings, emptyList(), zone, newId)
+        step = AutoApplyEngine.step(step.run, obs(BossScreen.JOB_DETAIL, noon + 3000), settings, emptyList(), zone, newId)
+        step = AutoApplyEngine.step(step.run, obs(BossScreen.CHAT, noon + 6000), settings, emptyList(), zone, newId)
+        step = AutoApplyEngine.step(step.run, obs(BossScreen.CHAT, noon + 9000), settings, emptyList(), zone, newId)
+        assertEquals(AutoApplyResult.CONTACTED, step.record?.result)
+        assertEquals("北京", step.record?.preset)
+    }
+
+    @Test fun reviewFunnelDailyAndByPreset() {
+        fun rec(company: String, daysAgo: Long, result: AutoApplyResult = AutoApplyResult.CONTACTED, preset: String = "") =
+            AutoApplyRecord("$company$daysAgo$result", "$company|岗位|", company, "岗位", "", noon - daysAgo * 86_400_000L, result, preset = preset)
+        val records = listOf(rec("a", 0, preset = "北京"), rec("a", 0, AutoApplyResult.RESUME_SENT), rec("b", 1, preset = "北京"),
+            rec("c", 6, preset = "远程"), rec("d", 7, preset = "远程"), rec("e", 0, AutoApplyResult.FAILED))
+        var jobs = records.fold(emptyList<JobOpportunity>()) { list, item -> JobAssistRules.upsertFromRecord(list, item, "j${item.id}") }
+        jobs = jobs.map {
+            when (it.company) {
+                "a" -> JobAssistRules.setOutcome(it, JobOutcome.OFFER, "", noon)
+                "b" -> JobAssistRules.setOutcome(it, JobOutcome.CLOSED, "", noon)
+                else -> it
+            }
+        }
+        val week = JobReview.summary(records, jobs, day, 7, zone)
+        assertEquals(7, week.days.size)
+        assertEquals(day, week.days.last())
+        assertEquals(JobFunnel(3, 1, 1, 1, 1), week.funnel)
+        assertEquals(listOf(1, 0, 0, 0, 0, 1, 1), week.dailyContacted)
+        assertEquals(listOf(PresetReview("北京", 2, 1), PresetReview("远程", 1, 0)), week.byPreset)
+        assertEquals(4, JobReview.summary(records, jobs, day, 30, zone).funnel.contacted)
+        assertEquals(30, JobReview.summary(emptyList(), emptyList(), day, 30, zone).dailyContacted.size)
     }
 }

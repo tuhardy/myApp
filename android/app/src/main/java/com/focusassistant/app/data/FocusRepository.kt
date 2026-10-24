@@ -328,21 +328,16 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         val normalized = value.copy(company = value.company.trim(), position = value.position.trim(), description = value.description.trim(), message = value.message.trim())
         mutate { current ->
             val previous = current.jobOpportunities.find { it.id == normalized.id }
-            val unchanged = previous?.let {
-                it.company == normalized.company && it.position == normalized.position && it.description == normalized.description && it.message == normalized.message
-            } == true
-            val stored = normalized.copy(
-                createdAt = previous?.createdAt ?: normalized.createdAt,
-                updatedAt = now,
-                status = if (unchanged) previous!!.status else JobAssistStatus.DRAFT
-            )
+            // 编辑面板只改公司、岗位和备注；状态、来源、方案、手动结果和旧版的描述与文案沿用已有记录。
+            val stored = (previous?.copy(company = normalized.company, position = normalized.position, note = normalized.note.trim()) ?: normalized.copy(note = normalized.note.trim()))
+                .copy(createdAt = previous?.createdAt ?: normalized.createdAt, updatedAt = now)
             JobAssistRules.validate(stored)
             current.copy(jobOpportunities = upsert(current.jobOpportunities, stored) { it.id })
                 .also { JobAssistRules.validateAll(it.jobOpportunities) }
         }
     }
-    suspend fun markJobCopied(id: String) = updateJobOpportunity(id) { JobAssistRules.markCopied(it, System.currentTimeMillis()) }
-    suspend fun markJobAppliedByUser(id: String) = updateJobOpportunity(id) { JobAssistRules.markAppliedByUser(it, System.currentTimeMillis()) }
+    /** 面试 / Offer / 不合适由用户手动标记；outcome 为 null 时回到自动阶段。 */
+    suspend fun setJobOutcome(id: String, outcome: JobOutcome?, note: String) = updateJobOpportunity(id) { JobAssistRules.setOutcome(it, outcome, note, System.currentTimeMillis()) }
     suspend fun deleteJobOpportunity(id: String) {
         mutate { current -> current.copy(jobOpportunities = current.jobOpportunities.filterNot { it.id == id }) }
     }
@@ -359,6 +354,17 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         AutoApplyRules.validateSettings(normalized)
         mutate { current -> current.copy(autoApply = current.autoApply.copy(settings = normalized)) }
     }
+    /** 把当前筛选规则存为方案（同名覆盖）。 */
+    suspend fun saveFilterPreset(name: String) = mutateSettings { AutoApplyRules.savePreset(it, name, id()) }
+    suspend fun applyFilterPreset(presetId: String) = mutateSettings { AutoApplyRules.applyPreset(it, presetId) }
+    suspend fun deleteFilterPreset(presetId: String) = mutateSettings { AutoApplyRules.deletePreset(it, presetId) }
+    private suspend fun mutateSettings(change: (AutoApplySettings) -> AutoApplySettings) {
+        mutate { current ->
+            val settings = change(current.autoApply.settings)
+            AutoApplyRules.validateSettings(settings)
+            current.copy(autoApply = current.autoApply.copy(settings = settings))
+        }
+    }
     suspend fun saveResumeProfile(value: ResumeProfile) = mutateResumes { AutoApplyRules.upsertResume(it, value) }
     suspend fun deleteResumeProfile(id: String) = mutateResumes { list -> list.filterNot { it.id == id } }
     suspend fun moveResumeProfile(id: String, up: Boolean) = mutateResumes { AutoApplyRules.moveResume(it, id, up) }
@@ -372,7 +378,7 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
     /** 无障碍服务每处理完一个职位写入一条记录；去重与每日上限都以这里持久化的记录为准。 */
     suspend fun addAutoApplyRecord(record: AutoApplyRecord) {
         mutate { current ->
-            current.copy(autoApply = AutoApplyRules.addRecord(current.autoApply, record), jobOpportunities = JobAssistRules.markAutoContacted(current.jobOpportunities, record))
+            current.copy(autoApply = AutoApplyRules.addRecord(current.autoApply, record), jobOpportunities = JobAssistRules.upsertFromRecord(current.jobOpportunities, record, id()))
         }
     }
     suspend fun clearAutoApplyRecords() {

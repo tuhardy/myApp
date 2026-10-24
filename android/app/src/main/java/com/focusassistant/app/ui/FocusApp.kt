@@ -180,7 +180,6 @@ class NativeUiModel : ViewModel() {
     var hideAmounts by mutableStateOf(false)
     var pendingProject by mutableStateOf<Project?>(null)
     var pendingBackup by mutableStateOf<BackupData?>(null)
-    var pendingJobCopyId by mutableStateOf<String?>(null)
     var pendingExport: String? = null
     var notificationRequested = false
     private val channel = Channel<String>(Channel.BUFFERED)
@@ -194,7 +193,6 @@ class NativeUiModel : ViewModel() {
         dialogId = ""
         if (previous == "progress-auto") screen = Screen.PROJECTS
         if (previous == "project") pendingProject = null
-        if (previous == "job-copy-confirm") pendingJobCopyId = null
     }
     internal fun stopTodoAnimation(id: String) {
         todoAnimations.remove(id)?.cancel()
@@ -583,7 +581,9 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                     Screen.JOB_ASSIST -> JobAssistScreen(state.jobOpportunities, ui.busy,
                         auto = AutoApplyPanel(state.autoApply.settings, AutoApplyRules.contactedOn(state.autoApply.records, today, ZoneId.systemDefault()),
                             bossStatus, bossServiceEnabled, bossVersion, AutoApplyRules.resumesSentOn(state.autoApply.records, today, ZoneId.systemDefault()),
-                            AutoApplyRules.awaitingResume(state.autoApply.records).size, state.autoApply.records.sortedByDescending { it.at }),
+                            AutoApplyRules.awaitingResume(state.autoApply.records).size, state.autoApply.records.sortedByDescending { it.at },
+                            JobReview.summary(state.autoApply.records, state.jobOpportunities, today, 7, ZoneId.systemDefault()),
+                            JobReview.summary(state.autoApply.records, state.jobOpportunities, today, 30, ZoneId.systemDefault())),
                         autoActions = AutoApplyActions(
                             openAccessibility = { context.startActivity(BossAutomation.settingsIntent()) },
                             acceptRisk = { ui.open("auto-risk") },
@@ -600,13 +600,14 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                             editResume = { ui.open("resume-edit", it) },
                             deleteResume = { ui.open("resume-delete", it) },
                             moveResumeUp = { id -> ui.perform { repository.moveResumeProfile(id, up = true) } },
-                            clearRecords = { ui.open("auto-records-clear") }),
+                            clearRecords = { ui.open("auto-records-clear") },
+                            applyPreset = { id -> ui.perform { repository.applyFilterPreset(id); ui.message("已切换到方案「${state.autoApply.settings.presets.find { it.id == id }?.name.orEmpty()}」") } },
+                            managePresets = { ui.open("auto-presets") },
+                            editStage = { ui.open("job-stage", it) }),
                         onBack = { ui.screen = Screen.SETTINGS },
                         onAdd = { ui.open("job-edit") },
                         onEdit = { ui.open("job-edit", it) },
-                        onDelete = { ui.open("job-delete", it) },
-                        onReview = { id -> ui.pendingJobCopyId = id; ui.open("job-copy-confirm", id) },
-                        onRecordApplied = { ui.open("job-applied-confirm", it) })
+                        onDelete = { ui.open("job-delete", it) })
                 }
                 if (ui.busy) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
             }
@@ -779,39 +780,36 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             "job-edit" -> {
                 if (ui.dialogId.isNotBlank() && dialogJob == null) InformationDialog("职位记录已不存在", listOf("可能已在其他窗口删除。"), { ui.close() })
                 else JobOpportunityEditorDialog(dialogJob, ui.busy, { ui.close() }) { value ->
-                    ui.perform { repository.saveJobOpportunity(value); ui.close(); ui.message("职位草稿已保存") }
-                }
-            }
-            "job-copy-confirm" -> {
-                val job = dialogJob
-                if (job == null) InformationDialog("职位记录已不存在", listOf("可能已在其他窗口删除。"), { ui.close() })
-                else JobOpportunityReviewDialog(job, ui.busy, { ui.close() }) {
-                    ui.perform {
-                        copyJobMessage(context, job)
-                        try {
-                            repository.markJobCopied(job.id)
-                            ui.message("已复制到剪贴板；请在招聘平台自行复核并发送")
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (error: Exception) {
-                            ui.message("文案已复制，但状态保存失败：${error.message ?: "请稍后重试"}")
-                        }
-                        ui.close()
-                    }
-                }
-            }
-            "job-applied-confirm" -> {
-                val job = dialogJob
-                if (job == null) InformationDialog("职位记录已不存在", listOf("可能已在其他窗口删除。"), { ui.close() })
-                else ConfirmDialog("记录本人已投递？", "这只记录你的手动说明，本应用无法读取或核验招聘平台上的投递状态。", ui.busy, { ui.close() }) {
-                    ui.perform { repository.markJobAppliedByUser(job.id); ui.close(); ui.message("已记录为本人说明 · 未核验") }
+                    ui.perform { repository.saveJobOpportunity(value); ui.close(); ui.message("职位已保存") }
                 }
             }
             "auto-risk" -> AutoApplyRiskDialog(ui.busy, { ui.close() }) {
                 ui.perform { repository.saveAutoApplySettings(state.autoApply.settings.copy(riskAccepted = true)); ui.close(); ui.message("已确认风险。建议先做界面诊断和试运行。") }
             }
             "auto-rules" -> AutoApplyRulesDialog(state.autoApply.settings, ui.busy, { ui.close() }) { value ->
-                ui.perform { repository.saveAutoApplySettings(value); ui.close(); ui.message("沟通规则已保存") }
+                // 有当前方案时同步更新该方案，避免切换回来时丢失刚改的规则。
+                val active = AutoApplyRules.activePresetName(value)
+                ui.perform {
+                    repository.saveAutoApplySettings(if (active.isBlank()) value else AutoApplyRules.savePreset(value, active, value.activePresetId.orEmpty()))
+                    ui.close(); ui.message(if (active.isBlank()) "沟通规则已保存" else "沟通规则已保存，并更新方案「$active」")
+                }
+            }
+            "auto-presets" -> FilterPresetDialog(state.autoApply.settings, ui.busy, { ui.close() },
+                onSave = { name -> ui.perform { repository.saveFilterPreset(name); ui.close(); ui.message("方案已保存") } },
+                onDelete = { id -> ui.open("preset-delete", id) })
+            "preset-delete" -> {
+                val preset = state.autoApply.settings.presets.find { it.id == ui.dialogId }
+                if (preset == null) InformationDialog("方案已不存在", listOf("可能已被删除。"), { ui.close() })
+                else ConfirmDialog("删除方案？", "删除「${preset.name}」后，当前规则保持不变。", ui.busy, { ui.close() }) {
+                    ui.perform { repository.deleteFilterPreset(preset.id); ui.close(); ui.message("方案已删除") }
+                }
+            }
+            "job-stage" -> {
+                val job = dialogJob
+                if (job == null) InformationDialog("职位记录已不存在", listOf("可能已被删除。"), { ui.close() })
+                else JobStageDialog(job, ui.busy, { ui.close() }) { outcome, note ->
+                    ui.perform { repository.setJobOutcome(job.id, outcome, note); ui.close(); ui.message("阶段已更新") }
+                }
             }
             "resume-edit" -> {
                 val resumes = state.autoApply.settings.resumes

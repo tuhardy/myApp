@@ -21,7 +21,20 @@ data class AutoApplySettings(
     /** 我的简历：按列表顺序取第一份关键词命中的简历，都不命中时用默认简历。 */
     val resumes: List<ResumeProfile> = emptyList(),
     /** 最近一次发简历试运行识别出消息列表时的 BOSS 版本；自动发简历只允许在该版本上进行。 */
-    val resumeCalibratedVersion: String? = null
+    val resumeCalibratedVersion: String? = null,
+    /** 筛选方案：只保存筛选字段，切换时写回上面的同名字段；黑名单、上限、间隔和简历是全局设置。 */
+    val presets: List<FilterPreset> = emptyList(),
+    val activePresetId: String? = null
+)
+
+data class FilterPreset(
+    val id: String,
+    val name: String,
+    val includeKeywords: List<String> = emptyList(),
+    val excludeKeywords: List<String> = emptyList(),
+    val minSalaryK: Int? = null,
+    val city: String = "",
+    val greeting: String = ""
 )
 
 /** name 须与 BOSS 里附件简历的文件名一致（可省略扩展名）。 */
@@ -37,7 +50,9 @@ data class AutoApplyRecord(
     val salary: String,
     val at: Long,
     val result: AutoApplyResult,
-    val note: String = ""
+    val note: String = "",
+    /** 写入时所用筛选方案的名称；没有方案时为空。 */
+    val preset: String = ""
 )
 
 data class AutoApplyBook(val settings: AutoApplySettings = AutoApplySettings(), val records: List<AutoApplyRecord> = emptyList())
@@ -58,6 +73,8 @@ object AutoApplyRules {
     const val MAX_KEYWORDS = 30
     const val MAX_KEYWORD = 30
     const val MAX_CITY = 20
+    const val MAX_PRESETS = 10
+    const val MAX_PRESET_NAME = 20
     const val MAX_GREETING = 300
     const val MAX_RECORDS = 5_000
     const val MAX_SALARY_K = 1_000
@@ -178,6 +195,34 @@ object AutoApplyRules {
         return AutoApplyEntry(state, label, "沟通 $contacted/$limit · 简历 $resumes/$limit · 待回复 $awaiting")
     }
 
+    private fun presetKey(name: String) = name.trim().lowercase()
+
+    fun activePresetName(settings: AutoApplySettings): String = settings.presets.find { it.id == settings.activePresetId }?.name.orEmpty()
+
+    /** 切换方案：把方案的筛选字段写回顶层，引擎仍只读顶层字段。 */
+    fun applyPreset(settings: AutoApplySettings, id: String): AutoApplySettings {
+        val preset = requireNotNull(settings.presets.find { it.id == id }) { "方案不存在" }
+        return settings.copy(includeKeywords = preset.includeKeywords, excludeKeywords = preset.excludeKeywords, minSalaryK = preset.minSalaryK,
+            city = preset.city, greeting = preset.greeting, activePresetId = id)
+    }
+
+    /** 把当前筛选字段存为方案：同名（忽略大小写）覆盖并保留原名，否则新建；名称为空时只取消当前方案。 */
+    fun savePreset(settings: AutoApplySettings, name: String, newId: String): AutoApplySettings {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return settings.copy(activePresetId = null)
+        require(trimmed.length <= MAX_PRESET_NAME) { "方案名称最多 $MAX_PRESET_NAME 个字符" }
+        val existing = settings.presets.find { presetKey(it.name) == presetKey(trimmed) }
+        require(existing != null || settings.presets.size < MAX_PRESETS) { "最多保存 $MAX_PRESETS 套方案" }
+        val preset = FilterPreset(existing?.id ?: newId, existing?.name ?: trimmed, settings.includeKeywords, settings.excludeKeywords,
+            settings.minSalaryK, settings.city, settings.greeting)
+        val presets = if (existing != null) settings.presets.map { if (it.id == existing.id) preset else it } else settings.presets + preset
+        return settings.copy(presets = presets, activePresetId = preset.id)
+    }
+
+    /** 删除方案不改顶层筛选字段；删的是当前方案时只取消选中。 */
+    fun deletePreset(settings: AutoApplySettings, id: String): AutoApplySettings =
+        settings.copy(presets = settings.presets.filterNot { it.id == id }, activePresetId = settings.activePresetId.takeUnless { it == id })
+
     fun validateSettings(value: AutoApplySettings) {
         fun words(list: List<String>, label: String) {
             require(list.size <= MAX_KEYWORDS) { "${label}最多 $MAX_KEYWORDS 个" }
@@ -202,12 +247,23 @@ object AutoApplyRules {
             require(resume.isDefault || resume.keywords.isNotEmpty()) { "「${resume.name}」至少要有一个岗位关键词，或设为默认简历" }
             words(resume.keywords, "简历关键词")
         }
+        require(value.presets.size <= MAX_PRESETS) { "最多保存 $MAX_PRESETS 套方案" }
+        require(value.presets.map { presetKey(it.name) }.distinct().size == value.presets.size) { "方案名称不能重复" }
+        value.presets.forEach { preset ->
+            require(preset.id.isNotBlank() && preset.id.length <= 64) { "方案标识无效" }
+            require(preset.name.isNotBlank() && preset.name.trim().length <= MAX_PRESET_NAME) { "方案名称须为 1–$MAX_PRESET_NAME 个字符" }
+            words(preset.includeKeywords, "方案关键词")
+            words(preset.excludeKeywords, "方案排除词")
+            require(preset.minSalaryK == null || preset.minSalaryK in 1..MAX_SALARY_K) { "最低薪资须为 1–$MAX_SALARY_K K" }
+            require(preset.city.length <= MAX_CITY && preset.greeting.length <= MAX_GREETING) { "方案内容过长" }
+        }
+        require(value.activePresetId == null || value.presets.any { it.id == value.activePresetId }) { "当前方案不存在" }
     }
 
     fun validateRecord(value: AutoApplyRecord) {
         require(value.id.isNotBlank() && value.id.length <= 128) { "记录标识无效" }
         require(value.jobKey.isNotBlank() && value.jobKey.length <= 400) { "职位标识无效" }
-        require(value.company.length <= 200 && value.position.length <= 200 && value.salary.length <= 100 && value.note.length <= 200) { "记录内容过长" }
+        require(value.company.length <= 200 && value.position.length <= 200 && value.salary.length <= 100 && value.note.length <= 200 && value.preset.length <= MAX_PRESET_NAME) { "记录内容过长" }
         require(value.at in 0..Validation.MAX_TIMESTAMP_MS) { "记录时间无效" }
     }
 
@@ -418,7 +474,7 @@ object AutoApplyEngine {
         }
         fun waitOrTimeout() = if (now - run.phaseSince > STEP_TIMEOUT_MS) halt("界面未按预期变化，已停止；BOSS 界面可能已更新，需要重新校准") else AutoApplyStep(run)
         fun record(result: AutoApplyResult, note: String = ""): AutoApplyRecord? = run.target?.let {
-            AutoApplyRecord(newId(), AutoApplyRules.jobKey(it), it.company, it.position, it.salary, now, result, note)
+            AutoApplyRecord(newId(), AutoApplyRules.jobKey(it), it.company, it.position, it.salary, now, result, note, AutoApplyRules.activePresetName(settings))
         }
         fun returning(contacted: Int = run.contacted) = run.copy(phase = AutoApplyPhase.RETURNING, phaseSince = now, backs = 0, contacted = contacted)
         val name = run.target?.let { "「${it.position} · ${it.company}」" }.orEmpty()

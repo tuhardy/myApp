@@ -259,12 +259,14 @@
             <div class="job-tabs" role="tablist" aria-label="求职辅助分区">
               <button type="button" role="tab" id="job-tab-contact" data-job-tab="contact" aria-controls="job-panel-contact" aria-selected="true">沟通</button>
               <button type="button" role="tab" id="job-tab-resume" data-job-tab="resume" aria-controls="job-panel-resume" aria-selected="false" tabindex="-1">简历</button>
-              <button type="button" role="tab" id="job-tab-records" data-job-tab="records" aria-controls="job-panel-records" aria-selected="false" tabindex="-1">记录</button>
-              <button type="button" role="tab" id="job-tab-drafts" data-job-tab="drafts" aria-controls="job-panel-drafts" aria-selected="false" tabindex="-1">草稿</button>
+              <button type="button" role="tab" id="job-tab-progress" data-job-tab="progress" aria-controls="job-panel-progress" aria-selected="false" tabindex="-1">进度</button>
+              <button type="button" role="tab" id="job-tab-data" data-job-tab="data" aria-controls="job-panel-data" aria-selected="false" tabindex="-1">数据</button>
             </div>
             <section id="job-panel-contact" class="auto-apply-card" role="tabpanel" aria-labelledby="job-tab-contact">
               <div class="auto-apply-heading"><h3>自动沟通</h3><strong id="auto-apply-today">今日 0/30</strong></div>
               <p class="job-assist-intro">在职位推荐列表里按规则打开职位、点“立即沟通”并发送招呼语。遇到验证、登录或次数上限立即停止，不识别验证码。</p>
+              <div class="auto-presets" id="auto-presets" role="group" aria-label="筛选方案"></div>
+              <p id="auto-presets-hint" class="auto-hint" hidden></p>
               <button type="button" id="auto-apply-edit-rules" class="auto-rules-card"><strong>沟通规则 ›</strong><span id="auto-apply-rules"></span></button>
               <div class="auto-two-actions">
                 <button type="button" id="auto-apply-dry-run" class="secondary-button">试运行</button>
@@ -287,16 +289,24 @@
               <p id="auto-resume-hint" class="auto-hint" hidden></p>
               <div id="auto-resume-preview" class="auto-apply-preview" hidden></div>
             </section>
-            <section id="job-panel-records" class="auto-apply-card" role="tabpanel" aria-labelledby="job-tab-records" hidden>
-              <div class="auto-apply-heading"><h3>投递记录</h3><strong id="auto-records-count">共 0 条</strong></div>
+            <section id="job-panel-data" class="auto-apply-card" role="tabpanel" aria-labelledby="job-tab-data" hidden>
+              <div class="auto-apply-heading"><h3>数据复盘</h3><div class="segmented job-review-days" role="group" aria-label="复盘周期"><button type="button" data-review-days="7" aria-pressed="true">近 7 天</button><button type="button" data-review-days="30" aria-pressed="false">近 30 天</button></div></div>
+              <ol id="job-review-funnel" class="job-review-funnel" aria-label="求职漏斗"></ol>
+              <p class="auto-hint job-review-note">以职位计：自动沟通过的职位里，有多少已发简历（对方回复后才能发）、被你标为面试或 Offer。不代表 HR 已读。</p>
+              <div class="job-review-chart-heading"><h4>每日沟通</h4><small id="job-review-peak"></small></div>
+              <div id="job-review-chart" class="job-review-chart" role="img"></div>
+              <div class="job-review-chart-heading"><h4>按方案</h4><small>沟通 · 已发简历</small></div>
+              <ul id="job-review-presets" class="job-review-presets"></ul>
+              <div class="auto-apply-heading auto-records-heading"><h4>投递记录</h4><strong id="auto-records-count">共 0 条</strong></div>
               <ol id="auto-records-list" class="auto-records-list"></ol>
               <p id="auto-records-more" class="auto-hint" hidden></p>
               <details class="auto-apply-log"><summary>运行日志</summary><ol id="auto-apply-log"></ol></details>
               <button type="button" id="auto-records-clear" class="secondary-button danger-button auto-wide-button">清空记录</button>
             </section>
-            <section id="job-panel-drafts" role="tabpanel" aria-labelledby="job-tab-drafts" hidden>
-              <div class="auto-apply-heading job-drafts-heading"><h3 class="job-assist-section-title">职位草稿</h3><button type="button" id="job-assist-add" class="primary-button">＋ 新增职位</button></div>
-              <p class="job-assist-intro">手动录入职位并准备沟通文案；自动沟通成功时，同公司同岗位的草稿会标为“自动化已发起沟通”，发出简历后标为“自动化已发送简历”。</p>
+            <section id="job-panel-progress" role="tabpanel" aria-labelledby="job-tab-progress" hidden>
+              <div class="auto-apply-heading job-drafts-heading"><h3 class="job-assist-section-title">求职进度</h3><button type="button" id="job-assist-add" class="secondary-button">＋ 手动添加</button></div>
+              <p class="job-assist-intro">自动沟通的职位会自动加入；面试、Offer、不合适由你标记。</p>
+              <div class="job-stage-filter" id="job-stage-filter" role="group" aria-label="按阶段筛选"></div>
               <div id="job-assist-list" class="job-assist-list"></div>
             </section>
             <details class="auto-apply-card auto-advanced"><summary>高级 · 界面诊断</summary><p class="job-assist-privacy">Android 版识别不了 BOSS 界面时，可导出控件结构给开发者核对；只记录控件结构和文字长度，不含职位与聊天正文。BOSS 更新后需重新诊断和试运行。原型没有界面诊断。</p></details>

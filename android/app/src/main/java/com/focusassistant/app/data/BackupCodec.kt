@@ -73,6 +73,8 @@ object BackupCodec {
 }
 
 internal fun JSONObject.string(key: String): String = get(key).let { require(it is String) { "$key 必须为文字" }; it }
+/** 新版本才有的文字字段：缺失时为空串。 */
+internal fun JSONObject.optionalString(key: String): String = if (has(key)) string(key) else ""
 internal fun JSONObject.long(key: String): Long = get(key).let { require(it is Int || it is Long) { "$key 必须为整数" }; (it as Number).toLong() }
 internal fun JSONObject.integer(key: String): Int = long(key).let { require(it in Int.MIN_VALUE..Int.MAX_VALUE) { "$key 超出整数范围" }; it.toInt() }
 internal fun JSONObject.boolean(key: String): Boolean = get(key).let { require(it is Boolean) { "$key 必须为布尔值" }; it }
@@ -158,8 +160,12 @@ internal object JsonCodec {
     fun jobOpportunity(value: JobOpportunity): JSONObject = JSONObject().put("id", value.id).put("company", value.company).put("position", value.position)
         .put("description", value.description).put("message", value.message).put("status", value.status.name)
         .put("createdAt", value.createdAt).put("updatedAt", value.updatedAt)
+        .put("note", value.note).put("salary", value.salary).put("source", value.source.name).put("preset", value.preset).put("outcome", nullable(value.outcome?.name))
+    // 0.9.11 及以前没有备注、来源、方案与手动结果，读取时给默认值。
     fun readJobOpportunity(value: JSONObject) = JobOpportunity(value.string("id"), value.string("company"), value.string("position"),
-        value.string("description"), value.string("message"), JobAssistStatus.valueOf(value.string("status")), value.long("createdAt"), value.long("updatedAt"))
+        value.string("description"), value.string("message"), JobAssistStatus.valueOf(value.string("status")), value.long("createdAt"), value.long("updatedAt"),
+        value.optionalString("note"), value.optionalString("salary"), if (value.has("source")) JobSource.valueOf(value.string("source")) else JobSource.MANUAL,
+        value.optionalString("preset"), if (!value.has("outcome") || value.isNull("outcome")) null else JobOutcome.valueOf(value.string("outcome")))
         .also { JobAssistRules.validate(it) }
     fun autoApplySettings(value: AutoApplySettings): JSONObject = JSONObject()
         .put("includeKeywords", JSONArray(value.includeKeywords)).put("excludeKeywords", JSONArray(value.excludeKeywords))
@@ -168,6 +174,11 @@ internal object JsonCodec {
         .put("riskAccepted", value.riskAccepted).put("calibratedVersion", nullable(value.calibratedVersion))
         .put("resumes", JSONArray(value.resumes.map { JSONObject().put("id", it.id).put("name", it.name).put("keywords", JSONArray(it.keywords)).put("isDefault", it.isDefault) }))
         .put("resumeCalibratedVersion", nullable(value.resumeCalibratedVersion))
+        .put("presets", JSONArray(value.presets.map {
+            JSONObject().put("id", it.id).put("name", it.name).put("includeKeywords", JSONArray(it.includeKeywords)).put("excludeKeywords", JSONArray(it.excludeKeywords))
+                .put("minSalaryK", nullable(it.minSalaryK)).put("city", it.city).put("greeting", it.greeting)
+        }))
+        .put("activePresetId", nullable(value.activePresetId))
     fun readAutoApplySettings(value: JSONObject) = AutoApplySettings(value.strings("includeKeywords"), value.strings("excludeKeywords"),
         value.nullableInteger("minSalaryK"), value.string("city"), value.strings("companyBlacklist"), value.integer("dailyLimit"), value.long("stepDelayMs"),
         value.string("greeting"), value.boolean("riskAccepted"), if (value.isNull("calibratedVersion")) null else value.string("calibratedVersion"),
@@ -177,12 +188,17 @@ internal object JsonCodec {
             value.has("resumeRules") -> value.objects("resumeRules", AutoApplyRules.MAX_RESUMES).mapIndexed { index, it -> ResumeProfile("legacy-$index", it.string("resumeName"), it.strings("keywords")) }
             else -> emptyList()
         },
-        if (!value.has("resumeCalibratedVersion") || value.isNull("resumeCalibratedVersion")) null else value.string("resumeCalibratedVersion"))
+        if (!value.has("resumeCalibratedVersion") || value.isNull("resumeCalibratedVersion")) null else value.string("resumeCalibratedVersion"),
+        // 0.9.11 及以前没有筛选方案。
+        if (value.has("presets")) value.objects("presets", AutoApplyRules.MAX_PRESETS).map {
+            FilterPreset(it.string("id"), it.string("name"), it.strings("includeKeywords"), it.strings("excludeKeywords"), it.nullableInteger("minSalaryK"), it.string("city"), it.string("greeting"))
+        } else emptyList(),
+        if (!value.has("activePresetId") || value.isNull("activePresetId")) null else value.string("activePresetId"))
         .also { AutoApplyRules.validateSettings(it) }
     fun autoApplyRecord(value: AutoApplyRecord): JSONObject = JSONObject().put("id", value.id).put("jobKey", value.jobKey).put("company", value.company)
-        .put("position", value.position).put("salary", value.salary).put("at", value.at).put("result", value.result.name).put("note", value.note)
+        .put("position", value.position).put("salary", value.salary).put("at", value.at).put("result", value.result.name).put("note", value.note).put("preset", value.preset)
     fun readAutoApplyRecord(value: JSONObject) = AutoApplyRecord(value.string("id"), value.string("jobKey"), value.string("company"), value.string("position"),
-        value.string("salary"), value.long("at"), AutoApplyResult.valueOf(value.string("result")), value.string("note")).also { AutoApplyRules.validateRecord(it) }
+        value.string("salary"), value.long("at"), AutoApplyResult.valueOf(value.string("result")), value.string("note"), value.optionalString("preset")).also { AutoApplyRules.validateRecord(it) }
     fun readTimer(value: JSONObject) = ActiveTimer(value.string("sessionId"), value.string("projectId"), value.string("projectTitle"), value.string("category"), TimerMode.valueOf(value.string("timerMode")), value.nullableInteger("targetMinutes"),
         TimerPhase.valueOf(value.string("phase")), TimerStatus.valueOf(value.string("status")), value.long("startedAt"),
         value.long("accumulatedMs"), value.long("anchorElapsed"), value.long("anchorWall"), value.integer("bootCount"), value.objects("segments", 10000).map(::readSegment), value.boolean("targetNotified"), value.boolean("recoveryPending"))

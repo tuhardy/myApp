@@ -11,16 +11,17 @@ const { completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTas
 const { execFileSync } = require("node:child_process");
 const { initialFocusItems, validateFocusItem, focusHourDistribution, validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary } = require("./model.js");
 const { initialDiaryEntries, selectDiaryEntries, trashedDiaryEntries, moveDiaryToTrash, restoreDiaryEntry, parseDiaryDateQuery, validateDiaryEntry, listDiaryDrafts } = require("./model.js");
-const { JOB_ASSIST_STATUS, validateJobOpportunity, markJobCopied, markJobAppliedByUser } = require("./model.js");
+const { JOB_ASSIST_STATUS, validateJobOpportunity, jobStage } = require("./model.js");
 
-test("求职草稿只有明确复核确认后才标记复制，手动投递仅记录为未核验自述", () => {
-  const job = validateJobOpportunity({ id: "job-1", company: " 示例公司 ", position: " 产品经理 ", description: "职位描述", message: "您好，我想了解该岗位。", createdAt: "2026-09-28T00:00:00.000Z", updatedAt: "2026-09-28T00:00:00.000Z" });
+test("手动职位只记公司、岗位与备注，作为本人自述进入已沟通；旧草稿仍可读取", () => {
+  const job = validateJobOpportunity({ id: "job-1", company: " 示例公司 ", position: " 产品经理 ", note: " 内推 ", status: JOB_ASSIST_STATUS.appliedSelfReported, createdAt: "2026-09-28T00:00:00.000Z" });
   assert.equal(job.company, "示例公司");
-  assert.equal(job.status, JOB_ASSIST_STATUS.draft);
-  assert.equal(markJobCopied(job, new Date("2026-09-28T01:00:00.000Z")).status, JOB_ASSIST_STATUS.copied);
-  assert.equal(markJobAppliedByUser(job, new Date("2026-09-28T02:00:00.000Z")).status, JOB_ASSIST_STATUS.appliedSelfReported);
-  assert.throws(() => markJobCopied({ ...job, message: " " }), /文案/);
+  assert.equal(job.note, "内推");
+  assert.equal(job.source, "manual");
+  assert.equal(jobStage(job), "contacted");
   assert.throws(() => validateJobOpportunity({ ...job, position: "" }), /岗位/);
+  const legacy = validateJobOpportunity({ id: "old", company: "旧", position: "旧", message: "您好", status: JOB_ASSIST_STATUS.copied, createdAt: "2026-09-28T00:00:00.000Z" });
+  assert.equal(jobStage(legacy), "prep");
 });
 
 const { AUTO_APPLY_LIMITS, defaultAutoApplySettings, parseKeywordList, salaryLowerK, autoApplyJobKey, validateAutoApplySettings, autoApplyDecision, simulateAutoApply } = require("./model.js");
@@ -1596,4 +1597,86 @@ test("求职辅助入口状态：运行、暂停、停止、空闲共用一套�
   assert.equal(autoApplyEntry({ ...counts, task: "resume", paused: true }).state, "paused");
   assert.equal(autoApplyEntry({ ...counts, stopReason: "遇到验证页" }).state, "stopped");
   assert.equal(autoApplyEntry({ ...counts, task: "contact", stopReason: "旧原因" }).state, "running");
+});
+
+test("进度看板：自动记录建档并只前进，手动结果不被自动记录覆盖", () => {
+  const { upsertJobFromRecord, jobStage, setJobOutcome, validateJobOpportunity, JOB_ASSIST_LIMITS } = require("./model.js");
+  const contact = { jobKey: "a|android|20k", company: "示例科技", position: "Android", salary: "20K", day: "2026-10-20", result: "contacted", preset: "北京", at: Date.parse("2026-10-20T02:00:00Z") };
+  let jobs = upsertJobFromRecord([], contact, "job-1");
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].source, "auto");
+  assert.equal(jobs[0].preset, "北京");
+  assert.equal(jobs[0].salary, "20K");
+  assert.equal(jobStage(jobs[0]), "contacted");
+  jobs = upsertJobFromRecord(jobs, { ...contact, result: "resume-sent", at: contact.at + 1000 }, "job-2");
+  assert.equal(jobs.length, 1);
+  assert.equal(jobStage(jobs[0]), "resume");
+  jobs = upsertJobFromRecord(jobs, { ...contact, at: contact.at + 2000 }, "job-3");
+  assert.equal(jobStage(jobs[0]), "resume", "已发简历不退回已沟通");
+  jobs = [setJobOutcome(jobs[0], "interview", " 周三电话 ", new Date("2026-10-21T00:00:00Z"))];
+  assert.equal(jobStage(jobs[0]), "interview");
+  assert.equal(jobs[0].note, "周三电话");
+  jobs = upsertJobFromRecord(jobs, { ...contact, result: "resume-sent" }, "job-4");
+  assert.equal(jobStage(jobs[0]), "interview", "手动结果优先");
+  assert.equal(jobStage(setJobOutcome(jobs[0], null, "")), "resume");
+  assert.throws(() => setJobOutcome(jobs[0], "hired", ""), /阶段无效/);
+  assert.throws(() => setJobOutcome(jobs[0], "offer", "长".repeat(201)), /备注最多/);
+  assert.equal(upsertJobFromRecord(jobs, { ...contact, result: "failed" }, "job-5"), jobs);
+  const full = Array.from({ length: JOB_ASSIST_LIMITS.maxJobs }, (_, index) => validateJobOpportunity({ id: `j${index}`, company: `公司${index}`, position: "岗位", createdAt: "2026-10-01T00:00:00.000Z" }));
+  assert.equal(upsertJobFromRecord(full, contact, "job-x").length, JOB_ASSIST_LIMITS.maxJobs);
+  assert.equal(validateJobOpportunity({ id: "old", company: "旧", position: "旧", createdAt: "2026-10-01T00:00:00.000Z" }).source, "manual");
+});
+
+test("筛选方案：保存、同名覆盖、切换只改筛选字段、删除与校验", () => {
+  const { defaultAutoApplySettings, saveAutoApplyPreset, applyAutoApplyPreset, deleteAutoApplyPreset, activePresetName, validateAutoApplySettings, simulateAutoApply, AUTO_APPLY_LIMITS } = require("./model.js");
+  let settings = { ...defaultAutoApplySettings(), includeKeywords: ["Android"], city: "北京", companyBlacklist: ["外包"], dailyLimit: 5 };
+  settings = saveAutoApplyPreset(settings, "Android·北京", "p1");
+  assert.equal(activePresetName(settings), "Android·北京");
+  settings = saveAutoApplyPreset({ ...settings, includeKeywords: ["Kotlin"], city: "", minSalaryK: 20 }, "Kotlin·远程", "p2");
+  assert.equal(settings.presets.length, 2);
+  settings = applyAutoApplyPreset(settings, "p1");
+  assert.deepEqual(settings.includeKeywords, ["Android"]);
+  assert.equal(settings.city, "北京");
+  assert.equal(settings.minSalaryK, null);
+  assert.deepEqual(settings.companyBlacklist, ["外包"], "黑名单不随方案切换");
+  assert.equal(settings.dailyLimit, 5);
+  settings = saveAutoApplyPreset({ ...settings, city: "上海" }, " android·北京 ", "p3");
+  assert.equal(settings.presets.length, 2, "同名（忽略大小写）覆盖");
+  assert.equal(settings.presets[0].city, "上海");
+  assert.equal(validateAutoApplySettings(settings).activePresetId, "p1");
+  const run = simulateAutoApply([{ position: "Android 开发", company: "示例", salary: "20K", city: "上海" }], settings, [], "2026-10-25", false);
+  assert.equal(run.records[0].preset, "Android·北京");
+  assert.equal(saveAutoApplyPreset(settings, "  ", "p9").activePresetId, null);
+  assert.throws(() => saveAutoApplyPreset(settings, "超".repeat(21), "p9"), /最多 20/);
+  const removed = deleteAutoApplyPreset(settings, "p1");
+  assert.equal(removed.activePresetId, null);
+  assert.equal(removed.city, "上海", "删除方案不改当前筛选");
+  assert.throws(() => applyAutoApplyPreset(removed, "p1"), /方案不存在/);
+  let many = defaultAutoApplySettings();
+  for (let index = 0; index < AUTO_APPLY_LIMITS.maxPresets; index++) many = saveAutoApplyPreset(many, `方案${index}`, `m${index}`);
+  assert.throws(() => saveAutoApplyPreset(many, "再来一个", "m99"), /最多保存 10 套/);
+  assert.throws(() => validateAutoApplySettings({ ...many, presets: [...many.presets.slice(0, 1), { ...many.presets[0], id: "dup" }] }), /不能重复/);
+  assert.throws(() => validateAutoApplySettings({ ...many, activePresetId: "ghost" }), /当前方案不存在/);
+});
+
+test("数据复盘：漏斗按职位去重、每日数组含今天、按方案分组", () => {
+  const { jobReviewSummary, upsertJobFromRecord, setJobOutcome } = require("./model.js");
+  const today = new Date(2026, 9, 25);
+  const rec = (key, day, result, preset = "") => ({ jobKey: key, company: key, position: "岗位", salary: "", day, result, preset });
+  const records = [
+    rec("a", "2026-10-25", "contacted", "北京"), rec("a", "2026-10-25", "resume-sent"),
+    rec("b", "2026-10-24", "contacted", "北京"), rec("c", "2026-10-19", "contacted", "远程"),
+    rec("d", "2026-10-18", "contacted", "远程"), rec("e", "2026-10-25", "failed"),
+  ];
+  let jobs = records.reduce((list, item, index) => upsertJobFromRecord(list, item, `j${index}`), []);
+  jobs = jobs.map(job => job.company === "a" ? setJobOutcome(job, "offer", "") : job.company === "b" ? setJobOutcome(job, "closed", "") : job);
+  const week = jobReviewSummary(records, jobs, today, 7);
+  assert.equal(week.days.length, 7);
+  assert.equal(week.days[6], "2026-10-25");
+  assert.equal(week.days[0], "2026-10-19");
+  assert.deepEqual(week.funnel, { contacted: 3, resumes: 1, interviews: 1, offers: 1, closed: 1 });
+  assert.deepEqual(week.dailyContacted, [1, 0, 0, 0, 0, 1, 1]);
+  assert.deepEqual(week.byPreset, [{ preset: "北京", contacted: 2, resumes: 1 }, { preset: "远程", contacted: 1, resumes: 0 }]);
+  assert.equal(jobReviewSummary(records, jobs, today, 30).funnel.contacted, 4);
+  assert.equal(jobReviewSummary([], [], today, 30).dailyContacted.length, 30);
 });

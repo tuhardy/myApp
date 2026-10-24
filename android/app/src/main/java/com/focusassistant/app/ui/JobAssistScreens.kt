@@ -1,8 +1,5 @@
 package com.focusassistant.app.ui
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -45,6 +42,10 @@ import com.focusassistant.app.domain.AutoApplySettings
 import com.focusassistant.app.domain.JobAssistRules
 import com.focusassistant.app.domain.JobAssistStatus
 import com.focusassistant.app.domain.JobOpportunity
+import com.focusassistant.app.domain.JobOutcome
+import com.focusassistant.app.domain.JobReviewSummary
+import com.focusassistant.app.domain.JobSource
+import com.focusassistant.app.domain.JobStage
 import com.focusassistant.app.domain.ResumeProfile
 import com.focusassistant.app.platform.BossAutomationStatus
 import com.focusassistant.app.platform.BossTask
@@ -66,7 +67,10 @@ internal data class AutoApplyPanel(
     val resumeTodayCount: Int = 0,
     val awaitingResume: Int = 0,
     /** 投递记录，新到旧。 */
-    val records: List<AutoApplyRecord> = emptyList()
+    val records: List<AutoApplyRecord> = emptyList(),
+    /** 数据复盘：近 7 天与近 30 天，由 JobReview.summary 计算。 */
+    val reviewWeek: JobReviewSummary? = null,
+    val reviewMonth: JobReviewSummary? = null
 )
 
 internal class AutoApplyActions(
@@ -85,10 +89,13 @@ internal class AutoApplyActions(
     val editResume: (String) -> Unit,
     val deleteResume: (String) -> Unit,
     val moveResumeUp: (String) -> Unit,
-    val clearRecords: () -> Unit
+    val clearRecords: () -> Unit,
+    val applyPreset: (String) -> Unit = {},
+    val managePresets: () -> Unit = {},
+    val editStage: (String) -> Unit = {}
 )
 
-private enum class JobTab(val label: String) { CONTACT("沟通"), RESUME("简历"), RECORDS("记录"), DRAFTS("草稿") }
+private enum class JobTab(val label: String) { CONTACT("沟通"), RESUME("简历"), PROGRESS("进度"), DATA("数据") }
 
 private fun cardModifier() = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color.White).border(1.dp, JobLine, RoundedCornerShape(16.dp))
 
@@ -101,17 +108,16 @@ internal fun JobAssistScreen(
     onBack: () -> Unit,
     onAdd: () -> Unit,
     onEdit: (String) -> Unit,
-    onDelete: (String) -> Unit,
-    onReview: (String) -> Unit,
-    onRecordApplied: (String) -> Unit
+    onDelete: (String) -> Unit
 ) {
     var tab by rememberSaveable { mutableStateOf(JobTab.CONTACT) }
+    var stageFilter by rememberSaveable { mutableStateOf<JobStage?>(null) }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, "返回我的") }
             Column(Modifier.weight(1f)) {
                 Text("求职辅助", fontSize = 24.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
-                Text("BOSS 自动沟通与发简历 · 本机职位草稿", color = Muted, fontSize = 12.sp)
+                Text("BOSS 自动沟通与发简历 · 求职进度", color = Muted, fontSize = 12.sp)
             }
         }
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(top = 12.dp, bottom = 16.dp)) {
@@ -121,38 +127,52 @@ internal fun JobAssistScreen(
             when (tab) {
                 JobTab.CONTACT -> item(key = "contact") { ContactSection(auto, autoActions, busy) }
                 JobTab.RESUME -> item(key = "resume") { ResumeSection(auto, autoActions, busy) }
-                JobTab.RECORDS -> item(key = "records") { RecordsSection(auto, autoActions, busy) }
-                JobTab.DRAFTS -> {
-                    item(key = "drafts-title") {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("自动沟通成功时，同公司同岗位的草稿会标为“自动化已发起沟通”。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.weight(1f))
-                            FilledIconButton(onClick = onAdd, enabled = !busy, colors = IconButtonDefaults.filledIconButtonColors(containerColor = Accent)) {
-                                Icon(Icons.Outlined.Add, "新增职位", tint = Color.White)
+                JobTab.DATA -> {
+                    item(key = "review") { ReviewSection(auto) }
+                    item(key = "records") { RecordsSection(auto, autoActions, busy) }
+                }
+                JobTab.PROGRESS -> {
+                    item(key = "progress-title") {
+                        // 与浏览器 #job-panel-progress 同一布局：标题行右侧唯一的“手动添加”，下方一行说明与单行阶段筛选。
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("求职进度", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).semantics { heading() })
+                                OutlinedButton(onClick = onAdd, enabled = !busy, contentPadding = PaddingValues(horizontal = 12.dp)) {
+                                    Icon(Icons.Outlined.Add, null, modifier = Modifier.size(16.dp)); Text("手动添加", fontSize = 12.sp, color = AccentDark)
+                                }
                             }
+                            Text("自动沟通的职位会自动加入；面试、Offer、不合适由你标记。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+                            StageFilter(jobs, stageFilter) { stageFilter = it }
                         }
                     }
+                    val shown = jobs.filter { stageFilter == null || JobAssistRules.stage(it) == stageFilter }
                     if (jobs.isEmpty()) item(key = "empty") {
                         Column(cardModifier().padding(20.dp)) {
-                            Text("还没有职位草稿", fontWeight = FontWeight.SemiBold)
-                            Text("可以先在招聘平台查看职位，再把公司、岗位和描述手动粘贴到这里。", color = Muted, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 6.dp))
-                            Button(onClick = onAdd, enabled = !busy, colors = ButtonDefaults.buttonColors(containerColor = Accent), modifier = Modifier.padding(top = 12.dp)) { Text("新增职位") }
+                            Text("还没有职位", fontWeight = FontWeight.SemiBold)
+                            Text("开始自动沟通后，职位会出现在这里；自己联系或内推的职位，可点右上角“手动添加”。", color = Muted, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 6.dp))
                         }
-                    }
-                    items(jobs, key = { it.id }) { job ->
-                        Column(cardModifier().padding(14.dp)) {
-                            Text(job.position, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                            Text(job.company, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
-                            Text(JobAssistRules.statusLabel(job.status), color = AccentDark, fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp))
-                            if (job.message.isNotBlank()) Text(job.message, color = Muted, fontSize = 12.sp, maxLines = 3, modifier = Modifier.padding(top = 8.dp))
-                            Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    TextButton(onClick = { onReview(job.id) }, enabled = !busy, modifier = Modifier.weight(1f)) { Text("复核文案", maxLines = 1) }
-                                    TextButton(onClick = { onEdit(job.id) }, enabled = !busy, modifier = Modifier.weight(1f)) { Icon(Icons.Outlined.Edit, null, modifier = Modifier.size(16.dp)); Text("编辑", maxLines = 1) }
+                    } else if (shown.isEmpty()) item(key = "stage-empty") { Text("这个阶段还没有职位。", color = Muted, fontSize = 12.sp) }
+                    items(shown, key = { it.id }) { job ->
+                        val stage = JobAssistRules.stage(job)
+                        val autoJob = job.source == JobSource.AUTO
+                        Column(cardModifier().background(if (stage == JobStage.CLOSED) SoftSurface else Color.White).padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.Top) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(job.position, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                                    Text(listOf(job.company, job.salary).filter { it.isNotBlank() }.joinToString(" · "), color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
                                 }
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    TextButton(onClick = { onRecordApplied(job.id) }, enabled = !busy && job.status != JobAssistStatus.APPLIED_SELF_REPORTED, modifier = Modifier.weight(1f)) { Text("本人已投递", maxLines = 1) }
-                                    TextButton(onClick = { onDelete(job.id) }, enabled = !busy, modifier = Modifier.weight(1f)) { Icon(Icons.Outlined.DeleteOutline, null, modifier = Modifier.size(16.dp)); Text("删除", maxLines = 1) }
-                                }
+                                Text(JobAssistRules.displayLabel(job), color = if (stage == JobStage.CLOSED) Muted else AccentDark, fontSize = 11.sp,
+                                    fontWeight = if (job.outcome != null) FontWeight.SemiBold else FontWeight.Normal, modifier = Modifier.padding(start = 8.dp))
+                            }
+                            Text(listOfNotNull(if (autoJob) "自动沟通加入" else "手动添加", job.preset.takeIf { it.isNotBlank() }?.let { "方案 $it" }).joinToString(" · "),
+                                color = Muted, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
+                            if (job.note.isNotBlank()) Text(job.note, fontSize = 12.sp, lineHeight = 18.sp,
+                                modifier = Modifier.padding(top = 6.dp).fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(SoftSurface).padding(horizontal = 10.dp, vertical = 6.dp))
+                            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                TextButton(onClick = { autoActions.editStage(job.id) }, enabled = !busy, modifier = Modifier.weight(1f)) { Text("阶段与备注", maxLines = 1) }
+                                // 自动建档的职位按公司+岗位与记录对应，不允许改名。
+                                if (!autoJob) TextButton(onClick = { onEdit(job.id) }, enabled = !busy, modifier = Modifier.weight(1f)) { Icon(Icons.Outlined.Edit, null, modifier = Modifier.size(16.dp)); Text("编辑", maxLines = 1) }
+                                TextButton(onClick = { onDelete(job.id) }, enabled = !busy, modifier = Modifier.weight(1f)) { Icon(Icons.Outlined.DeleteOutline, null, modifier = Modifier.size(16.dp)); Text("删除", maxLines = 1) }
                             }
                         }
                     }
@@ -160,7 +180,7 @@ internal fun JobAssistScreen(
             }
             item(key = "advanced") { AdvancedSection(auto, autoActions, busy) }
             item(key = "footer") {
-                Text("职位、规则、简历名称和投递记录保存在本机，不包含在完整备份中。复制后剪贴板可能被系统暂存；“本人记录已投递”未经平台核验。", color = Muted,
+                Text("职位、方案、规则、简历名称和投递记录保存在本机，不包含在完整备份中。手动添加的职位是本人记录，未经平台核验。", color = Muted,
                     fontSize = 10.sp, lineHeight = 16.sp)
             }
         }
@@ -176,53 +196,26 @@ internal fun JobOpportunityEditorDialog(
 ) {
     var company by remember(existing?.id) { mutableStateOf(existing?.company.orEmpty()) }
     var position by remember(existing?.id) { mutableStateOf(existing?.position.orEmpty()) }
-    var description by remember(existing?.id) { mutableStateOf(existing?.description.orEmpty()) }
-    var message by remember(existing?.id) { mutableStateOf(existing?.message.orEmpty()) }
+    var note by remember(existing?.id) { mutableStateOf(existing?.note.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, containerColor = Color.White,
-        title = { Text(if (existing == null) "新增职位" else "编辑职位", fontSize = 20.sp, fontWeight = FontWeight.SemiBold) },
+        title = { Text(if (existing == null) "手动添加职位" else "编辑职位", fontSize = 20.sp, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(Modifier.heightIn(max = 520.dp).imePadding().verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 OutlinedTextField(company, { company = it.take(JobAssistRules.MAX_COMPANY); error = null }, label = { Text("公司") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(position, { position = it.take(JobAssistRules.MAX_POSITION); error = null }, label = { Text("岗位") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(description, { description = it.take(JobAssistRules.MAX_DESCRIPTION) }, label = { Text("职位描述（可粘贴）") }, enabled = !busy, minLines = 2, maxLines = 5, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
-                OutlinedTextField(message, { message = it.take(JobAssistRules.MAX_MESSAGE) }, label = { Text("沟通文案（自行编辑）") }, enabled = !busy, minLines = 3, maxLines = 6, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
-                Text("首版只保存你输入的内容，不联网生成、不读取其他应用。", color = Muted, fontSize = 11.sp)
+                OutlinedTextField(note, { note = it.take(JobAssistRules.MAX_NOTE) }, label = { Text("备注（可选，最多 ${JobAssistRules.MAX_NOTE} 字）") }, enabled = !busy, minLines = 2, maxLines = 4, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
+                Text("用来跟踪你自己在招聘平台上联系或被内推的职位，记为“已沟通 · 本人记录”，本应用无法核验。之后可在“阶段与备注”里标面试、Offer 或不合适。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
                 error?.let { Text(it, color = Color(0xFFB42318), fontSize = 12.sp) }
             }
         }, confirmButton = {
             TextButton(enabled = !busy, onClick = {
                 val now = System.currentTimeMillis()
-                val draft = JobOpportunity(existing?.id ?: UUID.randomUUID().toString(), company.trim(), position.trim(), description.trim(), message.trim(),
-                    existing?.status ?: JobAssistStatus.DRAFT, existing?.createdAt ?: now, now)
+                val draft = (existing ?: JobOpportunity(UUID.randomUUID().toString(), "", "", "", "", JobAssistStatus.APPLIED_SELF_REPORTED, now, now))
+                    .copy(company = company.trim(), position = position.trim(), note = note.trim(), updatedAt = now)
                 try { JobAssistRules.validate(draft); onSave(draft) } catch (exception: IllegalArgumentException) { error = exception.message }
             }) { Text(if (busy) "保存中" else "保存") }
         }, dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("取消") } })
-}
-
-@Composable
-internal fun JobOpportunityReviewDialog(
-    job: JobOpportunity,
-    busy: Boolean,
-    onDismiss: () -> Unit,
-    onCopy: () -> Unit
-) {
-    AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, containerColor = Color.White,
-        title = { Text("复核后手动交接", fontSize = 20.sp, fontWeight = FontWeight.SemiBold) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("${job.company} · ${job.position}", fontWeight = FontWeight.SemiBold)
-                Text(job.message.ifBlank { "还没有沟通文案，请先编辑并保存。" }, color = Muted, fontSize = 13.sp, lineHeight = 20.sp)
-                Text("确认后只会复制到剪贴板，不会发送消息、打开或控制招聘平台。剪贴板可能被系统暂存。", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
-            }
-        }, confirmButton = {
-            TextButton(enabled = !busy && job.message.isNotBlank(), onClick = onCopy) { Text(if (busy) "处理中" else "确认并复制") }
-        }, dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("取消") } })
-}
-
-internal fun copyJobMessage(context: Context, job: JobOpportunity) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    clipboard.setPrimaryClip(ClipData.newPlainText("${job.company} · ${job.position}", job.message))
 }
 
 @Composable
@@ -341,6 +334,8 @@ private fun ContactSection(auto: AutoApplyPanel, actions: AutoApplyActions, busy
     Column(cardModifier().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionTitle("自动沟通", "今日 ${auto.todayCount}/${auto.settings.dailyLimit}")
         Text("在职位推荐列表里按规则打开职位、点「立即沟通」并发送招呼语。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+        PresetChips(auto.settings, enabled = !busy && !running, actions)
+        if (running && auto.settings.presets.isNotEmpty()) DisabledHint("运行中不能切换方案")
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(SoftSurface).clickable(enabled = !busy && !running, onClick = actions.editRules).padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("沟通规则", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
@@ -426,6 +421,145 @@ private fun ResumeSection(auto: AutoApplyPanel, actions: AutoApplyActions, busy:
             }
         }
     }
+}
+
+@Composable
+private fun Chip(label: String, selected: Boolean, enabled: Boolean, dashed: Boolean = false, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(999.dp)
+    Box(Modifier.heightIn(min = 40.dp).clip(shape).background(if (selected) AccentSoft else Color.White)
+        .border(1.dp, if (selected) Accent else JobLine, shape)
+        .selectable(selected = selected, enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+        Text(label, fontSize = 12.sp, color = if (selected) AccentDark else if (dashed) AccentDark else Muted,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
+    }
+}
+
+/** 筛选方案：点一下切换，与浏览器 #auto-presets 同一交互；最后一个按钮打开方案管理。 */
+@Composable
+private fun PresetChips(settings: AutoApplySettings, enabled: Boolean, actions: AutoApplyActions) {
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        settings.presets.forEach { preset ->
+            Chip(preset.name, preset.id == settings.activePresetId, enabled) { if (preset.id != settings.activePresetId) actions.applyPreset(preset.id) }
+        }
+        Chip(if (settings.presets.isEmpty()) "＋ 存为方案" else "管理方案", false, enabled, dashed = true, onClick = actions.managePresets)
+    }
+}
+
+@Composable
+private fun StageFilter(jobs: List<JobOpportunity>, selected: JobStage?, onSelect: (JobStage?) -> Unit) {
+    val counts = jobs.groupingBy(JobAssistRules::stage).eachCount()
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Chip("全部 ${jobs.size}", selected == null, true) { onSelect(null) }
+        JobStage.entries.forEach { stage -> Chip("${stage.label} ${counts[stage] ?: 0}", selected == stage, true) { onSelect(stage) } }
+    }
+}
+
+/** 数据复盘：与浏览器 #job-panel-data 同口径，漏斗以职位计；“已发简历”只说明对方回复过。 */
+@Composable
+private fun ReviewSection(auto: AutoApplyPanel) {
+    var month by rememberSaveable { mutableStateOf(false) }
+    val review = (if (month) auto.reviewMonth else auto.reviewWeek) ?: return
+    Column(cardModifier().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("数据复盘", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).semantics { heading() })
+            Row(Modifier.clip(RoundedCornerShape(12.dp)).background(SoftSurface).padding(3.dp)) {
+                listOf(false to "近 7 天", true to "近 30 天").forEach { (value, label) ->
+                    Box(Modifier.heightIn(min = 40.dp).clip(RoundedCornerShape(9.dp)).background(if (month == value) Color.White else Color.Transparent)
+                        .selectable(selected = month == value, role = Role.Tab) { month = value }.padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
+                        Text(label, fontSize = 12.sp, color = if (month == value) AccentDark else Muted, fontWeight = if (month == value) FontWeight.SemiBold else FontWeight.Normal)
+                    }
+                }
+            }
+        }
+        val funnel = review.funnel
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("沟通" to funnel.contacted, "已发简历" to funnel.resumes, "面试" to funnel.interviews, "Offer" to funnel.offers, "不合适" to funnel.closed).forEachIndexed { index, (label, count) ->
+                val closed = index == 4
+                Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(if (closed) SoftSurface else AccentSoft)
+                    .semantics(mergeDescendants = true) {}.padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("$count", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = if (closed) Muted else AccentDark, style = NumeralStyle)
+                    Text(label, fontSize = 10.sp, color = Muted, maxLines = 1)
+                }
+            }
+        }
+        Text("以职位计：自动沟通过的职位里，有多少已发简历（对方回复后才能发）、被你标为面试或 Offer。不代表 HR 已读。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+        val dayLabel = DateTimeFormatter.ofPattern("MM-dd")
+        ScrubBars(review.dailyContacted.map { it.toLong() }, { review.days[it].format(dayLabel) }, "最多", "这段时间没有沟通", "每日沟通",
+            if (month) 2.dp else 6.dp, valueLabel = { "$it 次" }, chartHeight = 80.dp) {
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                Text(review.days.first().format(dayLabel), color = Muted, fontSize = 10.sp, modifier = Modifier.weight(1f))
+                Text("今天", color = Muted, fontSize = 10.sp)
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("按方案", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text("沟通 · 已发简历", color = Muted, fontSize = 11.sp)
+        }
+        if (review.byPreset.isEmpty()) Text("还没有自动沟通记录。", color = Muted, fontSize = 12.sp)
+        review.byPreset.forEach { row ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Text(row.preset.ifBlank { "未用方案" }, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                Text("${row.contacted} · ${row.resumes}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, style = NumeralStyle)
+            }
+            HorizontalDivider(color = JobLine)
+        }
+    }
+}
+
+/** 阶段与备注：面试 / Offer / 不合适由用户标记；选“自动阶段”即清除手动结果。 */
+@Composable
+internal fun JobStageDialog(job: JobOpportunity, busy: Boolean, onDismiss: () -> Unit, onSave: (JobOutcome?, String) -> Unit) {
+    var outcome by remember(job.id) { mutableStateOf(job.outcome) }
+    var note by remember(job.id) { mutableStateOf(job.note) }
+    AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, containerColor = Color.White,
+        title = { Text("${job.position} · ${job.company}", fontSize = 18.sp, fontWeight = FontWeight.SemiBold) },
+        text = {
+            Column(Modifier.imePadding().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("结果（由你标记，自动记录不会覆盖）", color = Muted, fontSize = 12.sp)
+                (listOf<JobOutcome?>(null) + JobOutcome.entries).forEach { value ->
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = outcome == value, role = Role.RadioButton) { outcome = value },
+                        verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = outcome == value, onClick = null, colors = RadioButtonDefaults.colors(selectedColor = Accent))
+                        Text(value?.label ?: "自动阶段：${JobAssistRules.statusLabel(job.status)}", fontSize = 14.sp, modifier = Modifier.padding(start = 10.dp))
+                    }
+                }
+                OutlinedTextField(note, { note = it.take(JobAssistRules.MAX_NOTE) }, label = { Text("备注（最多 ${JobAssistRules.MAX_NOTE} 字）") }, enabled = !busy,
+                    minLines = 2, maxLines = 4, modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+            }
+        }, confirmButton = { TextButton(enabled = !busy, onClick = { onSave(outcome, note) }) { Text(if (busy) "保存中" else "保存") } },
+        dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("取消") } })
+}
+
+/** 方案管理：把当前规则存为方案（同名覆盖），或删除已有方案；与浏览器 autoPresetDialog 一致。 */
+@Composable
+internal fun FilterPresetDialog(settings: AutoApplySettings, busy: Boolean, onDismiss: () -> Unit, onSave: (String) -> Unit, onDelete: (String) -> Unit) {
+    var name by remember { mutableStateOf(AutoApplyRules.activePresetName(settings)) }
+    var error by remember { mutableStateOf<String?>(null) }
+    AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, containerColor = Color.White,
+        title = { Text("筛选方案", fontSize = 20.sp, fontWeight = FontWeight.SemiBold) },
+        text = {
+            Column(Modifier.heightIn(max = 480.dp).imePadding().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(name, { name = it.take(AutoApplyRules.MAX_PRESET_NAME); error = null }, label = { Text("方案名称（最多 ${AutoApplyRules.MAX_PRESET_NAME} 字，同名覆盖）") },
+                    singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                Text("方案保存岗位关键词、排除词、最低月薪、城市和招呼语；黑名单、每日上限、间隔和简历对所有方案通用。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                settings.presets.forEach { preset ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(preset.name, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { onDelete(preset.id) }, enabled = !busy) { Icon(Icons.Outlined.DeleteOutline, "删除方案「${preset.name}」", tint = JobDanger) }
+                    }
+                    HorizontalDivider(color = JobLine)
+                }
+                error?.let { Text(it, color = JobDanger, fontSize = 12.sp) }
+            }
+        }, confirmButton = {
+            TextButton(enabled = !busy, onClick = {
+                try {
+                    require(name.isNotBlank()) { "请输入方案名称" }
+                    AutoApplyRules.validateSettings(AutoApplyRules.savePreset(settings, name, "check"))
+                    onSave(name)
+                } catch (exception: IllegalArgumentException) { error = exception.message }
+            }) { Text(if (busy) "保存中" else "保存当前规则") }
+        }, dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("取消") } })
 }
 
 private val recordTime = DateTimeFormatter.ofPattern("MM-dd HH:mm")
