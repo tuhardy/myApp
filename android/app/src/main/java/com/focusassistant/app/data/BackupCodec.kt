@@ -181,6 +181,7 @@ internal object JsonCodec {
         }))
         .put("activePresetId", nullable(value.activePresetId))
         .put("platform", value.platform.name).put("zhaopinDailyLimit", value.zhaopinDailyLimit).put("zhaopinCalibratedVersion", nullable(value.zhaopinCalibratedVersion))
+        .put("hideTargetPage", value.hideTargetPage).put("showOverlay", value.showOverlay)
     fun readAutoApplySettings(value: JSONObject) = AutoApplySettings(value.strings("includeKeywords"), value.strings("excludeKeywords"),
         value.nullableInteger("minSalaryK"), value.string("city"), value.strings("companyBlacklist"), value.integer("dailyLimit"), value.long("stepDelayMs"),
         value.string("greeting"), value.boolean("riskAccepted"), if (value.isNull("calibratedVersion")) null else value.string("calibratedVersion"),
@@ -199,7 +200,9 @@ internal object JsonCodec {
         // 0.9.12 及以前只有 BOSS。
         if (value.has("platform")) JobPlatform.valueOf(value.string("platform")) else JobPlatform.BOSS,
         if (value.has("zhaopinDailyLimit")) value.integer("zhaopinDailyLimit") else AutoApplyRules.DEFAULT_DAILY_LIMIT,
-        if (!value.has("zhaopinCalibratedVersion") || value.isNull("zhaopinCalibratedVersion")) null else value.string("zhaopinCalibratedVersion"))
+        if (!value.has("zhaopinCalibratedVersion") || value.isNull("zhaopinCalibratedVersion")) null else value.string("zhaopinCalibratedVersion"),
+        if (value.has("hideTargetPage")) value.boolean("hideTargetPage") else true,
+        if (value.has("showOverlay")) value.boolean("showOverlay") else true)
         .also { AutoApplyRules.validateSettings(it) }
     fun autoApplyRecord(value: AutoApplyRecord): JSONObject = JSONObject().put("id", value.id).put("jobKey", value.jobKey).put("company", value.company)
         .put("position", value.position).put("salary", value.salary).put("at", value.at).put("result", value.result.name).put("note", value.note).put("preset", value.preset).put("platform", value.platform.name)

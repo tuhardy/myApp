@@ -120,6 +120,21 @@ class AutoApplyTest {
         assertEquals(listOf(AutoApplyDecision.Apply, AutoApplyDecision.Skip("公司在黑名单「外包」")), step.run.preview.map { it.decision })
     }
 
+    @Test fun classifiesStopReasonsForNotifications() {
+        assertEquals(StopCategory.NO_JOBS, StopNotice.classify("列表没有更多新职位，已停止"))
+        assertEquals(StopCategory.NO_JOBS, StopNotice.classify("没有更多待发简历的新回复，已停止"))
+        assertEquals(StopCategory.NEED_RETURN_TO_LIST, StopNotice.classify("没有识别到职位列表，已停止"))
+        assertEquals(StopCategory.LIMIT_REACHED, StopNotice.classify("已达到今日上限 3 条，已停止"))
+        assertEquals(StopCategory.INTERNAL_ERROR, StopNotice.classify("内部错误（IllegalStateException），已停止"))
+        assertEquals(StopCategory.USER_STOPPED, StopNotice.classify("已手动停止"))
+        assertEquals(StopCategory.NEED_USER_ACTION, StopNotice.classify("出现安全验证，已停止；请手动处理后再开始"))
+        StopCategory.entries.forEach { category ->
+            val text = StopNotice.friendlyText(category)
+            assertFalse(text.contains("BOSS"))
+            assertFalse(text.contains("智联"))
+        }
+    }
+
     @Test fun stopsWhenListHasNoNewJobs() {
         var run = AutoApplyEngine.start(AutoApplyMode.LIVE, noon)
         val settings = AutoApplySettings(includeKeywords = listOf("iOS"))

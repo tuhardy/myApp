@@ -11,6 +11,29 @@ enum class JobPlatform(val packageName: String, val label: String, val short: St
     ZHAOPIN("com.zhaopin.social", "智联招聘", "智联")
 }
 
+enum class StopCategory { NO_JOBS, NEED_RETURN_TO_LIST, NEED_USER_ACTION, LIMIT_REACHED, INTERNAL_ERROR, USER_STOPPED, GENERIC }
+
+object StopNotice {
+    fun classify(reason: String): StopCategory = when {
+        reason.startsWith("内部错误") -> StopCategory.INTERNAL_ERROR
+        reason.contains("列表没有更多新职位") || reason.contains("没有更多待发简历") -> StopCategory.NO_JOBS
+        reason.contains("没有识别到职位列表") || reason.contains("没有识别到消息列表") -> StopCategory.NEED_RETURN_TO_LIST
+        reason.contains("已达到") && reason.contains("上限") -> StopCategory.LIMIT_REACHED
+        reason == "已手动停止" || reason == "已从通知停止" || reason == "诊断已结束" -> StopCategory.USER_STOPPED
+        else -> StopCategory.NEED_USER_ACTION
+    }
+
+    fun friendlyText(category: StopCategory): String = when (category) {
+        StopCategory.NO_JOBS -> "本轮没有更多可处理的项目，任务已停止"
+        StopCategory.NEED_RETURN_TO_LIST -> "需要返回列表页才能继续，任务已停止"
+        StopCategory.NEED_USER_ACTION -> "遇到需要处理的情况，任务已停止，请打开应用查看"
+        StopCategory.LIMIT_REACHED -> "今日数量已用完，任务已停止"
+        StopCategory.INTERNAL_ERROR -> "出现异常，任务已停止"
+        StopCategory.USER_STOPPED -> "任务已停止"
+        StopCategory.GENERIC -> "任务已停止，请打开应用查看详情"
+    }
+}
+
 data class AutoApplySettings(
     val includeKeywords: List<String> = emptyList(),
     val excludeKeywords: List<String> = emptyList(),
@@ -35,7 +58,11 @@ data class AutoApplySettings(
     val platform: JobPlatform = JobPlatform.BOSS,
     /** 上面的 dailyLimit / calibratedVersion 属于 BOSS；智联另存。 */
     val zhaopinDailyLimit: Int = AutoApplyRules.DEFAULT_DAILY_LIMIT,
-    val zhaopinCalibratedVersion: String? = null
+    val zhaopinCalibratedVersion: String? = null,
+    /** 真实执行时是否覆盖目标页面；诊断和试运行始终不覆盖。 */
+    val hideTargetPage: Boolean = true,
+    /** 运行时是否显示悬浮控制按钮；关闭后仍可通过通知控制。 */
+    val showOverlay: Boolean = true
 )
 
 data class FilterPreset(

@@ -246,8 +246,11 @@ class NativeUiModel : ViewModel() {
 }
 
 @Composable
-fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
+fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quickHideToken: Int = 0) {
     val context = LocalContext.current
+    LaunchedEffect(quickHideToken) {
+        if (quickHideToken > 0) ui.screen = Screen.PROJECTS
+    }
     val appContext = context.applicationContext
     val state by repository.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
@@ -265,7 +268,8 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
     val usageAllowed = remember(refresh) { usageMonitor.hasPermission() }
     val exactAllowed = remember(refresh) { TimerAlarmScheduler.canScheduleExactAlarms(context) }
     val bossStatus by BossAutomation.status.collectAsStateWithLifecycle()
-    val bossServiceEnabled = remember(refresh, bossStatus.connected) { BossAutomation.enabled(context) }
+    val bossServiceEnabled = remember(refresh, bossStatus.connected) { BossAutomation.tryReEnable(context); BossAutomation.enabled(context) }
+    val bossCanReEnable = remember(refresh) { BossAutomation.canReEnable(context) }
     // 运行中以任务平台为准，空闲时用设置里选中的平台。
     val jobPlatform = bossStatus.platform.takeIf { bossStatus.task != null } ?: state.autoApply.settings.platform
     val jobAppVersion = remember(refresh, jobPlatform) { BossUiMap.installedVersion(context, jobPlatform) }
@@ -586,7 +590,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                             bossStatus, bossServiceEnabled, jobAppVersion, AutoApplyRules.resumesSentOn(state.autoApply.records, today, ZoneId.systemDefault()),
                             AutoApplyRules.awaitingResume(state.autoApply.records).size, state.autoApply.records.sortedByDescending { it.at },
                             JobReview.summary(state.autoApply.records, state.jobOpportunities, today, 7, ZoneId.systemDefault()),
-                            JobReview.summary(state.autoApply.records, state.jobOpportunities, today, 30, ZoneId.systemDefault())),
+                            JobReview.summary(state.autoApply.records, state.jobOpportunities, today, 30, ZoneId.systemDefault()), bossCanReEnable),
                         autoActions = AutoApplyActions(
                             openAccessibility = { context.startActivity(BossAutomation.settingsIntent()) },
                             acceptRisk = { ui.open("auto-risk") },
@@ -607,7 +611,10 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                             applyPreset = { id -> ui.perform { repository.applyFilterPreset(id); ui.message("已切换到方案「${state.autoApply.settings.presets.find { it.id == id }?.name.orEmpty()}」") } },
                             managePresets = { ui.open("auto-presets") },
                             editStage = { ui.open("job-stage", it) },
-                            selectPlatform = { platform -> ui.perform { repository.saveAutoApplySettings(state.autoApply.settings.copy(platform = platform)) } }),
+                            selectPlatform = { platform -> ui.perform { repository.saveAutoApplySettings(state.autoApply.settings.copy(platform = platform)) } },
+                            setHideTargetPage = { value -> ui.perform { repository.saveAutoApplySettings(state.autoApply.settings.copy(hideTargetPage = value)) } },
+                            setShowOverlay = { value -> ui.perform { repository.saveAutoApplySettings(state.autoApply.settings.copy(showOverlay = value)) } },
+                            keepEnabledHelp = { ui.open("auto-keep-enabled") }),
                         onBack = { ui.screen = Screen.SETTINGS },
                         onAdd = { ui.open("job-edit") },
                         onEdit = { ui.open("job-edit", it) },
@@ -789,6 +796,11 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             }
             "auto-risk" -> AutoApplyRiskDialog(ui.busy, { ui.close() }) {
                 ui.perform { repository.saveAutoApplySettings(state.autoApply.settings.copy(riskAccepted = true)); ui.close(); ui.message("已确认风险。建议先做界面诊断和试运行。") }
+            }
+            "auto-keep-enabled" -> KeepEnabledDialog(BossAutomation.grantCommand(context), bossCanReEnable, { ui.close() }) {
+                val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("adb", BossAutomation.grantCommand(context)))
+                ui.message("命令已复制")
             }
             "auto-rules" -> AutoApplyRulesDialog(state.autoApply.settings, ui.busy, { ui.close() }) { value ->
                 // 有当前方案时同步更新该方案，避免切换回来时丢失刚改的规则。

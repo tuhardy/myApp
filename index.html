@@ -264,6 +264,7 @@
             <section class="auto-apply-card auto-readiness" aria-labelledby="auto-ready-heading">
               <div class="auto-apply-heading"><h3 id="auto-ready-heading">准备</h3></div>
               <ol id="auto-apply-checklist" class="auto-steps"></ol>
+              <button type="button" id="auto-keep-enabled" class="text-button">总要重新开启无障碍？设置自动恢复</button>
             </section>
             <div class="job-tabs" role="tablist" aria-label="求职辅助分区">
               <button type="button" role="tab" id="job-tab-contact" data-job-tab="contact" aria-controls="job-panel-contact" aria-selected="true">沟通</button>
@@ -318,7 +319,7 @@
               <div class="job-stage-filter" id="job-stage-filter" role="group" aria-label="按阶段筛选"></div>
               <div id="job-assist-list" class="job-assist-list"></div>
             </section>
-            <details class="auto-apply-card auto-advanced"><summary>高级 · 界面诊断</summary><p class="job-assist-privacy">Android 版识别不了 BOSS 或智联界面时，可导出控件结构给开发者核对；只记录控件结构和文字长度，不含职位与聊天正文。App 更新后需重新诊断和试运行。原型没有界面诊断。</p></details>
+            <details class="auto-apply-card auto-advanced"><summary>高级 · 界面诊断与显示</summary><div class="auto-advanced-body"><label class="toggle-row"><span><strong>隐藏招聘页面</strong><small>仅演示设置；Android 真实执行时用专注助手遮罩覆盖页面</small></span><input id="auto-hide-target-page" type="checkbox" checked></label><label class="toggle-row"><span><strong>显示悬浮控制按钮</strong><small>关闭后 Android 仍可从通知控制任务</small></span><input id="auto-show-overlay" type="checkbox" checked></label><p class="job-assist-privacy">Android 版识别不了 BOSS 或智联界面时，可导出控件结构给开发者核对；只记录控件结构和文字长度，不含职位与聊天正文。App 更新后需重新诊断和试运行。原型没有界面诊断。</p></div></details>
             <p class="job-assist-privacy">Android 运行时显示悬浮按钮并保持亮屏；触碰、离开所选招聘 App 或熄屏会暂停，可从悬浮按钮继续或停止。职位、简历名称、规则和模拟记录仅保存在当前页面内存，刷新后清空。</p>
           </section>
         </div>

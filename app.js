@@ -3511,6 +3511,10 @@
       zhaopin ? null : settings.greeting ? "自定义招呼语" : "BOSS 默认招呼语",
     ].filter(Boolean).join(" · ");
     renderAutoPresets(auto, settings);
+    const hideTarget = $("auto-hide-target-page");
+    const showOverlay = $("auto-show-overlay");
+    if (hideTarget) hideTarget.checked = settings.hideTargetPage !== false;
+    if (showOverlay) showOverlay.checked = settings.showOverlay !== false;
     $("auto-apply-edit-rules").disabled = running;
     $("auto-apply-dry-run").disabled = running;
     $("auto-apply-start").disabled = running || !calibrated;
@@ -4722,6 +4726,22 @@
   $("auto-pause").addEventListener("click", toggleAutoPause);
   $("auto-stop").addEventListener("click", stopAutoRun);
   $("auto-apply-edit-rules").addEventListener("click", autoApplyRulesDialog);
+  $("auto-keep-enabled").addEventListener("click", () => {
+    const body = element("div", "job-assist-form");
+    body.append(
+      element("p", "job-assist-privacy", "Android 系统会在应用更新、崩溃或被清理后关闭无障碍。电脑连接手机（开启 USB 调试）执行一次下面的命令，之后回到应用即可自动恢复开启："),
+      element("code", "auto-command", "adb shell pm grant com.focusassistant.app android.permission.WRITE_SECURE_SETTINGS"),
+      element("p", "job-assist-privacy", "同时建议在系统设置里把专注助手设为「省电无限制 / 允许自启动」。原型仅展示说明，不读写系统设置。"));
+    showModal("免重复开启无障碍", body);
+  });
+  $("auto-hide-target-page").addEventListener("change", event => {
+    state.autoApply.settings = FocusModel.validateAutoApplySettings({ ...state.autoApply.settings, hideTargetPage: event.target.checked });
+    renderAutoApply();
+  });
+  $("auto-show-overlay").addEventListener("change", event => {
+    state.autoApply.settings = FocusModel.validateAutoApplySettings({ ...state.autoApply.settings, showOverlay: event.target.checked });
+    renderAutoApply();
+  });
   $("auto-apply-dry-run").addEventListener("click", () => runAutoApply(true));
   document.querySelectorAll("[data-platform]").forEach(button => {
     button.addEventListener("click", () => chooseAutoPlatform(button.dataset.platform));

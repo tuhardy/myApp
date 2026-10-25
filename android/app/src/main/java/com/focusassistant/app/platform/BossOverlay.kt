@@ -25,22 +25,32 @@ internal class BossOverlay(
     private val service: AccessibilityService,
     private val onToggle: () -> Unit,
     private val onStop: () -> Unit,
-    private val onCapture: () -> Unit
+    private val onCapture: () -> Unit,
+    private val onQuickHide: () -> Unit,
+    private val onToggleMask: () -> Unit
 ) {
     private val windowManager = service.getSystemService(WindowManager::class.java)
     private val orange = ContextCompat.getColor(service, R.color.focus_orange)
     private val ink = Color.parseColor("#2B2724")
     private val muted = Color.parseColor("#77706A")
     private var root: LinearLayout? = null
+    private var mask: View? = null
     private lateinit var bubble: TextView
     private lateinit var panel: LinearLayout
     private lateinit var status: TextView
     private lateinit var toggle: TextView
+    private lateinit var maskButton: TextView
     private val params = WindowManager.LayoutParams(
         WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
         WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
         PixelFormat.TRANSLUCENT
+    ).apply { gravity = Gravity.TOP or Gravity.START }
+    private val maskParams = WindowManager.LayoutParams(
+        WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+        PixelFormat.OPAQUE
     ).apply { gravity = Gravity.TOP or Gravity.START }
 
     private fun dp(value: Int): Int = (value * service.resources.displayMetrics.density).toInt()
@@ -62,8 +72,29 @@ internal class BossOverlay(
     }
 
     @SuppressLint("ClickableViewAccessibility")
-    fun show(diagnose: Boolean) {
-        if (root != null) return
+    fun show(diagnose: Boolean, masked: Boolean, showControl: Boolean) {
+        if (root != null || (!showControl && !masked)) return
+        mask = LinearLayout(service).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(32), dp(48), dp(32), dp(48))
+            setBackgroundColor(ContextCompat.getColor(service, R.color.focus_white))
+            addView(TextView(service).apply {
+                text = "专注助手"
+                textSize = 28f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                setTextColor(ink)
+            })
+            addView(TextView(service).apply {
+                text = "专注中"
+                textSize = 16f
+                gravity = Gravity.CENTER
+                setTextColor(muted)
+                setPadding(0, dp(12), 0, 0)
+            })
+        }
+        if (masked) runCatching { windowManager.addView(mask, maskParams) }.onFailure { mask = null }
         bubble = TextView(service).apply {
             width = dp(52); height = dp(52)
             gravity = Gravity.CENTER
@@ -72,17 +103,24 @@ internal class BossOverlay(
             setTextColor(Color.WHITE)
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(orange); setStroke(dp(3), Color.WHITE) }
             elevation = dp(6).toFloat()
-            contentDescription = "自动投递控制"
+            contentDescription = "任务控制"
         }
         status = TextView(service).apply { textSize = 13f; setTextColor(muted); maxWidth = dp(240) }
         toggle = action("暂停", true) { onToggle() }
         val buttons = LinearLayout(service).apply {
-            orientation = LinearLayout.HORIZONTAL
+            orientation = LinearLayout.VERTICAL
             setPadding(0, dp(10), 0, 0)
             if (!diagnose) addView(toggle)
+            if (!diagnose) addView(action("暂停并返回", false) { onQuickHide() },
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
+            if (!diagnose) {
+                maskButton = action(if (masked) "取消隐藏" else "隐藏", false) { onToggleMask() }
+                addView(maskButton,
+                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
+            }
             if (diagnose) addView(action("记录本页", true) { onCapture() })
             addView(action(if (diagnose) "结束" else "停止", false) { onStop() },
-                LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
         }
         panel = LinearLayout(service).apply {
             orientation = LinearLayout.VERTICAL
@@ -118,7 +156,7 @@ internal class BossOverlay(
         val metrics = service.resources.displayMetrics
         params.x = metrics.widthPixels - dp(76)
         params.y = metrics.heightPixels / 3
-        runCatching { windowManager.addView(layout, params) }.onSuccess { root = layout }
+        if (showControl) runCatching { windowManager.addView(layout, params) }.onSuccess { root = layout }
     }
 
     fun update(bubbleText: String, statusText: String, paused: Boolean) {
@@ -128,7 +166,18 @@ internal class BossOverlay(
         toggle.text = if (paused) "继续" else "暂停"
     }
 
+    fun setMask(enabled: Boolean) {
+        val current = mask
+        if (current != null) {
+            if (enabled && current.parent == null) runCatching { windowManager.addView(current, maskParams) }
+            if (!enabled && current.parent != null) runCatching { windowManager.removeView(current) }
+        }
+        if (::maskButton.isInitialized) maskButton.text = if (enabled) "取消隐藏" else "隐藏"
+    }
+
     fun hide() {
+        mask?.let { runCatching { windowManager.removeView(it) } }
+        mask = null
         root?.let { runCatching { windowManager.removeView(it) } }
         root = null
     }

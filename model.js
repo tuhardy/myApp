@@ -1361,7 +1361,7 @@
 
   function defaultAutoApplySettings() {
     return { includeKeywords: [], excludeKeywords: [], minSalaryK: null, city: "", companyBlacklist: [], dailyLimit: AUTO_APPLY_LIMITS.defaultDailyLimit, stepDelaySeconds: AUTO_APPLY_LIMITS.defaultStepDelaySeconds, greeting: "", riskAccepted: false, resumes: [], presets: [], activePresetId: null,
-      platform: "boss", zhaopinDailyLimit: AUTO_APPLY_LIMITS.defaultDailyLimit };
+      platform: "boss", zhaopinDailyLimit: AUTO_APPLY_LIMITS.defaultDailyLimit, hideTargetPage: true, showOverlay: true };
   }
 
   /** dailyLimit 属于 BOSS；智联另存 zhaopinDailyLimit。 */

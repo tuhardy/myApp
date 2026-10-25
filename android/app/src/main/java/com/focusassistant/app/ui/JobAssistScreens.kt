@@ -72,7 +72,9 @@ internal data class AutoApplyPanel(
     val records: List<AutoApplyRecord> = emptyList(),
     /** 数据复盘：近 7 天与近 30 天，由 JobReview.summary 计算。 */
     val reviewWeek: JobReviewSummary? = null,
-    val reviewMonth: JobReviewSummary? = null
+    val reviewMonth: JobReviewSummary? = null,
+    /** 已用 adb 授予 WRITE_SECURE_SETTINGS，无障碍被系统关掉后会自动恢复。 */
+    val canReEnable: Boolean = false
 )
 
 internal class AutoApplyActions(
@@ -95,7 +97,10 @@ internal class AutoApplyActions(
     val applyPreset: (String) -> Unit = {},
     val managePresets: () -> Unit = {},
     val editStage: (String) -> Unit = {},
-    val selectPlatform: (JobPlatform) -> Unit = {}
+    val selectPlatform: (JobPlatform) -> Unit = {},
+    val setHideTargetPage: (Boolean) -> Unit = {},
+    val setShowOverlay: (Boolean) -> Unit = {},
+    val keepEnabledHelp: () -> Unit = {}
 )
 
 private enum class JobTab(val label: String) { CONTACT("沟通"), RESUME("简历"), PROGRESS("进度"), DATA("数据") }
@@ -335,7 +340,27 @@ private fun ReadinessCard(auto: AutoApplyPanel, actions: AutoApplyActions, busy:
                 }
             }
         }
+        if (!ready || expanded) TextButton(onClick = actions.keepEnabledHelp, contentPadding = PaddingValues(0.dp)) {
+            Text(if (auto.canReEnable) "✓ 已开启自动恢复无障碍" else "总要重新开启无障碍？设置自动恢复", fontSize = 12.sp, color = AccentDark)
+        }
     }
+}
+
+@Composable
+internal fun KeepEnabledDialog(command: String, granted: Boolean, onDismiss: () -> Unit, onCopy: () -> Unit) {
+    AlertDialog(onDismissRequest = onDismiss, containerColor = Color.White,
+        title = { Text("免重复开启无障碍", fontSize = 20.sp, fontWeight = FontWeight.SemiBold) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(if (granted) "已授权：服务被系统关掉后，回到本应用会自动重新开启。" else "系统会在应用更新、崩溃或被清理后关闭无障碍。电脑连接手机（开启 USB 调试）执行一次下面的命令，之后回到本应用即可自动恢复开启：",
+                    color = Muted, fontSize = 13.sp, lineHeight = 20.sp)
+                Text(command, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(SoftSurface).padding(10.dp))
+                Text("同时建议在系统设置里把专注助手设为「省电无限制 / 允许自启动」，并在最近任务里锁定，减少被系统清理。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+                Text("授权只在本机生效，卸载重装需重新执行；本应用不联网，也不会用它修改其他设置。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+            }
+        },
+        confirmButton = { TextButton(onClick = onCopy) { Text("复制命令") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("关闭") } })
 }
 
 @Composable
@@ -654,11 +679,23 @@ private fun AdvancedSection(auto: AutoApplyPanel, actions: AutoApplyActions, bus
         if (expanded) Column(Modifier.padding(bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("识别不了${auto.settings.platform.short}界面时，用诊断导出控件结构给开发者核对。只记录控件结构和文字长度，不含职位与聊天正文；App 更新后需要重新诊断和试运行。",
                 color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
+            SettingSwitch("隐藏招聘页面", auto.settings.hideTargetPage, !running) { actions.setHideTargetPage(it) }
+            Text("真实执行时用专注助手遮罩覆盖招聘页面；诊断和试运行不隐藏。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+            SettingSwitch("显示悬浮控制按钮", auto.settings.showOverlay, !running) { actions.setShowOverlay(it) }
+            Text("关闭后仍可从通知暂停、继续或停止。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = actions.diagnose, enabled = !busy && !running, modifier = Modifier.weight(1f)) { Text("界面诊断", maxLines = 1) }
                 OutlinedButton(onClick = actions.exportDiagnostics, enabled = !busy && auto.status.diagnostics > 0, modifier = Modifier.weight(1f)) { Text("导出 ${auto.status.diagnostics} 页", maxLines = 1) }
             }
         }
+    }
+}
+
+@Composable
+private fun SettingSwitch(label: String, checked: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+        Switch(checked, onChange, enabled = enabled, colors = SwitchDefaults.colors(checkedTrackColor = Accent))
     }
 }
 
