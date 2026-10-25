@@ -160,12 +160,13 @@ internal object JsonCodec {
     fun jobOpportunity(value: JobOpportunity): JSONObject = JSONObject().put("id", value.id).put("company", value.company).put("position", value.position)
         .put("description", value.description).put("message", value.message).put("status", value.status.name)
         .put("createdAt", value.createdAt).put("updatedAt", value.updatedAt)
-        .put("note", value.note).put("salary", value.salary).put("source", value.source.name).put("preset", value.preset).put("outcome", nullable(value.outcome?.name))
+        .put("note", value.note).put("salary", value.salary).put("source", value.source.name).put("preset", value.preset).put("outcome", nullable(value.outcome?.name)).put("platform", nullable(value.platform?.name))
     // 0.9.11 及以前没有备注、来源、方案与手动结果，读取时给默认值。
     fun readJobOpportunity(value: JSONObject) = JobOpportunity(value.string("id"), value.string("company"), value.string("position"),
         value.string("description"), value.string("message"), JobAssistStatus.valueOf(value.string("status")), value.long("createdAt"), value.long("updatedAt"),
         value.optionalString("note"), value.optionalString("salary"), if (value.has("source")) JobSource.valueOf(value.string("source")) else JobSource.MANUAL,
-        value.optionalString("preset"), if (!value.has("outcome") || value.isNull("outcome")) null else JobOutcome.valueOf(value.string("outcome")))
+        value.optionalString("preset"), if (!value.has("outcome") || value.isNull("outcome")) null else JobOutcome.valueOf(value.string("outcome")),
+        if (!value.has("platform") || value.isNull("platform")) null else JobPlatform.valueOf(value.string("platform")))
         .also { JobAssistRules.validate(it) }
     fun autoApplySettings(value: AutoApplySettings): JSONObject = JSONObject()
         .put("includeKeywords", JSONArray(value.includeKeywords)).put("excludeKeywords", JSONArray(value.excludeKeywords))
@@ -179,6 +180,7 @@ internal object JsonCodec {
                 .put("minSalaryK", nullable(it.minSalaryK)).put("city", it.city).put("greeting", it.greeting)
         }))
         .put("activePresetId", nullable(value.activePresetId))
+        .put("platform", value.platform.name).put("zhaopinDailyLimit", value.zhaopinDailyLimit).put("zhaopinCalibratedVersion", nullable(value.zhaopinCalibratedVersion))
     fun readAutoApplySettings(value: JSONObject) = AutoApplySettings(value.strings("includeKeywords"), value.strings("excludeKeywords"),
         value.nullableInteger("minSalaryK"), value.string("city"), value.strings("companyBlacklist"), value.integer("dailyLimit"), value.long("stepDelayMs"),
         value.string("greeting"), value.boolean("riskAccepted"), if (value.isNull("calibratedVersion")) null else value.string("calibratedVersion"),
@@ -193,12 +195,17 @@ internal object JsonCodec {
         if (value.has("presets")) value.objects("presets", AutoApplyRules.MAX_PRESETS).map {
             FilterPreset(it.string("id"), it.string("name"), it.strings("includeKeywords"), it.strings("excludeKeywords"), it.nullableInteger("minSalaryK"), it.string("city"), it.string("greeting"))
         } else emptyList(),
-        if (!value.has("activePresetId") || value.isNull("activePresetId")) null else value.string("activePresetId"))
+        if (!value.has("activePresetId") || value.isNull("activePresetId")) null else value.string("activePresetId"),
+        // 0.9.12 及以前只有 BOSS。
+        if (value.has("platform")) JobPlatform.valueOf(value.string("platform")) else JobPlatform.BOSS,
+        if (value.has("zhaopinDailyLimit")) value.integer("zhaopinDailyLimit") else AutoApplyRules.DEFAULT_DAILY_LIMIT,
+        if (!value.has("zhaopinCalibratedVersion") || value.isNull("zhaopinCalibratedVersion")) null else value.string("zhaopinCalibratedVersion"))
         .also { AutoApplyRules.validateSettings(it) }
     fun autoApplyRecord(value: AutoApplyRecord): JSONObject = JSONObject().put("id", value.id).put("jobKey", value.jobKey).put("company", value.company)
-        .put("position", value.position).put("salary", value.salary).put("at", value.at).put("result", value.result.name).put("note", value.note).put("preset", value.preset)
+        .put("position", value.position).put("salary", value.salary).put("at", value.at).put("result", value.result.name).put("note", value.note).put("preset", value.preset).put("platform", value.platform.name)
     fun readAutoApplyRecord(value: JSONObject) = AutoApplyRecord(value.string("id"), value.string("jobKey"), value.string("company"), value.string("position"),
-        value.string("salary"), value.long("at"), AutoApplyResult.valueOf(value.string("result")), value.string("note"), value.optionalString("preset")).also { AutoApplyRules.validateRecord(it) }
+        value.string("salary"), value.long("at"), AutoApplyResult.valueOf(value.string("result")), value.string("note"), value.optionalString("preset"),
+        if (value.has("platform")) JobPlatform.valueOf(value.string("platform")) else JobPlatform.BOSS).also { AutoApplyRules.validateRecord(it) }
     fun readTimer(value: JSONObject) = ActiveTimer(value.string("sessionId"), value.string("projectId"), value.string("projectTitle"), value.string("category"), TimerMode.valueOf(value.string("timerMode")), value.nullableInteger("targetMinutes"),
         TimerPhase.valueOf(value.string("phase")), TimerStatus.valueOf(value.string("status")), value.long("startedAt"),
         value.long("accumulatedMs"), value.long("anchorElapsed"), value.long("anchorWall"), value.integer("bootCount"), value.objects("segments", 10000).map(::readSegment), value.boolean("targetNotified"), value.boolean("recoveryPending"))

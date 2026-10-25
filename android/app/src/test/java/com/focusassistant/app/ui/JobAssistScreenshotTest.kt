@@ -55,11 +55,12 @@ class JobAssistScreenshotTest {
         }
     }
 
-    private fun show(applied: MutableList<String> = mutableListOf(), staged: MutableList<String> = mutableListOf()) {
+    private fun show(applied: MutableList<String> = mutableListOf(), staged: MutableList<String> = mutableListOf(),
+        platforms: MutableList<JobPlatform> = mutableListOf(), settings: AutoApplySettings = this.settings) {
         val panel = AutoApplyPanel(settings, 1, BossAutomationStatus(connected = true), true, "13.0", 1, 0, records.sortedByDescending { it.at },
             JobReview.summary(records, jobs, today, 7, zone), JobReview.summary(records, jobs, today, 30, zone))
         val actions = AutoApplyActions({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-            applyPreset = { applied += it }, managePresets = {}, editStage = { staged += it })
+            applyPreset = { applied += it }, managePresets = {}, editStage = { staged += it }, selectPlatform = { platforms += it })
         compose.setContent {
             FocusTheme { JobAssistScreen(jobs, false, panel, actions, {}, {}, {}, {}) }
         }
@@ -73,7 +74,7 @@ class JobAssistScreenshotTest {
         compose.onNodeWithText("面试 1").performClick()
         compose.onAllNodesWithText("阶段与备注").assertCountEquals(1)
         compose.onNodeWithText("周三一面").assertExists()
-        compose.onNodeWithText("自动沟通加入 · 方案 Android·北京").assertExists()
+        compose.onNodeWithText("BOSS 自动加入 · 方案 Android·北京").assertExists()
         compose.onNodeWithText("阶段与备注").performClick()
         assertEquals(1, staged.size)
         compose.onNodeWithText("全部 4").performClick()
@@ -105,5 +106,25 @@ class JobAssistScreenshotTest {
         compose.onNodeWithText("Android·北京").performClick()
         assertEquals(listOf("p2"), applied)
         compose.onNodeWithText("管理方案").assertExists()
+    }
+
+    @Test fun platformSwitchReportsSelection() {
+        val platforms = mutableListOf<JobPlatform>()
+        show(platforms = platforms)
+        compose.onNodeWithText("智联招聘").performClick()
+        assertEquals(listOf(JobPlatform.ZHAOPIN), platforms)
+    }
+
+    // setContent 每个测试只能调用一次，智联界面单独一个用例。
+    @Test fun zhaopinShowsApplyCountsAndHidesResumeReply() {
+        show(settings = settings.copy(platform = JobPlatform.ZHAOPIN, zhaopinDailyLimit = 20))
+        compose.onNodeWithText("智联自动投递").assertExists()
+        compose.onNodeWithText("今日投递").assertExists()
+        compose.onNodeWithText("开始投递").assertExists()
+        compose.onNodeWithText("待回复").assertDoesNotExist()
+        capture("job-assist-zhaopin")
+        compose.onNodeWithText("简历").performClick()
+        compose.onNodeWithText("投递用简历").assertExists()
+        compose.onNodeWithText("开始发简历").assertDoesNotExist()
     }
 }

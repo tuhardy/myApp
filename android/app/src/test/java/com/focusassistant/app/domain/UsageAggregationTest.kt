@@ -16,6 +16,10 @@ class UsageAggregationTest {
         val range = UsageOverviewRange(date, week, utc)
         return UsageAggregation(range.start, minOf(range.end, millis(end)), range)
     }
+    private fun aggregate(date: LocalDate = today, period: UsagePeriod, end: String = "2025-01-09T00:00:00Z"): UsageAggregation {
+        val range = UsageOverviewRange(date, period, utc)
+        return UsageAggregation(range.start, minOf(range.end, millis(end)), range)
+    }
     private fun assertConsistent(aggregation: UsageAggregation) {
         assertEquals(aggregation.totals.values.sum(), aggregation.buckets.sumOf { it.durationMillis })
     }
@@ -195,6 +199,53 @@ class UsageAggregationTest {
         assertEquals(23 * HOUR_MS, result.buckets.last().durationMillis)
         assertEquals(23 * HOUR_MS, result.todayMillis)
         assertEquals(167 * HOUR_MS, result.totals["app"])
+        assertConsistent(result)
+    }
+
+    @Test fun monthHasOneBucketPerCalendarDayAndSplitsAtMidnight() {
+        val result = aggregate(period = UsagePeriod.MONTH)
+        result.segment("2025-01-07T23:30:00Z", "2025-01-08T00:30:00Z")
+        assertEquals(31, result.buckets.size)
+        assertEquals((1..31).map { it.toString() }, result.buckets.map { it.label })
+        assertEquals(1_800_000L, result.buckets[6].durationMillis)
+        assertEquals(1_800_000L, result.buckets[7].durationMillis)
+        assertEquals(1_800_000L, result.todayMillis)
+        assertEquals(3_600_000L, result.totals["app"])
+        assertConsistent(result)
+    }
+
+    @Test fun februaryLeapYearHasTwentyNineDayBuckets() {
+        val range = UsageOverviewRange(LocalDate.parse("2024-02-15"), UsagePeriod.MONTH, utc)
+        assertEquals(29, range.buckets.size)
+        assertEquals(millis("2024-02-01T00:00:00Z"), range.start)
+        assertEquals(millis("2024-03-01T00:00:00Z"), range.end)
+    }
+
+    @Test fun yearHasTwelveMonthBucketsAndTodayIsNotYearTotal() {
+        val result = aggregate(period = UsagePeriod.YEAR)
+        result.segment("2024-12-31T23:30:00Z", "2025-01-01T00:30:00Z")
+        result.segment("2025-01-08T10:00:00Z", "2025-01-08T11:00:00Z")
+        assertEquals(12, result.buckets.size)
+        assertEquals((1..12).map { "${it}月" }, result.buckets.map { it.label })
+        assertEquals(millis("2025-01-01T00:00:00Z"), UsageOverviewRange(today, UsagePeriod.YEAR, utc).start)
+        assertEquals(millis("2026-01-01T00:00:00Z"), UsageOverviewRange(today, UsagePeriod.YEAR, utc).end)
+        assertEquals(5_400_000L, result.buckets[0].durationMillis)
+        assertEquals(3_600_000L, result.todayMillis)
+        assertEquals(5_400_000L, result.totals["app"])
+        assertTrue(result.buckets.drop(1).none { it.available })
+        assertConsistent(result)
+    }
+
+    @Test fun monthDoesNotTreatEarlierDataAsTodayAvailability() {
+        val result = aggregate(period = UsagePeriod.MONTH, end = "2025-01-08T12:00:00Z")
+        result.segment("2025-01-03T09:00:00Z", "2025-01-03T10:00:00Z")
+        result.recordEvent(millis("2025-01-07T09:00:00Z"))
+        assertTrue(result.hasData)
+        assertNull(result.todayMillis)
+        assertFalse(result.buckets[7].available)
+        result.recordEvent(millis("2025-01-08T09:00:00Z"))
+        assertEquals(0L, result.todayMillis)
+        assertTrue(result.buckets[7].available)
         assertConsistent(result)
     }
 

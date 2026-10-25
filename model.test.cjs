@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { Timer, LIMITS, MODES, USAGE, CATEGORIES, initialTasks, taskSummary, groupTasks, validateTask, validateSteps, taskAge, taskProgress, nextStep, daysBetween, formatTime } = require("./model.js");
-const { sampleUsageSegments, focusSpans, usageDaySummary } = require("./model.js");
+const { sampleUsageSegments, sampleUsageSegmentsForDate, focusSpans, usageDaySummary, usagePeriodSummary, USAGE_PERIODS } = require("./model.js");
 const { localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv } = require("./model.js");
 const { completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks } = require("./model.js");
 const { execFileSync } = require("node:child_process");
@@ -857,10 +857,9 @@ test("待办列表隔离实例，空列表进度不产生 NaN", () => {
 });
 
 test("示例统计的总时长、图表与应用分项保持一致", () => {
-  for (const data of [USAGE.today, USAGE.week]) {
-    assert.equal(data.apps.reduce((sum, app) => sum + app.minutes, 0), data.total);
-    assert.equal(data.bars.reduce((sum, value) => sum + value, 0), data.total);
-  }
+  assert.equal(USAGE.today.apps.reduce((sum, app) => sum + app.minutes, 0), USAGE.today.total);
+  assert.equal(USAGE.today.bars.reduce((sum, value) => sum + value, 0), USAGE.today.total);
+  assert.equal(USAGE.week.bars.reduce((sum, value) => sum + value, 0), 1440);
   assert.equal(USAGE.week.bars.at(-1), USAGE.today.total);
 });
 
@@ -909,6 +908,37 @@ test("专注片段按活动段裁剪，重叠计数只算与专注相交的用�
     { app: "微信", startedAt: at(9, 55), endedAt: at(10, 5) },
   ];
   assert.equal(usageDaySummary(segments, spans, anchor).overlapCount, 2);
+});
+
+test("用时页周期汇总覆盖今日本周本月全年，且与按日示例一致", () => {
+  const now = new Date(2026, 9, 20, 12);
+  const today = usagePeriodSummary([], "today", now);
+  assert.equal(today.total, USAGE.today.total);
+  assert.deepEqual(today.apps, USAGE.today.apps.map(({ name, minutes }) => ({ name, minutes })));
+  assert.equal(sampleUsageSegmentsForDate(now, now).length, sampleUsageSegments(now).length);
+  assert.equal(usageDaySummary(sampleUsageSegmentsForDate(new Date(2026, 9, 19), now), [], new Date(2026, 9, 19)).total, USAGE.week.bars[0]);
+  const week = usagePeriodSummary([], "week", now);
+  assert.equal(week.bars.length, 7);
+  assert.deepEqual(week.bars.map(bar => bar.minutes), [210, 204, 192, 198, 216, 240, 204]);
+  assert.deepEqual(week.bars.map(bar => bar.label), USAGE.week.labels);
+  assert.equal(week.bars[1].current, true);
+  assert.equal(week.total, week.bars.reduce((sum, bar) => sum + bar.minutes, 0));
+  assert.equal(week.apps.reduce((sum, app) => sum + app.minutes, 0), week.total);
+  const month = usagePeriodSummary([], "month", now);
+  assert.equal(month.bars.length, 31);
+  assert.deepEqual(month.bars.map(bar => bar.label), Array.from({ length: 31 }, (_, index) => String(index + 1)));
+  assert.equal(month.bars[19].minutes, USAGE.today.total);
+  assert.equal(month.bars[19].current, true);
+  assert.equal(month.total, month.bars.reduce((sum, bar) => sum + bar.minutes, 0));
+  assert.equal(month.apps.reduce((sum, app) => sum + app.minutes, 0), month.total);
+  const year = usagePeriodSummary([], "year", now);
+  assert.equal(year.bars.length, 12);
+  assert.deepEqual(year.bars.map(bar => bar.label), Array.from({ length: 12 }, (_, month) => `${month + 1}月`));
+  assert.equal(year.bars[9].minutes, month.total);
+  assert.equal(year.bars[9].current, true);
+  assert.equal(year.total, year.bars.reduce((sum, bar) => sum + bar.minutes, 0));
+  assert.deepEqual([...USAGE_PERIODS], ["today", "week", "month", "year"]);
+  assert.throws(() => usagePeriodSummary([], "all", now), /用时周期/);
 });
 
 test("HTML ID 唯一且 app.js 的固定 ID 引用存在", () => {
@@ -1679,4 +1709,42 @@ test("数据复盘：漏斗按职位去重、每日数组含今天、按方案�
   assert.deepEqual(week.byPreset, [{ preset: "北京", contacted: 2, resumes: 1 }, { preset: "远程", contacted: 1, resumes: 0 }]);
   assert.equal(jobReviewSummary(records, jobs, today, 30).funnel.contacted, 4);
   assert.equal(jobReviewSummary([], [], today, 30).dailyContacted.length, 30);
+});
+
+test("智联：去重、计数与上限按平台分开，投递记为 applied 并按名称选简历", () => {
+  const { defaultAutoApplySettings, simulateAutoApply, autoApplyDecision, autoApplyContactedOn, autoApplyLimit, awaitingResume, autoApplyEntry, validateAutoApplySettings, JOB_PLATFORMS } = require("./model.js");
+  const day = "2026-10-25";
+  const card = { position: "Android 开发", company: "示例科技", salary: "20-30K", city: "上海" };
+  const boss = { jobKey: "示例科技|android 开发|20-30k", company: "示例科技", position: "Android 开发", day, result: "contacted" };
+  assert.equal(autoApplyDecision(card, defaultAutoApplySettings(), [boss], day, "zhaopin").apply, true);
+  assert.equal(autoApplyDecision(card, defaultAutoApplySettings(), [{ ...boss, platform: "zhaopin", result: "applied" }], day, "zhaopin").reason, "已投递过");
+  const settings = { ...defaultAutoApplySettings(), platform: "zhaopin", zhaopinDailyLimit: 1, resumes: [{ id: "a", name: "张三-Android", keywords: ["Android"], isDefault: false }] };
+  assert.equal(autoApplyLimit(settings), 1);
+  assert.equal(autoApplyLimit(settings, "boss"), 30);
+  const run = simulateAutoApply([card, { ...card, company: "演示网络" }], settings, [boss], day, false);
+  assert.equal(run.records.length, 1);
+  assert.deepEqual([run.records[0].result, run.records[0].platform, run.records[0].note], ["applied", "zhaopin", "简历：张三-Android"]);
+  assert.match(run.stopReason, /智联今日上限 1/);
+  const all = [boss, ...run.records];
+  assert.equal(autoApplyContactedOn(all, day), 1);
+  assert.equal(autoApplyContactedOn(all, day, "zhaopin"), 1);
+  assert.deepEqual(awaitingResume(all), [boss]);
+  assert.equal(autoApplyEntry({ task: "contact", contacted: 1, limit: 1, platform: "zhaopin" }).summary, "智联 · 投递 1/1");
+  assert.throws(() => validateAutoApplySettings({ zhaopinDailyLimit: 101 }));
+  assert.throws(() => validateAutoApplySettings({ platform: "other" }));
+  assert.equal(JOB_PLATFORMS.zhaopin.short, "智联");
+});
+
+test("智联投递建档进入已发简历阶段、标注来源，并计入复盘的已发简历", () => {
+  const { upsertJobFromRecord, jobStage, jobReviewSummary, JOB_ASSIST_STATUS } = require("./model.js");
+  const day = localDateKey(new Date(2026, 9, 25));
+  const applied = { jobKey: "k", company: "示例科技", position: "Android 开发", salary: "20K", day, result: "applied", platform: "zhaopin", at: "2026-10-25T04:00:00.000Z" };
+  const jobs = upsertJobFromRecord([], applied, "j1");
+  assert.equal(jobs[0].platform, "zhaopin");
+  assert.equal(jobStage(jobs[0]), "resume");
+  // 之后的 BOSS 沟通不会把它退回已沟通。
+  assert.equal(upsertJobFromRecord(jobs, { ...applied, result: "contacted", platform: "boss" }, "j2")[0].status, JOB_ASSIST_STATUS.autoApplied);
+  const summary = jobReviewSummary([applied, { ...applied, result: "contacted", platform: undefined }], jobs, new Date(2026, 9, 25), 7);
+  assert.equal(summary.funnel.contacted, 2);
+  assert.equal(summary.funnel.resumes, 1);
 });

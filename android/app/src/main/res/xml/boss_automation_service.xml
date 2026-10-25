@@ -7,4 +7,4 @@
     android:canPerformGestures="false"
     android:description="@string/boss_automation_description"
     android:notificationTimeout="200"
-    android:packageNames="com.hpbr.bosszhipin" />
+    android:packageNames="com.hpbr.bosszhipin,com.zhaopin.social" />

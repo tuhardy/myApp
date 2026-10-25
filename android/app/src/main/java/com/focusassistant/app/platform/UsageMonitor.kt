@@ -16,6 +16,7 @@ import com.focusassistant.app.domain.TimeSegment
 import com.focusassistant.app.domain.UsageAggregation
 import com.focusassistant.app.domain.UsageInsights
 import com.focusassistant.app.domain.UsageOverviewRange
+import com.focusassistant.app.domain.UsagePeriod
 import com.focusassistant.app.domain.UsageSpan
 import java.time.LocalDate
 import java.time.ZoneId
@@ -54,9 +55,9 @@ class UsageMonitor(context: Context) {
 
     suspend fun query(start: Long, end: Long): UsageReport = queryRange(start, end)
 
-    suspend fun queryOverview(today: LocalDate, week: Boolean, end: Long): UsageReport {
+    suspend fun queryOverview(today: LocalDate, period: UsagePeriod, end: Long): UsageReport {
         val zone = ZoneId.systemDefault()
-        val overview = UsageOverviewRange(today, week, zone)
+        val overview = UsageOverviewRange(today, period, zone)
         val nightStart = UsageInsights.nightWindow(java.time.Instant.ofEpochMilli(overview.start).atZone(zone).toLocalDate(), zone).first
         return queryRange(overview.start, overview.end, overview, end, nightStart)
     }

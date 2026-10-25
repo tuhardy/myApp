@@ -4,7 +4,13 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
-/** BOSS 直聘自动投递：规则、去重、界面识别和执行状态机都是纯函数；无障碍服务只负责读界面和点按钮。 */
+/** BOSS 直聘自动沟通 / 智联招聘自动投递：规则、去重、界面识别和执行状态机都是纯函数；无障碍服务只负责读界面和点按钮。 */
+enum class JobPlatform(val packageName: String, val label: String, val short: String) {
+    /** 包名需在真机用诊断导出核对；与 boss_automation_service.xml、清单 <queries> 保持一致。 */
+    BOSS("com.hpbr.bosszhipin", "BOSS 直聘", "BOSS"),
+    ZHAOPIN("com.zhaopin.social", "智联招聘", "智联")
+}
+
 data class AutoApplySettings(
     val includeKeywords: List<String> = emptyList(),
     val excludeKeywords: List<String> = emptyList(),
@@ -24,7 +30,12 @@ data class AutoApplySettings(
     val resumeCalibratedVersion: String? = null,
     /** 筛选方案：只保存筛选字段，切换时写回上面的同名字段；黑名单、上限、间隔和简历是全局设置。 */
     val presets: List<FilterPreset> = emptyList(),
-    val activePresetId: String? = null
+    val activePresetId: String? = null,
+    /** 每次运行只操作一个平台；今日计数、上限、去重和试运行版本按平台分开，方案与简历共用。 */
+    val platform: JobPlatform = JobPlatform.BOSS,
+    /** 上面的 dailyLimit / calibratedVersion 属于 BOSS；智联另存。 */
+    val zhaopinDailyLimit: Int = AutoApplyRules.DEFAULT_DAILY_LIMIT,
+    val zhaopinCalibratedVersion: String? = null
 )
 
 data class FilterPreset(
@@ -40,7 +51,8 @@ data class FilterPreset(
 /** name 须与 BOSS 里附件简历的文件名一致（可省略扩展名）。 */
 data class ResumeProfile(val id: String, val name: String, val keywords: List<String> = emptyList(), val isDefault: Boolean = false)
 
-enum class AutoApplyResult { CONTACTED, ALREADY_CONTACTED, FAILED, RESUME_SENT }
+/** APPLIED：智联界面上点了投递并看到成功提示，不代表 HR 已查看。 */
+enum class AutoApplyResult { CONTACTED, ALREADY_CONTACTED, FAILED, RESUME_SENT, APPLIED }
 
 data class AutoApplyRecord(
     val id: String,
@@ -52,7 +64,9 @@ data class AutoApplyRecord(
     val result: AutoApplyResult,
     val note: String = "",
     /** 写入时所用筛选方案的名称；没有方案时为空。 */
-    val preset: String = ""
+    val preset: String = "",
+    /** 0.9.12 及以前的记录都来自 BOSS。 */
+    val platform: JobPlatform = JobPlatform.BOSS
 )
 
 data class AutoApplyBook(val settings: AutoApplySettings = AutoApplySettings(), val records: List<AutoApplyRecord> = emptyList())
@@ -104,15 +118,26 @@ object AutoApplyRules {
 
     fun localDay(at: Long, zone: ZoneId): LocalDate = Instant.ofEpochMilli(at).atZone(zone).toLocalDate()
 
-    fun contactedOn(records: List<AutoApplyRecord>, day: LocalDate, zone: ZoneId): Int =
-        records.count { it.result == AutoApplyResult.CONTACTED && localDay(it.at, zone) == day }
+    fun limitFor(settings: AutoApplySettings, platform: JobPlatform): Int = if (platform == JobPlatform.ZHAOPIN) settings.zhaopinDailyLimit else settings.dailyLimit
 
-    fun decide(card: JobCard, settings: AutoApplySettings, records: List<AutoApplyRecord>, day: LocalDate, zone: ZoneId): AutoApplyDecision {
+    fun calibratedFor(settings: AutoApplySettings, platform: JobPlatform): String? =
+        if (platform == JobPlatform.ZHAOPIN) settings.zhaopinCalibratedVersion else settings.calibratedVersion
+
+    /** BOSS 的「发起沟通」和智联的「投递」都算主动联系，各自计入本平台的今日上限。 */
+    fun isReach(record: AutoApplyRecord) = record.result == AutoApplyResult.CONTACTED || record.result == AutoApplyResult.APPLIED
+
+    fun contactedOn(records: List<AutoApplyRecord>, day: LocalDate, zone: ZoneId, platform: JobPlatform = JobPlatform.BOSS): Int =
+        records.count { it.platform == platform && isReach(it) && localDay(it.at, zone) == day }
+
+    /** 去重与「同公司每天一次」只看同一平台的记录：BOSS 上沟通过不影响在智联投递。 */
+    fun decide(card: JobCard, settings: AutoApplySettings, records: List<AutoApplyRecord>, day: LocalDate, zone: ZoneId,
+        platform: JobPlatform = JobPlatform.BOSS): AutoApplyDecision {
         if (card.position.isBlank() || card.company.isBlank()) return AutoApplyDecision.Skip("未识别出职位或公司")
         val key = jobKey(card)
-        if (records.any { it.jobKey == key && it.result != AutoApplyResult.FAILED }) return AutoApplyDecision.Skip("已沟通过")
+        val own = records.filter { it.platform == platform }
+        if (own.any { it.jobKey == key && it.result != AutoApplyResult.FAILED }) return AutoApplyDecision.Skip(if (platform == JobPlatform.ZHAOPIN) "已投递过" else "已沟通过")
         val company = card.company.trim().lowercase()
-        if (records.any { it.result == AutoApplyResult.CONTACTED && it.company.trim().lowercase() == company && localDay(it.at, zone) == day }) {
+        if (own.any { isReach(it) && it.company.trim().lowercase() == company && localDay(it.at, zone) == day }) {
             return AutoApplyDecision.Skip("今天已联系过这家公司")
         }
         settings.companyBlacklist.firstOrNull { card.company.contains(it, ignoreCase = true) }?.let { return AutoApplyDecision.Skip("公司在黑名单「$it」") }
@@ -168,7 +193,7 @@ object AutoApplyRules {
     /** 已自动发起沟通、还没发过简历的职位，每个职位一条。 */
     fun awaitingResume(records: List<AutoApplyRecord>): List<AutoApplyRecord> {
         val sent = records.filter { it.result == AutoApplyResult.RESUME_SENT }.map { it.jobKey }.toSet()
-        return records.filter { it.result == AutoApplyResult.CONTACTED && it.jobKey !in sent }.distinctBy { it.jobKey }
+        return records.filter { it.platform == JobPlatform.BOSS && it.result == AutoApplyResult.CONTACTED && it.jobKey !in sent }.distinctBy { it.jobKey }
     }
 
     /** 按会话里的公司（及聊天页顶部的岗位）找回对应的沟通记录；岗位为空时只按公司。 */
@@ -179,7 +204,8 @@ object AutoApplyRules {
         records.count { it.result == AutoApplyResult.RESUME_SENT && localDay(it.at, zone) == day }
 
     /** 「我的」入口卡与全局状态条共用，与浏览器 FocusModel.autoApplyEntry 同一口径。 */
-    fun entry(running: Boolean, resume: Boolean, paused: Boolean, stopReason: String?, contacted: Int, resumes: Int, awaiting: Int, limit: Int): AutoApplyEntry {
+    fun entry(running: Boolean, resume: Boolean, paused: Boolean, stopReason: String?, contacted: Int, resumes: Int, awaiting: Int, limit: Int,
+        platform: JobPlatform = JobPlatform.BOSS): AutoApplyEntry {
         val state = when {
             running && paused -> AutoApplyEntryState.PAUSED
             running -> AutoApplyEntryState.RUNNING
@@ -187,12 +213,13 @@ object AutoApplyRules {
             else -> AutoApplyEntryState.IDLE
         }
         val label = when (state) {
-            AutoApplyEntryState.RUNNING -> if (resume) "自动发简历中" else "自动沟通中"
+            AutoApplyEntryState.RUNNING -> when { platform == JobPlatform.ZHAOPIN -> "智联投递中"; resume -> "自动发简历中"; else -> "自动沟通中" }
             AutoApplyEntryState.PAUSED -> "已暂停"
             AutoApplyEntryState.STOPPED -> "已停止"
             AutoApplyEntryState.IDLE -> "空闲"
         }
-        return AutoApplyEntry(state, label, "沟通 $contacted/$limit · 简历 $resumes/$limit · 待回复 $awaiting")
+        val summary = if (platform == JobPlatform.ZHAOPIN) "智联 · 投递 $contacted/$limit" else "沟通 $contacted/$limit · 简历 $resumes/$limit · 待回复 $awaiting"
+        return AutoApplyEntry(state, label, summary)
     }
 
     private fun presetKey(name: String) = name.trim().lowercase()
@@ -233,11 +260,12 @@ object AutoApplyRules {
         words(value.companyBlacklist, "公司黑名单")
         require(value.minSalaryK == null || value.minSalaryK in 1..MAX_SALARY_K) { "最低薪资须为 1–$MAX_SALARY_K K" }
         require(value.city.length <= MAX_CITY) { "城市最多 $MAX_CITY 个字符" }
-        require(value.dailyLimit in 1..MAX_DAILY_LIMIT) { "每日上限须为 1–$MAX_DAILY_LIMIT" }
+        require(value.dailyLimit in 1..MAX_DAILY_LIMIT && value.zhaopinDailyLimit in 1..MAX_DAILY_LIMIT) { "每日上限须为 1–$MAX_DAILY_LIMIT" }
         require(value.stepDelayMs in MIN_STEP_DELAY_MS..MAX_STEP_DELAY_MS) { "步骤间隔须为 ${MIN_STEP_DELAY_MS / 1000}–${MAX_STEP_DELAY_MS / 1000} 秒" }
         require(value.greeting.length <= MAX_GREETING) { "招呼语最多 $MAX_GREETING 个字符" }
         require(value.calibratedVersion == null || value.calibratedVersion.length <= 64) { "校准版本无效" }
         require(value.resumeCalibratedVersion == null || value.resumeCalibratedVersion.length <= 64) { "校准版本无效" }
+        require(value.zhaopinCalibratedVersion == null || value.zhaopinCalibratedVersion.length <= 64) { "校准版本无效" }
         require(value.resumes.size <= MAX_RESUMES) { "简历最多 $MAX_RESUMES 份" }
         require(value.resumes.count { it.isDefault } <= 1) { "只能有一份默认简历" }
         require(value.resumes.map { bareName(it.name) }.distinct().size == value.resumes.size) { "简历名称不能重复" }
@@ -289,7 +317,8 @@ data class UiNode(
     fun walk(): Sequence<UiNode> = sequence { yield(this@UiNode); children.forEach { yieldAll(it.walk()) } }
 }
 
-enum class BossScreen { JOB_LIST, JOB_DETAIL, CHAT, MESSAGE_LIST, RESUME_PICKER, RESUME_CONFIRM, VERIFY, LIMIT_REACHED, LOGIN, OTHER }
+/** APPLY_DONE 只用于智联：投递后的成功提示。 */
+enum class BossScreen { JOB_LIST, JOB_DETAIL, CHAT, MESSAGE_LIST, RESUME_PICKER, RESUME_CONFIRM, VERIFY, LIMIT_REACHED, LOGIN, APPLY_DONE, OTHER }
 
 /** 消息列表里的一个会话：只取公司名和有没有未读角标，不读最后一条消息。 */
 data class Conversation(val company: String, val unread: Boolean)
@@ -405,15 +434,71 @@ object BossScreenReader {
         return JobCard(position, company, texts[salaryIndex].text.trim(), byId(cityIds).orEmpty())
     }
 
-    /** 文字本身常不可点，向上找最近的可点击祖先。 */
-    private fun clickablePath(root: UiNode, path: List<Int>): List<Int> {
-        var best = path
-        var node: UiNode? = root
-        val chain = mutableListOf(root)
-        for (index in path) { node = node?.children?.getOrNull(index) ?: break; chain += node }
-        for (depth in chain.indices.reversed()) if (chain[depth].clickable) { best = path.take(depth); break }
-        return best
+}
+
+/** 文字本身常不可点，向上找最近的可点击祖先。 */
+internal fun clickablePath(root: UiNode, path: List<Int>): List<Int> {
+    var best = path
+    var node: UiNode? = root
+    val chain = mutableListOf(root)
+    for (index in path) { node = node?.children?.getOrNull(index) ?: break; chain += node }
+    for (depth in chain.indices.reversed()) if (chain[depth].clickable) { best = path.take(depth); break }
+    return best
+}
+
+/**
+ * 按文字识别智联招聘界面。与 BOSS 一样，候选文字来自常见布局，必须用真机诊断导出核对；
+ * 识别不到时归为 OTHER，由状态机超时停止。职位卡片沿用 BossScreenReader.parseCard。
+ */
+object ZhaopinScreenReader {
+    private val verifyWords = listOf("安全验证", "滑动验证", "拖动滑块", "请完成验证", "人机验证", "向右滑动", "请依次点击")
+    private val loginWords = listOf("手机号登录", "验证码登录", "一键登录", "密码登录", "登录/注册")
+    private val limitWords = listOf("今日投递已达上限", "投递次数已用完", "申请次数已用完")
+    private val doneWords = listOf("投递成功", "申请成功", "已成功投递", "简历已投递")
+    private val pickerTitles = listOf("选择简历", "请选择简历", "选择投递简历", "选择要投递的简历")
+    private val applyLabels = listOf("申请职位", "投递简历", "立即申请", "立即投递")
+    private val appliedLabels = listOf("已申请", "已投递")
+    private val confirmLabels = listOf("确认投递", "确定投递", "确认申请", "确定申请")
+    private val buttonLabels = setOf("确定", "确认", "取消", "关闭") + confirmLabels
+
+    fun read(root: UiNode, now: Long): BossReading {
+        val nodes = root.walk().toList()
+        val labels = nodes.map { it.label.trim() }.filter { it.isNotBlank() }
+        fun obs(screen: BossScreen, cards: List<JobCard> = emptyList(), applied: Boolean = false) = BossObservation(screen, cards, applied, now)
+        if (labels.any { label -> verifyWords.any { label.contains(it) } }) return BossReading(obs(BossScreen.VERIFY))
+        if (labels.any { label -> loginWords.any { label.contains(it) } }) return BossReading(obs(BossScreen.LOGIN))
+        if (labels.any { label -> limitWords.any { label.contains(it) } || (label.contains("上限") && (label.contains("投递") || label.contains("申请"))) }) {
+            return BossReading(obs(BossScreen.LIMIT_REACHED))
+        }
+        if (labels.any { label -> doneWords.any { label.contains(it) } }) return BossReading(obs(BossScreen.APPLY_DONE))
+        val confirm = nodes.firstOrNull { it.label.trim() in confirmLabels } ?: nodes.firstOrNull { it.label.trim() == "确定" || it.label.trim() == "确认" }
+        if (labels.any { it in pickerTitles }) {
+            // 标题和按钮以外的文字都作为候选；简历由状态机整名比对，这里不猜哪一行是简历。
+            val options = nodes.filter { it.label.isNotBlank() && it.label.trim() !in pickerTitles && it.label.trim() !in buttonLabels }
+            return BossReading(obs(BossScreen.RESUME_PICKER).copy(resumeOptions = options.map { it.label.trim() }, hasConfirm = confirm != null),
+                resumeOptionPaths = options.map { clickablePath(root, it.path) }, confirmPath = confirm?.let { clickablePath(root, it.path) })
+        }
+        if (confirm != null && (confirm.label.trim() in confirmLabels || labels.any { it.contains("投递") && (it.contains("确定") || it.contains("是否") || it.contains("吗")) })) {
+            return BossReading(obs(BossScreen.RESUME_CONFIRM).copy(resumeOptions = labels.filter { it !in buttonLabels }, hasConfirm = true),
+                confirmPath = clickablePath(root, confirm.path))
+        }
+        val applied = nodes.firstOrNull { it.label.trim() in appliedLabels }
+        val apply = nodes.firstOrNull { it.label.trim() in applyLabels }
+        if (applied != null || apply != null) {
+            return BossReading(obs(BossScreen.JOB_DETAIL, applied = applied != null), contactPath = apply?.let { clickablePath(root, it.path) })
+        }
+        val list = nodes.filter { it.scrollable }.maxByOrNull { it.children.size }
+        if (list != null) {
+            val parsed = list.children.mapNotNull { child -> BossScreenReader.parseCard(child)?.let { child.path to it } }
+            if (parsed.isNotEmpty()) return BossReading(obs(BossScreen.JOB_LIST, parsed.map { it.second }), cardPaths = parsed.map { it.first }, listPath = list.path)
+        }
+        return BossReading(obs(BossScreen.OTHER))
     }
+}
+
+object PlatformReader {
+    fun read(platform: JobPlatform, root: UiNode, now: Long): BossReading =
+        if (platform == JobPlatform.ZHAOPIN) ZhaopinScreenReader.read(root, now) else BossScreenReader.read(root, now)
 }
 
 enum class AutoApplyMode { DRY_RUN, LIVE }
@@ -705,6 +790,153 @@ object ResumeEngine {
         val idle = if (fresh.isEmpty()) run.idleScrolls + 1 else 0
         if (idle >= AutoApplyEngine.MAX_IDLE_SCROLLS) return ResumeStep(stop(run, "没有更多待发简历的新回复，已停止", now), log = skipLog ?: "没有更多待发简历的新回复")
         return ResumeStep(run.copy(seen = seen, idleScrolls = idle, phaseSince = now), ResumeAction.ScrollList, log = skipLog)
+    }
+}
+
+/**
+ * 智联自动投递：职位列表 → 详情 → 点「申请职位」→（弹出时）按名称选简历 → 确认 → 看到成功或按钮变为「已申请」→ 返回。
+ * 投递即附带简历，不做回复后发简历，不读消息页。弹出简历选择时核对不到同名简历就停止，不发送。
+ */
+enum class ZhaopinPhase { SCANNING, OPENING, APPLYING, PICKING, SUBMITTING, RETURNING, STOPPED }
+
+sealed interface ZhaopinAction {
+    data class OpenCard(val index: Int) : ZhaopinAction
+    data object TapApply : ZhaopinAction
+    data class PickResume(val index: Int) : ZhaopinAction
+    data object Confirm : ZhaopinAction
+    data object Back : ZhaopinAction
+    data object ScrollList : ZhaopinAction
+    data object Wait : ZhaopinAction
+}
+
+data class ZhaopinRun(
+    val mode: AutoApplyMode,
+    val phase: ZhaopinPhase = ZhaopinPhase.SCANNING,
+    val phaseSince: Long,
+    val target: JobCard? = null,
+    /** 为空表示没有匹配的简历；智联弹出简历选择时会因此停止。 */
+    val resumeName: String = "",
+    val seen: Set<String> = emptySet(),
+    val idleScrolls: Int = 0,
+    val backs: Int = 0,
+    val applied: Int = 0,
+    val stopReason: String? = null,
+    val preview: List<AutoApplyPreview> = emptyList()
+)
+
+data class ZhaopinStep(val run: ZhaopinRun, val action: ZhaopinAction = ZhaopinAction.Wait, val record: AutoApplyRecord? = null, val log: String? = null)
+
+object ZhaopinApplyEngine {
+    fun start(mode: AutoApplyMode, now: Long) = ZhaopinRun(mode, phaseSince = now)
+
+    fun stop(run: ZhaopinRun, reason: String, now: Long): ZhaopinRun =
+        if (run.phase == ZhaopinPhase.STOPPED) run else run.copy(phase = ZhaopinPhase.STOPPED, phaseSince = now, stopReason = reason)
+
+    /** 暂停后继续：扫描中原地继续；其余先回列表。点过投递后被暂停的职位已在 seen 中，本次不再处理，宁可漏投也不重复投。 */
+    fun resume(run: ZhaopinRun, now: Long): ZhaopinStep {
+        val uncertain = run.phase == ZhaopinPhase.APPLYING || run.phase == ZhaopinPhase.PICKING || run.phase == ZhaopinPhase.SUBMITTING
+        val name = run.target?.let { "「${it.position} · ${it.company}」" }.orEmpty()
+        return when (run.phase) {
+            ZhaopinPhase.STOPPED -> ZhaopinStep(run)
+            ZhaopinPhase.SCANNING -> ZhaopinStep(run.copy(phaseSince = now, idleScrolls = 0))
+            else -> ZhaopinStep(run.copy(phase = ZhaopinPhase.RETURNING, phaseSince = now, target = null, resumeName = "", backs = 0),
+                log = if (uncertain) "暂停前可能已投递$name，本次不再处理，请到智联核对" else null)
+        }
+    }
+
+    fun step(run: ZhaopinRun, obs: BossObservation, settings: AutoApplySettings, records: List<AutoApplyRecord>, zone: ZoneId, newId: () -> String): ZhaopinStep {
+        if (run.phase == ZhaopinPhase.STOPPED) return ZhaopinStep(run)
+        val now = obs.now
+        fun halt(reason: String) = ZhaopinStep(stop(run, reason, now), log = reason)
+        when (obs.screen) {
+            BossScreen.VERIFY -> return halt("出现安全验证，已停止；请手动处理后再开始")
+            BossScreen.LOGIN -> return halt("智联需要登录，已停止")
+            BossScreen.LIMIT_REACHED -> return halt("智联提示投递次数已达上限，已停止")
+            else -> Unit
+        }
+        fun waitOrTimeout() = if (now - run.phaseSince > AutoApplyEngine.STEP_TIMEOUT_MS) halt("界面未按预期变化，已停止；智联界面可能已更新，需要重新校准") else ZhaopinStep(run)
+        fun record(result: AutoApplyResult, note: String = ""): AutoApplyRecord? = run.target?.let {
+            AutoApplyRecord(newId(), AutoApplyRules.jobKey(it), it.company, it.position, it.salary, now, result, note.take(200),
+                AutoApplyRules.activePresetName(settings), JobPlatform.ZHAOPIN)
+        }
+        fun returning(applied: Int = run.applied) = run.copy(phase = ZhaopinPhase.RETURNING, phaseSince = now, backs = 0, applied = applied)
+        val name = run.target?.let { "「${it.position} · ${it.company}」" }.orEmpty()
+        fun done() = ZhaopinStep(returning(run.applied + 1), ZhaopinAction.Back,
+            record(AutoApplyResult.APPLIED, if (run.resumeName.isBlank()) "智联默认简历" else "简历：${run.resumeName}"), "已投递$name")
+        // 成功提示可能一闪而过，回到详情页且按钮变为「已申请」同样视为投递完成。
+        fun finished() = obs.screen == BossScreen.APPLY_DONE || (obs.screen == BossScreen.JOB_DETAIL && obs.alreadyContacted)
+        return when (run.phase) {
+            ZhaopinPhase.SCANNING -> scan(run, obs, settings, records, zone)
+            ZhaopinPhase.OPENING -> when (obs.screen) {
+                BossScreen.JOB_DETAIL -> if (obs.alreadyContacted) {
+                    ZhaopinStep(returning(), ZhaopinAction.Back, record(AutoApplyResult.ALREADY_CONTACTED), "已投递过，跳过$name")
+                } else {
+                    val resume = run.target?.let { AutoApplyRules.pickResume(it.position, settings.resumes) }.orEmpty()
+                    ZhaopinStep(run.copy(phase = ZhaopinPhase.APPLYING, phaseSince = now, resumeName = resume), ZhaopinAction.TapApply)
+                }
+                else -> waitOrTimeout()
+            }
+            ZhaopinPhase.APPLYING -> when {
+                finished() -> done()
+                obs.screen == BossScreen.RESUME_PICKER -> {
+                    if (run.resumeName.isBlank()) return halt("智联要求选择简历，但没有匹配$name 的简历，也没有默认简历；已停止，未投递")
+                    val index = obs.resumeOptions.indexOfFirst { AutoApplyRules.resumeNameMatches(it, run.resumeName) }
+                    if (index < 0) halt("智联里没有名为「${run.resumeName}」的简历，已停止，未投递；请核对「我的简历」里的名称")
+                    else ZhaopinStep(run.copy(phase = ZhaopinPhase.PICKING, phaseSince = now), ZhaopinAction.PickResume(index))
+                }
+                obs.screen == BossScreen.RESUME_CONFIRM -> ZhaopinStep(run.copy(phase = ZhaopinPhase.SUBMITTING, phaseSince = now), ZhaopinAction.Confirm)
+                else -> waitOrTimeout()
+            }
+            ZhaopinPhase.PICKING -> when {
+                finished() -> done()
+                obs.screen == BossScreen.RESUME_PICKER && obs.hasConfirm -> ZhaopinStep(run.copy(phase = ZhaopinPhase.SUBMITTING, phaseSince = now), ZhaopinAction.Confirm)
+                obs.screen == BossScreen.RESUME_CONFIRM -> ZhaopinStep(run.copy(phase = ZhaopinPhase.SUBMITTING, phaseSince = now), ZhaopinAction.Confirm)
+                else -> waitOrTimeout()
+            }
+            ZhaopinPhase.SUBMITTING -> if (finished()) done() else waitOrTimeout()
+            ZhaopinPhase.RETURNING -> when (obs.screen) {
+                BossScreen.JOB_LIST -> scan(run.copy(phase = ZhaopinPhase.SCANNING, phaseSince = now, target = null, resumeName = "", backs = 0), obs, settings, records, zone)
+                else -> if (run.backs >= AutoApplyEngine.MAX_BACKS) halt("无法返回职位列表，已停止") else ZhaopinStep(run.copy(backs = run.backs + 1), ZhaopinAction.Back)
+            }
+            ZhaopinPhase.STOPPED -> ZhaopinStep(run)
+        }
+    }
+
+    fun fail(run: ZhaopinRun, reason: String, now: Long, newId: () -> String): ZhaopinStep {
+        val record = run.target?.takeIf { run.mode == AutoApplyMode.LIVE }?.let {
+            AutoApplyRecord(newId(), AutoApplyRules.jobKey(it), it.company, it.position, it.salary, now, AutoApplyResult.FAILED, reason.take(200), platform = JobPlatform.ZHAOPIN)
+        }
+        return ZhaopinStep(stop(run, reason, now), record = record, log = reason)
+    }
+
+    private fun scan(run: ZhaopinRun, obs: BossObservation, settings: AutoApplySettings, records: List<AutoApplyRecord>, zone: ZoneId): ZhaopinStep {
+        val now = obs.now
+        if (obs.screen != BossScreen.JOB_LIST) {
+            return if (now - run.phaseSince > AutoApplyEngine.STEP_TIMEOUT_MS) ZhaopinStep(stop(run, "没有识别到职位列表，已停止；请打开智联的职位推荐列表后再开始", now), log = "没有识别到职位列表")
+            else ZhaopinStep(run)
+        }
+        val day = AutoApplyRules.localDay(now, zone)
+        val decisions = obs.cards.map { AutoApplyPreview(it, AutoApplyRules.decide(it, settings, records, day, zone, JobPlatform.ZHAOPIN)) }
+        if (run.mode == AutoApplyMode.DRY_RUN) {
+            val applying = decisions.count { it.decision == AutoApplyDecision.Apply }
+            val reason = "智联试运行完成：识别 ${decisions.size} 个职位，其中 $applying 个符合条件；未点击任何按钮"
+            return ZhaopinStep(stop(run, reason, now).copy(preview = decisions), log = reason)
+        }
+        val limit = settings.zhaopinDailyLimit
+        if (AutoApplyRules.contactedOn(records, day, zone, JobPlatform.ZHAOPIN) >= limit) {
+            return ZhaopinStep(stop(run, "已达到智联今日上限 $limit 条，已停止", now), log = "已达到智联今日上限")
+        }
+        val fresh = obs.cards.withIndex().filter { AutoApplyRules.jobKey(it.value) !in run.seen }
+        val seen = run.seen + fresh.map { AutoApplyRules.jobKey(it.value) }
+        val pick = fresh.firstOrNull { decisions[it.index].decision == AutoApplyDecision.Apply }
+        if (pick != null) {
+            return ZhaopinStep(run.copy(phase = ZhaopinPhase.OPENING, phaseSince = now, target = pick.value, seen = seen, idleScrolls = 0),
+                ZhaopinAction.OpenCard(pick.index), log = "打开「${pick.value.position} · ${pick.value.company}」")
+        }
+        val idle = if (fresh.isEmpty()) run.idleScrolls + 1 else 0
+        if (idle >= AutoApplyEngine.MAX_IDLE_SCROLLS) return ZhaopinStep(stop(run, "列表没有更多新职位，已停止", now), log = "列表没有更多新职位")
+        return ZhaopinStep(run.copy(seen = seen, idleScrolls = idle, phaseSince = now), ZhaopinAction.ScrollList,
+            log = if (fresh.isNotEmpty()) "跳过 ${fresh.size} 个不符合条件的职位" else null)
     }
 }
 

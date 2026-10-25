@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
@@ -43,6 +44,7 @@ import com.focusassistant.app.domain.JobAssistRules
 import com.focusassistant.app.domain.JobAssistStatus
 import com.focusassistant.app.domain.JobOpportunity
 import com.focusassistant.app.domain.JobOutcome
+import com.focusassistant.app.domain.JobPlatform
 import com.focusassistant.app.domain.JobReviewSummary
 import com.focusassistant.app.domain.JobSource
 import com.focusassistant.app.domain.JobStage
@@ -57,13 +59,13 @@ import java.util.UUID
 private val JobLine = Color(0xFFF0E6DF)
 private val JobDanger = Color(0xFFB42318)
 
-/** 自动投递分区的只读状态；无障碍开关和 BOSS 版本在页面回到前台时重新读取。 */
+/** 自动投递分区的只读状态；无障碍开关和所选平台的 App 版本在页面回到前台时重新读取。todayCount 是所选平台的今日联系数。 */
 internal data class AutoApplyPanel(
     val settings: AutoApplySettings,
     val todayCount: Int,
     val status: BossAutomationStatus,
     val serviceEnabled: Boolean,
-    val bossVersion: String?,
+    val appVersion: String?,
     val resumeTodayCount: Int = 0,
     val awaitingResume: Int = 0,
     /** 投递记录，新到旧。 */
@@ -92,7 +94,8 @@ internal class AutoApplyActions(
     val clearRecords: () -> Unit,
     val applyPreset: (String) -> Unit = {},
     val managePresets: () -> Unit = {},
-    val editStage: (String) -> Unit = {}
+    val editStage: (String) -> Unit = {},
+    val selectPlatform: (JobPlatform) -> Unit = {}
 )
 
 private enum class JobTab(val label: String) { CONTACT("沟通"), RESUME("简历"), PROGRESS("进度"), DATA("数据") }
@@ -117,7 +120,7 @@ internal fun JobAssistScreen(
             IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, "返回我的") }
             Column(Modifier.weight(1f)) {
                 Text("求职辅助", fontSize = 24.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
-                Text("BOSS 自动沟通与发简历 · 求职进度", color = Muted, fontSize = 12.sp)
+                Text("BOSS / 智联自动投递 · 求职进度", color = Muted, fontSize = 12.sp)
             }
         }
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(top = 12.dp, bottom = 16.dp)) {
@@ -141,7 +144,7 @@ internal fun JobAssistScreen(
                                     Icon(Icons.Outlined.Add, null, modifier = Modifier.size(16.dp)); Text("手动添加", fontSize = 12.sp, color = AccentDark)
                                 }
                             }
-                            Text("自动沟通的职位会自动加入；面试、Offer、不合适由你标记。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+                            Text("自动沟通（BOSS）和自动投递（智联）的职位会自动加入；面试、Offer、不合适由你标记。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
                             StageFilter(jobs, stageFilter) { stageFilter = it }
                         }
                     }
@@ -149,7 +152,7 @@ internal fun JobAssistScreen(
                     if (jobs.isEmpty()) item(key = "empty") {
                         Column(cardModifier().padding(20.dp)) {
                             Text("还没有职位", fontWeight = FontWeight.SemiBold)
-                            Text("开始自动沟通后，职位会出现在这里；自己联系或内推的职位，可点右上角“手动添加”。", color = Muted, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 6.dp))
+                            Text("开始自动沟通或投递后，职位会出现在这里；自己联系或内推的职位，可点右上角“手动添加”。", color = Muted, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 6.dp))
                         }
                     } else if (shown.isEmpty()) item(key = "stage-empty") { Text("这个阶段还没有职位。", color = Muted, fontSize = 12.sp) }
                     items(shown, key = { it.id }) { job ->
@@ -164,7 +167,7 @@ internal fun JobAssistScreen(
                                 Text(JobAssistRules.displayLabel(job), color = if (stage == JobStage.CLOSED) Muted else AccentDark, fontSize = 11.sp,
                                     fontWeight = if (job.outcome != null) FontWeight.SemiBold else FontWeight.Normal, modifier = Modifier.padding(start = 8.dp))
                             }
-                            Text(listOfNotNull(if (autoJob) "自动沟通加入" else "手动添加", job.preset.takeIf { it.isNotBlank() }?.let { "方案 $it" }).joinToString(" · "),
+                            Text(listOfNotNull(if (autoJob) "${(job.platform ?: JobPlatform.BOSS).short} 自动加入" else "手动添加", job.preset.takeIf { it.isNotBlank() }?.let { "方案 $it" }).joinToString(" · "),
                                 color = Muted, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
                             if (job.note.isNotBlank()) Text(job.note, fontSize = 12.sp, lineHeight = 18.sp,
                                 modifier = Modifier.padding(top = 6.dp).fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(SoftSurface).padding(horizontal = 10.dp, vertical = 6.dp))
@@ -232,38 +235,59 @@ private fun DisabledHint(reason: String?) {
     reason?.let { Text(it, color = Muted, fontSize = 11.sp, lineHeight = 16.sp) }
 }
 
-private fun taskLabel(task: BossTask): String = when (task) {
-    BossTask.DIAGNOSE -> "诊断中"
-    BossTask.DRY_RUN -> "沟通试运行中"
+private fun taskLabel(task: BossTask, platform: JobPlatform): String = when (task) {
+    BossTask.DIAGNOSE -> "${platform.short} 诊断中"
+    BossTask.DRY_RUN -> if (platform == JobPlatform.ZHAOPIN) "智联试运行中" else "沟通试运行中"
     BossTask.RESUME_DRY_RUN -> "发简历试运行中"
-    BossTask.LIVE -> "自动沟通中"
+    BossTask.LIVE -> if (platform == JobPlatform.ZHAOPIN) "智联投递中" else "自动沟通中"
     BossTask.RESUME_LIVE -> "自动发简历中"
+}
+
+/** 每次运行只操作一个平台；运行中不能切换。 */
+@Composable
+private fun PlatformSwitch(auto: AutoApplyPanel, actions: AutoApplyActions) {
+    val running = auto.status.task != null
+    val current = auto.status.platform.takeIf { running } ?: auto.settings.platform
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(SoftSurface).padding(3.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        JobPlatform.entries.forEach { platform ->
+            val active = platform == current
+            Box(Modifier.weight(1f).heightIn(min = 40.dp).clip(RoundedCornerShape(9.dp)).background(if (active) Color.White else Color.Transparent)
+                .selectable(selected = active, enabled = !running, role = Role.RadioButton) { if (!active) actions.selectPlatform(platform) }, contentAlignment = Alignment.Center) {
+                Text(platform.label, fontSize = 13.sp, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal, color = if (active) AccentDark else Muted)
+            }
+        }
+    }
+    if (running) DisabledHint("运行中不能切换平台")
 }
 
 @Composable
 private fun AutoStatusCard(auto: AutoApplyPanel, actions: AutoApplyActions) {
     val status = auto.status
     val task = status.task
+    val platform = status.platform.takeIf { task != null } ?: auto.settings.platform
+    val zhaopin = platform == JobPlatform.ZHAOPIN
+    val limit = AutoApplyRules.limitFor(auto.settings, platform)
     Column(cardModifier().background(if (task != null) AccentSoft else Color.White).padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        PlatformSwitch(auto, actions)
         val headline = when {
             task != null && status.paused != null -> "已暂停"
-            task != null -> taskLabel(task)
+            task != null -> taskLabel(task, platform)
             else -> "空闲"
         }
         Text(headline, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = if (task != null) AccentDark else Color.Unspecified)
         val detail = when {
             task != null && status.paused != null -> status.paused
-            task != null && task != BossTask.DIAGNOSE -> "运行中保持亮屏，可放下手机；BOSS 上的悬浮按钮可暂停或停止。"
-            task != null -> "在 BOSS 里打开要记录的页面，点悬浮按钮里的「记录本页」。"
+            task != null && task != BossTask.DIAGNOSE -> "运行中保持亮屏，可放下手机；${platform.short} 上的悬浮按钮可暂停或停止。"
+            task != null -> "在${platform.short}里打开要记录的页面，点悬浮按钮里的「记录本页」。"
             else -> status.stopReason?.let { "最近停止：$it" }
         }
         detail?.let { Text(it, color = Muted, fontSize = 12.sp, lineHeight = 18.sp) }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(
-                "沟通" to "${auto.todayCount}/${auto.settings.dailyLimit}",
-                "简历" to "${auto.resumeTodayCount}/${auto.settings.dailyLimit}",
+            (if (zhaopin) listOf("投递" to "${auto.todayCount}/$limit") else listOf(
+                "沟通" to "${auto.todayCount}/$limit",
+                "简历" to "${auto.resumeTodayCount}/$limit",
                 "待回复" to auto.awaitingResume.toString()
-            ).forEach { (label, value) ->
+            )).forEach { (label, value) ->
                 Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(SoftSurface).padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(value, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, style = NumeralStyle)
                     Text(if (label == "待回复") label else "今日$label", color = Muted, fontSize = 11.sp)
@@ -282,12 +306,13 @@ private fun AutoStatusCard(auto: AutoApplyPanel, actions: AutoApplyActions) {
 @Composable
 private fun ReadinessCard(auto: AutoApplyPanel, actions: AutoApplyActions, busy: Boolean) {
     val running = auto.status.task != null
-    val calibrated = auto.bossVersion != null && auto.settings.calibratedVersion == auto.bossVersion
+    val platform = auto.settings.platform
+    val calibrated = auto.appVersion != null && AutoApplyRules.calibratedFor(auto.settings, platform) == auto.appVersion
     val steps = listOf(
-        Triple(auto.bossVersion != null, auto.bossVersion?.let { "已安装 BOSS 直聘 $it" } ?: "安装并登录 BOSS 直聘", null),
-        Triple(auto.serviceEnabled, if (auto.serviceEnabled) "无障碍服务已开启" else "开启「专注助手 · BOSS 自动投递」无障碍服务", ("去开启" to actions.openAccessibility)),
+        Triple(auto.appVersion != null, auto.appVersion?.let { "已安装 ${platform.label} $it" } ?: "安装并登录 ${platform.label}", null),
+        Triple(auto.serviceEnabled, if (auto.serviceEnabled) "无障碍服务已开启" else "开启「专注助手 · 求职自动化」无障碍服务", ("去开启" to actions.openAccessibility)),
         Triple(auto.settings.riskAccepted, if (auto.settings.riskAccepted) "已确认风险" else "阅读并确认自动化风险", ("确认" to actions.acceptRisk)),
-        Triple(calibrated, if (calibrated) "已在当前版本试运行" else "在职位列表页做一次沟通试运行", ("试运行" to actions.dryRun))
+        Triple(calibrated, if (calibrated) "已在当前版本试运行" else "在${platform.short}职位列表页做一次试运行", ("试运行" to actions.dryRun))
     )
     val ready = steps.all { it.first }
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -330,33 +355,36 @@ private fun JobTabs(selected: JobTab, onSelect: (JobTab) -> Unit) {
 private fun ContactSection(auto: AutoApplyPanel, actions: AutoApplyActions, busy: Boolean) {
     val status = auto.status
     val running = status.task != null
-    val calibrated = auto.bossVersion != null && auto.settings.calibratedVersion == auto.bossVersion
+    val platform = auto.settings.platform
+    val zhaopin = platform == JobPlatform.ZHAOPIN
+    val calibrated = auto.appVersion != null && AutoApplyRules.calibratedFor(auto.settings, platform) == auto.appVersion
     Column(cardModifier().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        SectionTitle("自动沟通", "今日 ${auto.todayCount}/${auto.settings.dailyLimit}")
-        Text("在职位推荐列表里按规则打开职位、点「立即沟通」并发送招呼语。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+        SectionTitle(if (zhaopin) "智联自动投递" else "自动沟通", "今日 ${auto.todayCount}/${AutoApplyRules.limitFor(auto.settings, platform)}")
+        Text(if (zhaopin) "在智联职位列表里按规则打开职位、点「申请职位」；需要选简历时按「我的简历」选择同名简历后确认。"
+            else "在职位推荐列表里按规则打开职位、点「立即沟通」并发送招呼语。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
         PresetChips(auto.settings, enabled = !busy && !running, actions)
         if (running && auto.settings.presets.isNotEmpty()) DisabledHint("运行中不能切换方案")
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(SoftSurface).clickable(enabled = !busy && !running, onClick = actions.editRules).padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("沟通规则", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                Icon(Icons.Outlined.Edit, "编辑沟通规则", tint = Muted, modifier = Modifier.size(16.dp))
+                Text(if (zhaopin) "投递规则" else "沟通规则", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Icon(Icons.Outlined.Edit, if (zhaopin) "编辑投递规则" else "编辑沟通规则", tint = Muted, modifier = Modifier.size(16.dp))
             }
             Text(rulesSummary(auto.settings), color = Muted, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 4.dp))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = actions.dryRun, enabled = !busy && !running, modifier = Modifier.weight(1f)) { Text("试运行", maxLines = 1) }
-            Button(onClick = actions.start, enabled = !busy && !running && calibrated, colors = ButtonDefaults.buttonColors(containerColor = Accent), modifier = Modifier.weight(1f)) { Text("开始沟通", maxLines = 1) }
+            Button(onClick = actions.start, enabled = !busy && !running && calibrated, colors = ButtonDefaults.buttonColors(containerColor = Accent), modifier = Modifier.weight(1f)) { Text(if (zhaopin) "开始投递" else "开始沟通", maxLines = 1) }
         }
         DisabledHint(when {
             running -> "有任务在运行，先暂停或停止"
-            !calibrated -> "先在 BOSS 职位列表页试运行一次，核对清单后才能开始"
+            !calibrated -> "先在${platform.short}职位列表页试运行一次，核对清单后才能开始"
             else -> null
         })
         if (status.preview.isNotEmpty()) {
             Text("试运行清单（未点击）", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             status.preview.take(20).forEach { item ->
                 val decision = item.decision
-                Text("${if (decision == AutoApplyDecision.Apply) "会沟通" else "跳过"} · ${item.card.position} · ${item.card.company} · ${item.card.salary}" +
+                Text("${if (decision != AutoApplyDecision.Apply) "跳过" else if (zhaopin) "会投递" else "会沟通"} · ${item.card.position} · ${item.card.company} · ${item.card.salary}" +
                     (if (decision is AutoApplyDecision.Skip) "（${decision.reason}）" else ""),
                     color = if (decision == AutoApplyDecision.Apply) AccentDark else Muted, fontSize = 11.sp, lineHeight = 16.sp)
             }
@@ -369,16 +397,23 @@ private fun ResumeSection(auto: AutoApplyPanel, actions: AutoApplyActions, busy:
     val status = auto.status
     val running = status.task != null
     val resumes = auto.settings.resumes
-    val resumeCalibrated = auto.bossVersion != null && auto.settings.resumeCalibratedVersion == auto.bossVersion
+    val zhaopin = auto.settings.platform == JobPlatform.ZHAOPIN
+    val resumeCalibrated = auto.appVersion != null && auto.settings.resumeCalibratedVersion == auto.appVersion
     Column(cardModifier().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        SectionTitle("自动发简历", "今日 ${auto.resumeTodayCount}/${auto.settings.dailyLimit} · 待回复 ${auto.awaitingResume}")
-        Text("对方回复后才能发附件简历。只处理本应用自动沟通过、会话有新消息的公司，不读消息内容；按岗位关键词选简历，没命中用默认简历。",
-            color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+        if (zhaopin) {
+            SectionTitle("投递用简历", "两个平台共用")
+            Text("智联投递时直接附带简历，不需要等回复。弹出简历选择时按岗位关键词选简历，没命中用默认简历；找不到同名简历会停止，不投递。",
+                color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+        } else {
+            SectionTitle("自动发简历", "今日 ${auto.resumeTodayCount}/${auto.settings.dailyLimit} · 待回复 ${auto.awaitingResume}")
+            Text("对方回复后才能发附件简历。只处理本应用自动沟通过、会话有新消息的公司，不读消息内容；按岗位关键词选简历，没命中用默认简历。",
+                color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("我的简历", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).semantics { heading() })
             Text("${resumes.size}/${AutoApplyRules.MAX_RESUMES}", color = Muted, fontSize = 12.sp)
         }
-        if (resumes.isEmpty()) Text("还没有简历。名称要和 BOSS「附件简历」里的文件名一致，例如「张三-Android.pdf」。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+        if (resumes.isEmpty()) Text("还没有简历。名称要和招聘 App 里的简历名称一致，例如 BOSS 附件「张三-Android.pdf」。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
         resumes.forEachIndexed { index, resume ->
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).border(1.dp, JobLine, RoundedCornerShape(12.dp)).padding(start = 12.dp, top = 10.dp, bottom = 4.dp, end = 4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -400,19 +435,23 @@ private fun ResumeSection(auto: AutoApplyPanel, actions: AutoApplyActions, busy:
         OutlinedButton(onClick = actions.addResume, enabled = !busy && !running && resumes.size < AutoApplyRules.MAX_RESUMES, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Outlined.Add, null, modifier = Modifier.size(16.dp)); Text("添加简历")
         }
-        if (resumes.isNotEmpty() && resumes.none { it.isDefault }) Text("没有默认简历：关键词都没命中的会话会跳过。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = actions.resumeDryRun, enabled = !busy && !running && resumes.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("发简历试运行", maxLines = 1) }
-            Button(onClick = actions.resumeStart, enabled = !busy && !running && resumes.isNotEmpty() && resumeCalibrated, colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                modifier = Modifier.weight(1f)) { Text("开始发简历", maxLines = 1) }
+        if (resumes.isNotEmpty() && resumes.none { it.isDefault }) Text(if (zhaopin) "没有默认简历：关键词都没命中、且智联要求选简历时会停止。" else "没有默认简历：关键词都没命中的会话会跳过。",
+            color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+        // 智联没有回复后发简历，只管理共用的「我的简历」。
+        if (!zhaopin) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = actions.resumeDryRun, enabled = !busy && !running && resumes.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("发简历试运行", maxLines = 1) }
+                Button(onClick = actions.resumeStart, enabled = !busy && !running && resumes.isNotEmpty() && resumeCalibrated, colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                    modifier = Modifier.weight(1f)) { Text("开始发简历", maxLines = 1) }
+            }
+            DisabledHint(when {
+                running -> "有任务在运行，先暂停或停止"
+                resumes.isEmpty() -> "先添加至少一份简历"
+                !resumeCalibrated -> "先在 BOSS 消息页做一次发简历试运行，核对清单后才能开始"
+                else -> null
+            })
         }
-        DisabledHint(when {
-            running -> "有任务在运行，先暂停或停止"
-            resumes.isEmpty() -> "先添加至少一份简历"
-            !resumeCalibrated -> "先在 BOSS 消息页做一次发简历试运行，核对清单后才能开始"
-            else -> null
-        })
-        status.resumePreview?.let { preview ->
+        if (!zhaopin) status.resumePreview?.let { preview ->
             Text("发简历试运行清单（未点击）", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             if (preview.isEmpty()) Text("没有找到自动沟通过且有新消息的会话", color = Muted, fontSize = 11.sp)
             preview.take(20).forEach { item ->
@@ -473,7 +512,7 @@ private fun ReviewSection(auto: AutoApplyPanel) {
         }
         val funnel = review.funnel
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("沟通" to funnel.contacted, "已发简历" to funnel.resumes, "面试" to funnel.interviews, "Offer" to funnel.offers, "不合适" to funnel.closed).forEachIndexed { index, (label, count) ->
+            listOf("联系" to funnel.contacted, "已发简历" to funnel.resumes, "面试" to funnel.interviews, "Offer" to funnel.offers, "不合适" to funnel.closed).forEachIndexed { index, (label, count) ->
                 val closed = index == 4
                 Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(if (closed) SoftSurface else AccentSoft)
                     .semantics(mergeDescendants = true) {}.padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -482,9 +521,9 @@ private fun ReviewSection(auto: AutoApplyPanel) {
                 }
             }
         }
-        Text("以职位计：自动沟通过的职位里，有多少已发简历（对方回复后才能发）、被你标为面试或 Offer。不代表 HR 已读。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+        Text("以职位计：BOSS 自动沟通和智联自动投递过的职位里，有多少已发简历（BOSS 需对方回复后才能发，智联投递即附带）、被你标为面试或 Offer。不代表 HR 已读。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
         val dayLabel = DateTimeFormatter.ofPattern("MM-dd")
-        ScrubBars(review.dailyContacted.map { it.toLong() }, { review.days[it].format(dayLabel) }, "最多", "这段时间没有沟通", "每日沟通",
+        ScrubBars(review.dailyContacted.map { it.toLong() }, { review.days[it].format(dayLabel) }, "最多", "这段时间没有联系", "每日联系",
             if (month) 2.dp else 6.dp, valueLabel = { "$it 次" }, chartHeight = 80.dp) {
             Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
                 Text(review.days.first().format(dayLabel), color = Muted, fontSize = 10.sp, modifier = Modifier.weight(1f))
@@ -493,9 +532,9 @@ private fun ReviewSection(auto: AutoApplyPanel) {
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("按方案", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            Text("沟通 · 已发简历", color = Muted, fontSize = 11.sp)
+            Text("联系 · 已发简历", color = Muted, fontSize = 11.sp)
         }
-        if (review.byPreset.isEmpty()) Text("还没有自动沟通记录。", color = Muted, fontSize = 12.sp)
+        if (review.byPreset.isEmpty()) Text("还没有自动沟通或投递记录。", color = Muted, fontSize = 12.sp)
         review.byPreset.forEach { row ->
             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                 Text(row.preset.ifBlank { "未用方案" }, fontSize = 12.sp, modifier = Modifier.weight(1f))
@@ -569,6 +608,7 @@ private fun resultLabel(result: AutoApplyResult): String = when (result) {
     AutoApplyResult.ALREADY_CONTACTED -> "之前沟通过"
     AutoApplyResult.FAILED -> "失败"
     AutoApplyResult.RESUME_SENT -> "已发简历"
+    AutoApplyResult.APPLIED -> "已投递"
 }
 
 @Composable
@@ -577,7 +617,7 @@ private fun RecordsSection(auto: AutoApplyPanel, actions: AutoApplyActions, busy
     var showLog by rememberSaveable { mutableStateOf(false) }
     Column(cardModifier().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionTitle("投递记录", "共 ${auto.records.size} 条")
-        if (auto.records.isEmpty()) Text("还没有记录。自动沟通和发简历的结果会出现在这里。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+        if (auto.records.isEmpty()) Text("还没有记录。自动沟通、发简历和智联投递的结果会出现在这里。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
         auto.records.take(MAX_SHOWN_RECORDS).forEach { record ->
             Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -586,7 +626,7 @@ private fun RecordsSection(auto: AutoApplyPanel, actions: AutoApplyActions, busy
                         color = if (record.result == AutoApplyResult.FAILED) JobDanger else AccentDark)
                 }
                 val time = Instant.ofEpochMilli(record.at).atZone(ZoneId.systemDefault()).format(recordTime)
-                Text(listOf(time, record.salary, record.note).filter { it.isNotBlank() }.joinToString(" · "), color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                Text(listOf(time, record.platform.short, record.salary, record.note).filter { it.isNotBlank() }.joinToString(" · "), color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
             }
         }
         if (auto.records.size > MAX_SHOWN_RECORDS) Text("只显示最近 $MAX_SHOWN_RECORDS 条", color = Muted, fontSize = 11.sp)
@@ -612,7 +652,7 @@ private fun AdvancedSection(auto: AutoApplyPanel, actions: AutoApplyActions, bus
             Text(if (expanded) "收起" else "展开", color = Muted, fontSize = 12.sp)
         }
         if (expanded) Column(Modifier.padding(bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("识别不了 BOSS 界面时，用诊断导出控件结构给开发者核对。只记录控件结构和文字长度，不含职位与聊天正文；BOSS 更新后需要重新诊断和试运行。",
+            Text("识别不了${auto.settings.platform.short}界面时，用诊断导出控件结构给开发者核对。只记录控件结构和文字长度，不含职位与聊天正文；App 更新后需要重新诊断和试运行。",
                 color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = actions.diagnose, enabled = !busy && !running, modifier = Modifier.weight(1f)) { Text("界面诊断", maxLines = 1) }
@@ -630,9 +670,10 @@ private fun rulesSummary(value: AutoApplySettings): String = listOfNotNull(
     value.minSalaryK?.let { "最低 ${it}K" },
     value.city.takeIf { it.isNotBlank() }?.let { "城市：$it" },
     value.companyBlacklist.takeIf { it.isNotEmpty() }?.let { "黑名单 ${it.size} 家" },
-    "每日 ${value.dailyLimit} 条",
+    "每日 ${AutoApplyRules.limitFor(value, value.platform)} 条",
     "间隔 ${value.stepDelayMs / 1000} 秒",
-    if (value.greeting.isBlank()) "BOSS 默认招呼语" else "自定义招呼语"
+    // 智联投递不发招呼语。
+    if (value.platform == JobPlatform.ZHAOPIN) null else if (value.greeting.isBlank()) "BOSS 默认招呼语" else "自定义招呼语"
 ).joinToString(" · ")
 
 @Composable
@@ -647,7 +688,7 @@ internal fun ResumeEditDialog(existing: ResumeProfile?, busy: Boolean, onDismiss
             Column(Modifier.imePadding().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 OutlinedTextField(name, { name = it.take(AutoApplyRules.MAX_RESUME_NAME); error = null }, label = { Text("简历名称") }, singleLine = true, enabled = !busy,
                     placeholder = { Text("张三-Android.pdf") }, modifier = Modifier.fillMaxWidth())
-                Text("要和 BOSS「附件简历」里的文件名完全一致，扩展名可以省略。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                Text("要和 BOSS「附件简历」的文件名或智联里的简历名称完全一致，扩展名可以省略。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
                 OutlinedTextField(keywords, { keywords = it; error = null }, label = { Text("岗位关键词（逗号分隔）") }, enabled = !busy, minLines = 1, maxLines = 3,
                     placeholder = { Text("Android，Kotlin") }, modifier = Modifier.fillMaxWidth())
                 Text("岗位名称包含任一关键词时发这份简历；多份都命中时取列表里靠前的。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
@@ -676,11 +717,11 @@ internal fun AutoApplyRiskDialog(busy: Boolean, onDismiss: () -> Unit, onAccept:
         text = {
             Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(
-                    "自动操作招聘 App 可能违反 BOSS 直聘用户协议，账号可能被限制沟通或封禁，后果由你自行承担。",
+                    "自动操作招聘 App 可能违反 BOSS 直聘、智联招聘等平台的用户协议，账号可能被限制沟通、投递或封禁，后果由你自行承担。",
                     "本功能不会识别或绕过验证码、不伪装设备、不随机化节奏；平台出现验证、登录或次数上限时会立即停止。",
-                    "运行中会保持亮屏，建议插上充电器；触碰 BOSS 界面、离开 BOSS 或熄屏会暂停，可从悬浮按钮继续。",
-                    "只操作你手机上已登录的 BOSS 直聘，不联网、不读取或保存账号与 Cookie。",
-                    "“自动化已发起沟通”只表示界面上已发出，不代表对方已读或投递成功。"
+                    "运行中会保持亮屏，建议插上充电器；触碰招聘 App 界面、离开它或熄屏会暂停，可从悬浮按钮继续。",
+                    "只操作你手机上已登录的 BOSS 直聘或智联招聘，不联网、不读取或保存账号与 Cookie。",
+                    "“自动化已发起沟通”“自动化已投递”只表示界面上已发出，不代表对方已读。"
                 ).forEach { Text("· $it", color = Muted, fontSize = 13.sp, lineHeight = 20.sp) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked, { checked = it }, enabled = !busy)
@@ -699,13 +740,14 @@ internal fun AutoApplyRulesDialog(settings: AutoApplySettings, busy: Boolean, on
     var salary by remember { mutableStateOf(settings.minSalaryK?.toString().orEmpty()) }
     var city by remember { mutableStateOf(settings.city) }
     var blacklist by remember { mutableStateOf(settings.companyBlacklist.joinToString("，")) }
-    var limit by remember { mutableStateOf(settings.dailyLimit.toString()) }
+    val zhaopin = settings.platform == JobPlatform.ZHAOPIN
+    var limit by remember { mutableStateOf(AutoApplyRules.limitFor(settings, settings.platform).toString()) }
     var delaySeconds by remember { mutableStateOf((settings.stepDelayMs / 1000).toString()) }
     var greeting by remember { mutableStateOf(settings.greeting) }
     var error by remember { mutableStateOf<String?>(null) }
     val number = KeyboardOptions(keyboardType = KeyboardType.Number)
     AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, containerColor = Color.White,
-        title = { Text("沟通规则", fontSize = 20.sp, fontWeight = FontWeight.SemiBold) },
+        title = { Text(if (zhaopin) "投递规则" else "沟通规则", fontSize = 20.sp, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(Modifier.heightIn(max = 520.dp).imePadding().verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 OutlinedTextField(include, { include = it; error = null }, label = { Text("岗位关键词（逗号分隔，留空不限）") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
@@ -713,11 +755,12 @@ internal fun AutoApplyRulesDialog(settings: AutoApplySettings, busy: Boolean, on
                 OutlinedTextField(salary, { salary = it.filter(Char::isDigit).take(4); error = null }, label = { Text("最低月薪（K，留空不限）") }, singleLine = true, enabled = !busy, keyboardOptions = number, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(city, { city = it.take(AutoApplyRules.MAX_CITY); error = null }, label = { Text("城市（留空不限）") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(blacklist, { blacklist = it; error = null }, label = { Text("公司黑名单") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(limit, { limit = it.filter(Char::isDigit).take(3); error = null }, label = { Text("每日上限（1–${AutoApplyRules.MAX_DAILY_LIMIT}）") }, singleLine = true, enabled = !busy, keyboardOptions = number, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(limit, { limit = it.filter(Char::isDigit).take(3); error = null }, label = { Text("${settings.platform.short} 每日上限（1–${AutoApplyRules.MAX_DAILY_LIMIT}）") }, singleLine = true, enabled = !busy, keyboardOptions = number, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(delaySeconds, { delaySeconds = it.filter(Char::isDigit).take(2); error = null }, label = { Text("步骤最短间隔（${AutoApplyRules.MIN_STEP_DELAY_MS / 1000}–${AutoApplyRules.MAX_STEP_DELAY_MS / 1000} 秒，固定不随机）") }, singleLine = true, enabled = !busy, keyboardOptions = number, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(greeting, { greeting = it.take(AutoApplyRules.MAX_GREETING); error = null }, label = { Text("自定义招呼语（留空用 BOSS 默认）") }, enabled = !busy, minLines = 2, maxLines = 4, modifier = Modifier.fillMaxWidth())
-                Text("BOSS 界面一变化就进入下一步，两步之间至少间隔上面的秒数。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
-                Text("同一职位只沟通一次、只发一次简历，同一公司每天只联系一次；每日上限对沟通和发简历分别计算。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                if (!zhaopin) OutlinedTextField(greeting, { greeting = it.take(AutoApplyRules.MAX_GREETING); error = null }, label = { Text("自定义招呼语（留空用 BOSS 默认）") }, enabled = !busy, minLines = 2, maxLines = 4, modifier = Modifier.fillMaxWidth())
+                Text("界面一变化就进入下一步，两步之间至少间隔上面的秒数。关键词、黑名单和间隔两个平台共用，每日上限按平台分开。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                Text(if (zhaopin) "同一职位只投递一次，同一公司每天只投一次；智联记录不影响 BOSS 的去重和计数。"
+                    else "同一职位只沟通一次、只发一次简历，同一公司每天只联系一次；每日上限对沟通和发简历分别计算。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
                 error?.let { Text(it, color = JobDanger, fontSize = 12.sp) }
             }
         }, confirmButton = {
@@ -725,7 +768,8 @@ internal fun AutoApplyRulesDialog(settings: AutoApplySettings, busy: Boolean, on
                 try {
                     val next = settings.copy(includeKeywords = AutoApplyRules.parseList(include), excludeKeywords = AutoApplyRules.parseList(exclude),
                         minSalaryK = salary.toIntOrNull(), city = city.trim(), companyBlacklist = AutoApplyRules.parseList(blacklist),
-                        dailyLimit = limit.toIntOrNull() ?: 0, stepDelayMs = (delaySeconds.toLongOrNull() ?: 0) * 1000, greeting = greeting.trim())
+                        stepDelayMs = (delaySeconds.toLongOrNull() ?: 0) * 1000, greeting = greeting.trim())
+                        .let { if (zhaopin) it.copy(zhaopinDailyLimit = limit.toIntOrNull() ?: 0) else it.copy(dailyLimit = limit.toIntOrNull() ?: 0) }
                     AutoApplyRules.validateSettings(next); onSave(next)
                 } catch (exception: IllegalArgumentException) { error = exception.message }
             }) { Text(if (busy) "保存中" else "保存") }

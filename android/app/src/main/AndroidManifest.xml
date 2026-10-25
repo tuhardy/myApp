@@ -10,8 +10,9 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
     <queries>
-        <!-- 自动投递只需确认 BOSS 直聘是否安装、读取版本并启动它。 -->
+        <!-- 自动投递只需确认 BOSS 直聘 / 智联招聘是否安装、读取版本并启动它。 -->
         <package android:name="com.hpbr.bosszhipin" />
+        <package android:name="com.zhaopin.social" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />

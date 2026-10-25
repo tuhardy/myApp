@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">专注助手</string>
-    <string name="boss_automation_label">专注助手 · BOSS 自动投递</string>
-    <string name="boss_automation_description">仅在你于专注助手中点击“开始”后，读取并操作 BOSS 直聘界面：按你设定的规则打开职位、点击“立即沟通”并发送招呼语；对方回复后按岗位选择同名附件简历发送（不读取消息内容）。运行中显示悬浮按钮（可暂停、继续、停止）并保持亮屏；触碰 BOSS 界面、离开 BOSS 或熄屏会暂停，遇到验证、登录或次数上限会立即停止。不联网，不读取账号或其他应用。自动化可能违反 BOSS 直聘用户协议并导致账号受限，风险由你自行承担。</string>
+    <string name="boss_automation_label">专注助手 · 求职自动化</string>
+    <string name="boss_automation_description">仅在你于专注助手中点击“开始”后，读取并操作你所选平台的界面。BOSS 直聘：按你设定的规则打开职位、点击“立即沟通”并发送招呼语；对方回复后按岗位选择同名附件简历发送（不读取消息内容）。智联招聘：按规则打开职位、点击“申请职位”，需要时按名称选择简历并确认投递。运行中显示悬浮按钮（可暂停、继续、停止）并保持亮屏；触碰招聘 App 界面、离开它或熄屏会暂停，遇到验证、登录或次数上限会立即停止。不联网，不读取账号或其他应用。自动化可能违反招聘平台用户协议并导致账号受限，风险由你自行承担。</string>
 </resources>

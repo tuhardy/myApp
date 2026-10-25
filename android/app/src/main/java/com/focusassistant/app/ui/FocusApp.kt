@@ -175,7 +175,7 @@ class NativeUiModel : ViewModel() {
     var statsAll by mutableStateOf(false)
     var anchor by mutableStateOf(LocalDate.now())
     var recordLimit by mutableIntStateOf(UiLimits.RECORD_PAGE)
-    var usageWeek by mutableStateOf(false)
+    var usagePeriod by mutableStateOf(UsagePeriod.TODAY)
     /** 「隐藏金额」只影响显示，不写入本机数据；进程重启后恢复显示。 */
     var hideAmounts by mutableStateOf(false)
     var pendingProject by mutableStateOf<Project?>(null)
@@ -266,10 +266,13 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
     val exactAllowed = remember(refresh) { TimerAlarmScheduler.canScheduleExactAlarms(context) }
     val bossStatus by BossAutomation.status.collectAsStateWithLifecycle()
     val bossServiceEnabled = remember(refresh, bossStatus.connected) { BossAutomation.enabled(context) }
-    val bossVersion = remember(refresh) { BossUiMap.installedVersion(context) }
+    // 运行中以任务平台为准，空闲时用设置里选中的平台。
+    val jobPlatform = bossStatus.platform.takeIf { bossStatus.task != null } ?: state.autoApply.settings.platform
+    val jobAppVersion = remember(refresh, jobPlatform) { BossUiMap.installedVersion(context, jobPlatform) }
+    val jobTodayCount = AutoApplyRules.contactedOn(state.autoApply.records, today, ZoneId.systemDefault(), jobPlatform)
     val jobEntry = AutoApplyRules.entry(bossStatus.task?.live == true, bossStatus.task?.resume == true, bossStatus.paused != null, bossStatus.stopReason,
-        AutoApplyRules.contactedOn(state.autoApply.records, today, ZoneId.systemDefault()), AutoApplyRules.resumesSentOn(state.autoApply.records, today, ZoneId.systemDefault()),
-        AutoApplyRules.awaitingResume(state.autoApply.records).size, state.autoApply.settings.dailyLimit)
+        jobTodayCount, AutoApplyRules.resumesSentOn(state.autoApply.records, today, ZoneId.systemDefault()),
+        AutoApplyRules.awaitingResume(state.autoApply.records).size, AutoApplyRules.limitFor(state.autoApply.settings, jobPlatform), jobPlatform)
     val currentProject = state.projects.find { it.id == ui.projectId } ?: state.projects.find { it.id == state.timer?.projectId }
 
     val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
@@ -365,7 +368,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             ui.notificationRequested = true
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        BossAutomation.start(context, task)?.let(ui::message)
+        BossAutomation.start(context, task, state.autoApply.settings.platform)?.let(ui::message)
     }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) ui.perform {
@@ -428,7 +431,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             catch (error: Exception) { ui.message(error.message ?: "进度提醒状态未保存") }
         }
     }
-    LaunchedEffect(ui.screen, ui.usageWeek, refresh, usageAllowed, today) {
+    LaunchedEffect(ui.screen, ui.usagePeriod, refresh, usageAllowed, today) {
         if (ui.screen != Screen.USAGE) return@LaunchedEffect
         usageReport = null
         usageError = null
@@ -436,7 +439,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
         if (!usageAllowed) return@LaunchedEffect
         usageLoading = true
         try {
-            usageReport = usageMonitor.queryOverview(today, ui.usageWeek, System.currentTimeMillis())
+            usageReport = usageMonitor.queryOverview(today, ui.usagePeriod, System.currentTimeMillis())
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { usageError = error.message ?: "无法读取使用统计" }
         finally { usageLoading = false }
@@ -444,7 +447,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
     // 生活概览的「用屏 · 今日」只在打开我的页面且已授权时读取，失败就显示「—」，不拿示例顶替。
     LaunchedEffect(ui.screen, refresh, usageAllowed, today) {
         if (ui.screen != Screen.SETTINGS || !usageAllowed) { profileUsage = null; return@LaunchedEffect }
-        profileUsage = try { usageMonitor.queryOverview(today, false, System.currentTimeMillis()).todayMillis }
+        profileUsage = try { usageMonitor.queryOverview(today, UsagePeriod.TODAY, System.currentTimeMillis()).todayMillis }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { null }
     }
@@ -560,8 +563,8 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                         onBack = { ui.screen = Screen.PROJECTS }, onHelp = { ui.open("statistics-help") }, onExport = { ui.open("export") },
                         onMoreRecords = { ui.recordLimit += UiLimits.RECORD_PAGE }, onProgress = { ui.open("progress-edit", it.id) },
                         onSelectDay = { ui.anchor = it; ui.period = Period.DAY; ui.statsAll = false; ui.recordLimit = UiLimits.RECORD_PAGE })
-                    Screen.USAGE -> UsageScreen(usageReport, usageAllowed, usageLoading, usageError, ui.usageWeek, state.settings, state.sessions,
-                        { context.startActivity(usageMonitor.permissionIntent()) }, { refresh++ }, { ui.usageWeek = it }, { ui.open("usage-goal") }, { ui.open("usage-zoom") }, { enabled ->
+                    Screen.USAGE -> UsageScreen(usageReport, usageAllowed, usageLoading, usageError, ui.usagePeriod, state.settings, state.sessions,
+                        { context.startActivity(usageMonitor.permissionIntent()) }, { refresh++ }, { ui.usagePeriod = it }, { ui.open("usage-goal") }, { ui.open("usage-zoom") }, { enabled ->
                             if (enabled && !usageAllowed) ui.message("请先授予使用情况访问权限。")
                             else ui.perform { repository.saveSettings(state.settings.copy(usageReminders = enabled)); if (enabled && !notificationAllowed) ui.message("请在我的页面授权通知，否则超时提醒不可见。") }
                         }, { ui.open("usage-help") }, today)
@@ -579,8 +582,8 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                                 else importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
                             }, { ui.open("rest-settings") }, { ui.screen = Screen.JOB_ASSIST }))
                     Screen.JOB_ASSIST -> JobAssistScreen(state.jobOpportunities, ui.busy,
-                        auto = AutoApplyPanel(state.autoApply.settings, AutoApplyRules.contactedOn(state.autoApply.records, today, ZoneId.systemDefault()),
-                            bossStatus, bossServiceEnabled, bossVersion, AutoApplyRules.resumesSentOn(state.autoApply.records, today, ZoneId.systemDefault()),
+                        auto = AutoApplyPanel(state.autoApply.settings, jobTodayCount,
+                            bossStatus, bossServiceEnabled, jobAppVersion, AutoApplyRules.resumesSentOn(state.autoApply.records, today, ZoneId.systemDefault()),
                             AutoApplyRules.awaitingResume(state.autoApply.records).size, state.autoApply.records.sortedByDescending { it.at },
                             JobReview.summary(state.autoApply.records, state.jobOpportunities, today, 7, ZoneId.systemDefault()),
                             JobReview.summary(state.autoApply.records, state.jobOpportunities, today, 30, ZoneId.systemDefault())),
@@ -589,7 +592,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                             acceptRisk = { ui.open("auto-risk") },
                             editRules = { ui.open("auto-rules") },
                             diagnose = { startBoss(BossTask.DIAGNOSE) },
-                            exportDiagnostics = { diagnosticLauncher.launch("BOSS界面诊断_${LocalDate.now()}.json") },
+                            exportDiagnostics = { diagnosticLauncher.launch("${jobPlatform.short}界面诊断_${LocalDate.now()}.json") },
                             dryRun = { startBoss(BossTask.DRY_RUN) },
                             start = { ui.open("auto-start") },
                             stop = { BossAutomation.stop() },
@@ -603,7 +606,8 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                             clearRecords = { ui.open("auto-records-clear") },
                             applyPreset = { id -> ui.perform { repository.applyFilterPreset(id); ui.message("已切换到方案「${state.autoApply.settings.presets.find { it.id == id }?.name.orEmpty()}」") } },
                             managePresets = { ui.open("auto-presets") },
-                            editStage = { ui.open("job-stage", it) }),
+                            editStage = { ui.open("job-stage", it) },
+                            selectPlatform = { platform -> ui.perform { repository.saveAutoApplySettings(state.autoApply.settings.copy(platform = platform)) } }),
                         onBack = { ui.screen = Screen.SETTINGS },
                         onAdd = { ui.open("job-edit") },
                         onEdit = { ui.open("job-edit", it) },
@@ -791,7 +795,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
                 val active = AutoApplyRules.activePresetName(value)
                 ui.perform {
                     repository.saveAutoApplySettings(if (active.isBlank()) value else AutoApplyRules.savePreset(value, active, value.activePresetId.orEmpty()))
-                    ui.close(); ui.message(if (active.isBlank()) "沟通规则已保存" else "沟通规则已保存，并更新方案「$active」")
+                    ui.close(); ui.message(if (active.isBlank()) "规则已保存" else "规则已保存，并更新方案「$active」")
                 }
             }
             "auto-presets" -> FilterPresetDialog(state.autoApply.settings, ui.busy, { ui.close() },
@@ -832,9 +836,14 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel()) {
             }
             "auto-start" -> {
                 val settings = state.autoApply.settings
-                val left = settings.dailyLimit - AutoApplyRules.contactedOn(state.autoApply.records, today, ZoneId.systemDefault())
-                ConfirmDialog("开始自动沟通？", "将切换到 BOSS 直聘，界面变化后执行下一步（两步至少间隔 ${settings.stepDelayMs / 1000} 秒），今天最多再发起 ${maxOf(left, 0)} 条沟通。" +
-                    "请先打开职位推荐列表。运行中保持亮屏；触碰 BOSS、离开 BOSS 或熄屏会暂停，可从悬浮按钮继续或停止。", ui.busy, { ui.close() }) {
+                val platform = settings.platform
+                val left = AutoApplyRules.limitFor(settings, platform) - AutoApplyRules.contactedOn(state.autoApply.records, today, ZoneId.systemDefault(), platform)
+                val title = if (platform == JobPlatform.ZHAOPIN) "开始智联自动投递？" else "开始自动沟通？"
+                val body = if (platform == JobPlatform.ZHAOPIN) "将切换到智联招聘，界面变化后执行下一步（两步至少间隔 ${settings.stepDelayMs / 1000} 秒），今天最多再投递 ${maxOf(left, 0)} 个职位。" +
+                    "请先打开职位推荐列表；需要选简历时按「我的简历」选择同名简历，找不到会停止。运行中保持亮屏；触碰智联、离开智联或熄屏会暂停，可从悬浮按钮继续或停止。"
+                    else "将切换到 BOSS 直聘，界面变化后执行下一步（两步至少间隔 ${settings.stepDelayMs / 1000} 秒），今天最多再发起 ${maxOf(left, 0)} 条沟通。" +
+                    "请先打开职位推荐列表。运行中保持亮屏；触碰 BOSS、离开 BOSS 或熄屏会暂停，可从悬浮按钮继续或停止。"
+                ConfirmDialog(title, body, ui.busy, { ui.close() }) {
                     ui.close()
                     startBoss(BossTask.LIVE)
                 }

@@ -421,4 +421,149 @@ class AutoApplyTest {
         assertEquals(4, JobReview.summary(records, jobs, day, 30, zone).funnel.contacted)
         assertEquals(30, JobReview.summary(emptyList(), emptyList(), day, 30, zone).dailyContacted.size)
     }
+
+    private fun zp(screen: BossScreen, at: Long = noon, cards: List<JobCard> = emptyList(), applied: Boolean = false, options: List<String> = emptyList(), confirm: Boolean = false) =
+        BossObservation(screen, cards, applied, at, resumeOptions = options, hasConfirm = confirm)
+
+    @Test fun platformsKeepSeparateDedupAndCounts() {
+        val boss = record()
+        val zhaopin = record(company = "演示网络").copy(result = AutoApplyResult.APPLIED, platform = JobPlatform.ZHAOPIN)
+        // BOSS 上沟通过的职位在智联仍可投递，反之亦然。
+        assertEquals(AutoApplyDecision.Apply, AutoApplyRules.decide(card, AutoApplySettings(), listOf(boss), day, zone, JobPlatform.ZHAOPIN))
+        assertEquals(AutoApplyDecision.Skip("已投递过"),
+            AutoApplyRules.decide(card, AutoApplySettings(), listOf(boss.copy(platform = JobPlatform.ZHAOPIN, result = AutoApplyResult.APPLIED)), day, zone, JobPlatform.ZHAOPIN))
+        assertEquals(1, AutoApplyRules.contactedOn(listOf(boss, zhaopin), day, zone))
+        assertEquals(1, AutoApplyRules.contactedOn(listOf(boss, zhaopin), day, zone, JobPlatform.ZHAOPIN))
+        // 智联投递不进入 BOSS 的待发简历队列。
+        assertEquals(listOf(boss), AutoApplyRules.awaitingResume(listOf(boss, zhaopin.copy(company = card.company))))
+        val settings = AutoApplySettings(dailyLimit = 10, zhaopinDailyLimit = 5)
+        assertEquals(5, AutoApplyRules.limitFor(settings, JobPlatform.ZHAOPIN))
+        assertEquals(10, AutoApplyRules.limitFor(settings, JobPlatform.BOSS))
+        assertThrows(IllegalArgumentException::class.java) { AutoApplyRules.validateSettings(AutoApplySettings(zhaopinDailyLimit = 101)) }
+        assertEquals("智联 · 投递 2/5", AutoApplyRules.entry(true, false, false, null, 2, 0, 0, 5, JobPlatform.ZHAOPIN).summary)
+        assertEquals("智联投递中", AutoApplyRules.entry(true, false, false, null, 2, 0, 0, 5, JobPlatform.ZHAOPIN).label)
+    }
+
+    @Test fun platformFieldsRoundTripAndLegacyJsonDefaultsToBoss() {
+        val settings = AutoApplySettings(platform = JobPlatform.ZHAOPIN, zhaopinDailyLimit = 12, zhaopinCalibratedVersion = "8.1")
+        assertEquals(settings, JsonCodec.readAutoApplySettings(JSONObject(JsonCodec.autoApplySettings(settings).toString())))
+        val saved = record().copy(result = AutoApplyResult.APPLIED, platform = JobPlatform.ZHAOPIN)
+        assertEquals(saved, JsonCodec.readAutoApplyRecord(JSONObject(JsonCodec.autoApplyRecord(saved).toString())))
+        val legacySettings = JsonCodec.autoApplySettings(AutoApplySettings()).apply { remove("platform"); remove("zhaopinDailyLimit"); remove("zhaopinCalibratedVersion") }
+        assertEquals(AutoApplySettings(), JsonCodec.readAutoApplySettings(JSONObject(legacySettings.toString())))
+        val legacyRecord = JsonCodec.autoApplyRecord(record()).apply { remove("platform") }
+        assertEquals(JobPlatform.BOSS, JsonCodec.readAutoApplyRecord(JSONObject(legacyRecord.toString())).platform)
+        val job = JobAssistRules.upsertFromRecord(emptyList(), saved, "j").single()
+        assertEquals(JobPlatform.ZHAOPIN, job.platform)
+        assertEquals(JobStage.RESUME, JobAssistRules.stage(job))
+        assertEquals(job, JsonCodec.readJobOpportunity(JSONObject(JsonCodec.jobOpportunity(job).toString())))
+        // 智联已投递不会被之后的 BOSS 沟通记录退回「已沟通」。
+        assertEquals(JobAssistStatus.AUTO_APPLIED, JobAssistRules.upsertFromRecord(listOf(job), record(), "n").single().status)
+    }
+
+    @Test fun readsZhaopinFixtures() {
+        val item = UiNode(listOf(0, 0), clickable = true, children = listOf(
+            text(listOf(0, 0, 0), "Android 开发工程师", "com.zhaopin.social:id/tv_job_name"),
+            text(listOf(0, 0, 1), "1.5-2.5万", "com.zhaopin.social:id/tv_salary"),
+            text(listOf(0, 0, 2), "示例科技", "com.zhaopin.social:id/tv_company_name")))
+        val list = UiNode(emptyList(), children = listOf(UiNode(listOf(0), scrollable = true, children = listOf(item))))
+        val reading = ZhaopinScreenReader.read(list, noon)
+        assertEquals(BossScreen.JOB_LIST, reading.observation.screen)
+        assertEquals(listOf(JobCard("Android 开发工程师", "示例科技", "1.5-2.5万")), reading.observation.cards)
+
+        val detail = UiNode(emptyList(), children = listOf(UiNode(listOf(0), clickable = true, children = listOf(text(listOf(0, 0), "申请职位")))))
+        val detailReading = ZhaopinScreenReader.read(detail, noon)
+        assertEquals(BossScreen.JOB_DETAIL, detailReading.observation.screen)
+        assertFalse(detailReading.observation.alreadyContacted)
+        assertEquals(listOf(0), detailReading.contactPath)
+        assertTrue(ZhaopinScreenReader.read(UiNode(emptyList(), children = listOf(text(listOf(0), "已申请"))), noon).observation.alreadyContacted)
+
+        val picker = UiNode(emptyList(), children = listOf(text(listOf(0), "选择简历"),
+            UiNode(listOf(1), clickable = true, children = listOf(text(listOf(1, 0), "张三-Android"))),
+            UiNode(listOf(2), clickable = true, text = "确认投递")))
+        val pickerReading = ZhaopinScreenReader.read(picker, noon)
+        assertEquals(BossScreen.RESUME_PICKER, pickerReading.observation.screen)
+        assertEquals(listOf("张三-Android"), pickerReading.observation.resumeOptions)
+        assertEquals(listOf(listOf(1)), pickerReading.resumeOptionPaths)
+        assertEquals(listOf(2), pickerReading.confirmPath)
+
+        assertEquals(BossScreen.APPLY_DONE, ZhaopinScreenReader.read(UiNode(emptyList(), children = listOf(text(listOf(0), "投递成功"))), noon).observation.screen)
+        val verify = UiNode(emptyList(), children = listOf(text(listOf(0), "请完成安全验证"), text(listOf(1), "申请职位")))
+        assertEquals(BossScreen.VERIFY, ZhaopinScreenReader.read(verify, noon).observation.screen)
+        assertEquals(BossScreen.LIMIT_REACHED, ZhaopinScreenReader.read(UiNode(emptyList(), children = listOf(text(listOf(0), "今日投递已达上限"))), noon).observation.screen)
+        assertEquals(BossScreen.LOGIN, ZhaopinScreenReader.read(UiNode(emptyList(), children = listOf(text(listOf(0), "验证码登录"))), noon).observation.screen)
+        assertEquals(BossScreen.OTHER, ZhaopinScreenReader.read(UiNode(emptyList()), noon).observation.screen)
+    }
+
+    @Test fun zhaopinLiveRunAppliesWithResumeAndReturns() {
+        val settings = resumeSettings
+        var run = ZhaopinApplyEngine.start(AutoApplyMode.LIVE, noon)
+        var step = ZhaopinApplyEngine.step(run, zp(BossScreen.JOB_LIST, cards = listOf(card)), settings, emptyList(), zone, newId)
+        assertEquals(ZhaopinAction.OpenCard(0), step.action)
+        run = step.run
+        step = ZhaopinApplyEngine.step(run, zp(BossScreen.JOB_DETAIL), settings, emptyList(), zone, newId)
+        assertEquals(ZhaopinAction.TapApply, step.action)
+        assertEquals("张三-Android", step.run.resumeName)
+        run = step.run
+        step = ZhaopinApplyEngine.step(run, zp(BossScreen.RESUME_PICKER, options = listOf("张三-后端.pdf", "张三-Android.pdf"), confirm = true), settings, emptyList(), zone, newId)
+        assertEquals(ZhaopinAction.PickResume(1), step.action)
+        run = step.run
+        step = ZhaopinApplyEngine.step(run, zp(BossScreen.RESUME_PICKER, confirm = true), settings, emptyList(), zone, newId)
+        assertEquals(ZhaopinAction.Confirm, step.action)
+        run = step.run
+        step = ZhaopinApplyEngine.step(run, zp(BossScreen.APPLY_DONE), settings, emptyList(), zone, newId)
+        assertEquals(ZhaopinAction.Back, step.action)
+        assertEquals(AutoApplyResult.APPLIED, step.record?.result)
+        assertEquals(JobPlatform.ZHAOPIN, step.record?.platform)
+        assertEquals("简历：张三-Android", step.record?.note)
+        assertEquals(1, step.run.applied)
+        assertEquals(ZhaopinPhase.SCANNING, ZhaopinApplyEngine.step(step.run, zp(BossScreen.JOB_LIST), settings, listOfNotNull(step.record), zone, newId).run.phase)
+    }
+
+    @Test fun zhaopinAppliesWithoutPickerAndStopsSafely() {
+        val settings = AutoApplySettings()
+        val opened = ZhaopinApplyEngine.step(ZhaopinApplyEngine.start(AutoApplyMode.LIVE, noon), zp(BossScreen.JOB_LIST, cards = listOf(card)), settings, emptyList(), zone, newId).run
+        val applying = ZhaopinApplyEngine.step(opened, zp(BossScreen.JOB_DETAIL), settings, emptyList(), zone, newId).run
+        // 没有弹简历选择、按钮直接变为「已申请」也算投递完成。
+        val done = ZhaopinApplyEngine.step(applying, zp(BossScreen.JOB_DETAIL, applied = true), settings, emptyList(), zone, newId)
+        assertEquals("智联默认简历", done.record?.note)
+        // 弹出简历选择但没有可用简历：停止且不记录投递。
+        val noResume = ZhaopinApplyEngine.step(applying, zp(BossScreen.RESUME_PICKER, options = listOf("某简历")), settings, emptyList(), zone, newId)
+        assertEquals(ZhaopinPhase.STOPPED, noResume.run.phase)
+        assertNull(noResume.record)
+        val mismatch = ZhaopinApplyEngine.step(applying.copy(resumeName = "张三-Android"), zp(BossScreen.RESUME_PICKER, options = listOf("李四")), settings, emptyList(), zone, newId)
+        assertEquals(ZhaopinPhase.STOPPED, mismatch.run.phase)
+        // 详情页已申请：记为之前投递过并返回。
+        val already = ZhaopinApplyEngine.step(opened, zp(BossScreen.JOB_DETAIL, applied = true), settings, emptyList(), zone, newId)
+        assertEquals(AutoApplyResult.ALREADY_CONTACTED, already.record?.result)
+        assertEquals(ZhaopinPhase.STOPPED, ZhaopinApplyEngine.step(applying, zp(BossScreen.VERIFY), settings, emptyList(), zone, newId).run.phase)
+        assertEquals(ZhaopinPhase.STOPPED,
+            ZhaopinApplyEngine.step(applying, zp(BossScreen.OTHER, at = noon + AutoApplyEngine.STEP_TIMEOUT_MS + 1), settings, emptyList(), zone, newId).run.phase)
+        // 点过投递后暂停：回列表，该职位已在 seen 中不再处理。
+        val resumed = ZhaopinApplyEngine.resume(applying, noon + 1)
+        assertEquals(ZhaopinPhase.RETURNING, resumed.run.phase)
+        assertTrue(resumed.log!!.contains("请到智联核对"))
+        assertTrue(AutoApplyRules.jobKey(card) in resumed.run.seen)
+        assertEquals(JobPlatform.ZHAOPIN, ZhaopinApplyEngine.fail(applying, "找不到", noon, newId).record?.platform)
+    }
+
+    @Test fun zhaopinDryRunAndLimit() {
+        val dry = ZhaopinApplyEngine.step(ZhaopinApplyEngine.start(AutoApplyMode.DRY_RUN, noon), zp(BossScreen.JOB_LIST, cards = listOf(card)), AutoApplySettings(), emptyList(), zone, newId)
+        assertEquals(ZhaopinPhase.STOPPED, dry.run.phase)
+        assertEquals(1, dry.run.preview.size)
+        val used = listOf(record(company = "别家").copy(result = AutoApplyResult.APPLIED, platform = JobPlatform.ZHAOPIN))
+        val limited = ZhaopinApplyEngine.step(ZhaopinApplyEngine.start(AutoApplyMode.LIVE, noon), zp(BossScreen.JOB_LIST, cards = listOf(card)),
+            AutoApplySettings(zhaopinDailyLimit = 1), used, zone, newId)
+        assertTrue(limited.run.stopReason!!.contains("智联今日上限"))
+        // BOSS 的记录不占智联上限。
+        assertEquals(ZhaopinPhase.OPENING, ZhaopinApplyEngine.step(ZhaopinApplyEngine.start(AutoApplyMode.LIVE, noon), zp(BossScreen.JOB_LIST, cards = listOf(card)),
+            AutoApplySettings(zhaopinDailyLimit = 1), listOf(record(company = "别家")), zone, newId).run.phase)
+    }
+
+    @Test fun reviewCountsZhaopinApplyAsResume() {
+        val summary = JobReview.summary(listOf(record(), record().copy(result = AutoApplyResult.APPLIED, platform = JobPlatform.ZHAOPIN)), emptyList(), day, 7, zone)
+        // 同一职位在两个平台各算一次；智联投递直接计入已发简历。
+        assertEquals(2, summary.funnel.contacted)
+        assertEquals(1, summary.funnel.resumes)
+    }
 }

@@ -32,12 +32,17 @@ import com.focusassistant.app.domain.AutoApplyPreview
 import com.focusassistant.app.domain.AutoApplyRules
 import com.focusassistant.app.domain.AutoApplyRun
 import com.focusassistant.app.domain.BossReading
-import com.focusassistant.app.domain.BossScreenReader
+import com.focusassistant.app.domain.JobPlatform
+import com.focusassistant.app.domain.PlatformReader
 import com.focusassistant.app.domain.ResumeAction
 import com.focusassistant.app.domain.ResumeEngine
 import com.focusassistant.app.domain.ResumePhase
 import com.focusassistant.app.domain.ResumePreview
 import com.focusassistant.app.domain.ResumeRun
+import com.focusassistant.app.domain.ZhaopinAction
+import com.focusassistant.app.domain.ZhaopinApplyEngine
+import com.focusassistant.app.domain.ZhaopinPhase
+import com.focusassistant.app.domain.ZhaopinRun
 import java.time.ZoneId
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -71,7 +76,9 @@ data class BossAutomationStatus(
     val diagnostics: Int = 0,
     val stopReason: String? = null,
     /** 非空表示任务已暂停（保留进度），内容是暂停原因。 */
-    val paused: String? = null
+    val paused: String? = null,
+    /** 当前或最近一次任务操作的平台。 */
+    val platform: JobPlatform? = null
 )
 
 /** 应用界面与无障碍服务之间的进程内通道；服务未开启时只返回错误，不做任何事。 */
@@ -90,20 +97,18 @@ object BossAutomation {
 
     fun settingsIntent(): Intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
-    fun bossInstalled(context: Context): Boolean = BossUiMap.installedVersion(context) != null
-
-    /** 开始任务并切到 BOSS。返回 null 表示已开始，否则是不能开始的原因。 */
-    fun start(context: Context, task: BossTask): String? {
-        val running = service ?: return "请先在系统设置中开启「专注助手 · BOSS 自动投递」无障碍服务"
-        val launch = context.packageManager.getLaunchIntentForPackage(BossUiMap.PACKAGE) ?: return "未找到 BOSS 直聘 App"
-        running.begin(task)?.let { return it }
+    /** 开始任务并切到所选平台。返回 null 表示已开始，否则是不能开始的原因。 */
+    fun start(context: Context, task: BossTask, platform: JobPlatform): String? {
+        val running = service ?: return "请先在系统设置中开启「专注助手 · 求职自动化」无障碍服务"
+        val launch = context.packageManager.getLaunchIntentForPackage(platform.packageName) ?: return "未找到${platform.label} App"
+        running.begin(task, platform)?.let { return it }
         context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         return null
     }
 
     fun stop(reason: String = "已手动停止") { service?.halt(reason) }
 
-    /** 暂停或继续当前任务；继续时如果不在 BOSS 会先切回 BOSS。 */
+    /** 暂停或继续当前任务；继续时如果不在目标 App 会先切回。 */
     fun togglePause() { service?.togglePause() }
 
     fun diagnosticExport(): String = synchronized(diagnosticPages) { JSONArray(diagnosticPages.map { org.json.JSONObject(it) }).toString(2) }
@@ -119,8 +124,8 @@ object BossAutomation {
 }
 
 /**
- * 只在用户手动开启后、用户点「开始」时操作 BOSS 直聘界面。BOSS 界面变化并稳定后执行下一步，
- * 两步之间至少间隔设定的秒数（固定，不随机）。用户触碰 BOSS、离开 BOSS 或熄屏时暂停，可从悬浮按钮继续；
+ * 只在用户手动开启后、用户点「开始」时操作所选平台（BOSS 直聘或智联招聘）的界面。界面变化并稳定后执行下一步，
+ * 两步之间至少间隔设定的秒数（固定，不随机）。用户触碰、离开目标 App 或熄屏时暂停，可从悬浮按钮继续；
  * 遇到验证、登录、上限或识别不了的界面即停止。不识别验证码、不联网。
  */
 class BossAutomationService : AccessibilityService() {
@@ -129,13 +134,15 @@ class BossAutomationService : AccessibilityService() {
     private var task: BossTask? = null
     private var run: AutoApplyRun? = null
     private var resumeRun: ResumeRun? = null
+    private var zhaopinRun: ZhaopinRun? = null
+    private var platform = JobPlatform.BOSS
     private var paused: String? = null
     private var overlay: BossOverlay? = null
     /** 界面变化事件唤醒步进循环；CONFLATED 让连续事件只触发一次读取。 */
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private var lastEventAt = 0L
     private var lastActionAt = 0L
-    private var seenBoss = false
+    private var seenTarget = false
     private var startedAt = 0L
     private val zone: ZoneId get() = ZoneId.systemDefault()
     private val repository get() = (application as FocusApplication).repository
@@ -161,7 +168,7 @@ class BossAutomationService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         // 悬浮按钮属于本应用，点击它不会走到这里，因此不会被当成手动操作。
-        if (task == null || task == BossTask.DIAGNOSE || paused != null || event.packageName?.toString() != BossUiMap.PACKAGE) return
+        if (task == null || task == BossTask.DIAGNOSE || paused != null || event.packageName?.toString() != platform.packageName) return
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             lastEventAt = SystemClock.elapsedRealtime()
             wake.trySend(Unit)
@@ -171,7 +178,7 @@ class BossAutomationService : AccessibilityService() {
         val manual = event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED || event.eventType == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED ||
             event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
         // 第一次自动动作之前允许用户自己切到职位列表。
-        if (manual && lastActionAt > startedAt && SystemClock.elapsedRealtime() - lastActionAt > OWN_EVENT_WINDOW_MS) pause("检测到你在操作 BOSS，已暂停；处理完点悬浮按钮继续")
+        if (manual && lastActionAt > startedAt && SystemClock.elapsedRealtime() - lastActionAt > OWN_EVENT_WINDOW_MS) pause("检测到你在操作${platform.short}，已暂停；处理完点悬浮按钮继续")
     }
 
     override fun onInterrupt() = halt("系统中断了无障碍服务，已停止")
@@ -185,41 +192,48 @@ class BossAutomationService : AccessibilityService() {
         super.onDestroy()
     }
 
-    internal fun begin(next: BossTask): String? {
+    internal fun begin(next: BossTask, target: JobPlatform): String? {
         if (task != null) return "已有任务在运行"
         val state = repository.state.value
         val settings = state.autoApply.settings
-        val version = BossUiMap.installedVersion(this) ?: return "未找到 BOSS 直聘 App"
+        val version = BossUiMap.installedVersion(this, target) ?: return "未找到${target.label} App"
+        // 智联只做投递，没有回复后发简历。
+        if (target == JobPlatform.ZHAOPIN && next.resume) return "智联招聘投递时直接附带简历，不需要回复后发简历"
         if (next != BossTask.DIAGNOSE && !settings.riskAccepted) return "请先阅读并确认自动投递风险"
-        if (next == BossTask.LIVE && settings.calibratedVersion != version) return "BOSS 版本（$version）尚未试运行校准，请先试运行并核对清单"
+        if (next == BossTask.LIVE && AutoApplyRules.calibratedFor(settings, target) != version) return "${target.short} 版本（$version）尚未试运行校准，请先试运行并核对清单"
         if (next.resume && settings.resumes.isEmpty()) return "请先在「我的简历」里添加简历"
         if (next == BossTask.RESUME_LIVE && settings.resumeCalibratedVersion != version) return "BOSS 版本（$version）尚未做发简历试运行，请先试运行并核对清单"
         task = next
+        platform = target
         paused = null
-        seenBoss = false
+        seenTarget = false
         startedAt = SystemClock.elapsedRealtime()
         lastActionAt = startedAt
         val mode = if (next.live) AutoApplyMode.LIVE else AutoApplyMode.DRY_RUN
-        run = if (next == BossTask.DRY_RUN || next == BossTask.LIVE) AutoApplyEngine.start(mode, System.currentTimeMillis()) else null
+        val applyTask = next == BossTask.DRY_RUN || next == BossTask.LIVE
+        run = if (applyTask && target == JobPlatform.BOSS) AutoApplyEngine.start(mode, System.currentTimeMillis()) else null
+        zhaopinRun = if (applyTask && target == JobPlatform.ZHAOPIN) ZhaopinApplyEngine.start(mode, System.currentTimeMillis()) else null
         resumeRun = if (next.resume) ResumeEngine.start(mode, System.currentTimeMillis()) else null
         BossAutomation.update {
             when {
-                next == BossTask.DIAGNOSE -> it.copy(task = next, stopReason = null, paused = null)
-                next.resume -> it.copy(task = next, stopReason = null, paused = null, resumePreview = null)
-                else -> it.copy(task = next, stopReason = null, paused = null, preview = emptyList())
+                next == BossTask.DIAGNOSE -> it.copy(task = next, stopReason = null, paused = null, platform = target)
+                next.resume -> it.copy(task = next, stopReason = null, paused = null, resumePreview = null, platform = target)
+                else -> it.copy(task = next, stopReason = null, paused = null, preview = emptyList(), platform = target)
             }
         }
         BossAutomation.log(when (next) {
-            BossTask.DIAGNOSE -> "诊断：在 BOSS 中打开职位列表、详情和聊天页，分别点悬浮按钮里的「记录本页」"
-            BossTask.DRY_RUN -> "试运行：只读取当前职位列表，不点击任何按钮"
-            BossTask.LIVE -> "开始自动投递，每日上限 ${settings.dailyLimit} 条"
+            BossTask.DIAGNOSE -> if (target == JobPlatform.ZHAOPIN) "诊断：在智联中打开职位列表、详情、简历选择和投递成功页，分别点悬浮按钮里的「记录本页」"
+                else "诊断：在 BOSS 中打开职位列表、详情和聊天页，分别点悬浮按钮里的「记录本页」"
+            BossTask.DRY_RUN -> "${target.short} 试运行：只读取当前职位列表，不点击任何按钮"
+            BossTask.LIVE -> if (target == JobPlatform.ZHAOPIN) "开始智联自动投递，每日上限 ${settings.zhaopinDailyLimit} 条"
+                else "开始 BOSS 自动沟通，每日上限 ${settings.dailyLimit} 条"
             BossTask.RESUME_DRY_RUN -> "发简历试运行：只读取当前消息列表，不点击任何按钮"
             BossTask.RESUME_LIVE -> "开始自动发简历：只处理已自动沟通且有新回复的会话，每日上限 ${settings.dailyLimit} 份"
         })
         notify(next, when {
             next == BossTask.DIAGNOSE -> "诊断中 · 已记录 ${BossAutomation.status.value.diagnostics} 页"
             next.resume -> "正在等待 BOSS 消息列表"
-            else -> "正在等待 BOSS 职位列表"
+            else -> "正在等待${target.short}职位列表"
         })
         overlay = BossOverlay(this, onToggle = ::togglePause, onStop = { halt(if (task == BossTask.DIAGNOSE) "诊断已结束" else "已手动停止") }, onCapture = ::capture)
             .also { it.show(next == BossTask.DIAGNOSE) }
@@ -235,6 +249,7 @@ class BossAutomationService : AccessibilityService() {
         loop = null
         run = null
         resumeRun = null
+        zhaopinRun = null
         paused = null
         overlay?.hide()
         overlay = null
@@ -261,15 +276,16 @@ class BossAutomationService : AccessibilityService() {
         val now = System.currentTimeMillis()
         run = run?.let { AutoApplyEngine.resume(it, now) }
         resumeRun?.let { ResumeEngine.resume(it, now) }?.let { step -> resumeRun = step.run; step.log?.let(BossAutomation::log) }
+        zhaopinRun?.let { ZhaopinApplyEngine.resume(it, now) }?.let { step -> zhaopinRun = step.run; step.log?.let(BossAutomation::log) }
         paused = null
-        // 继续后重新给出切回 BOSS 的时间，第一步动作前也允许用户自己调整页面。
-        seenBoss = false
+        // 继续后重新给出切回目标 App 的时间，第一步动作前也允许用户自己调整页面。
+        seenTarget = false
         startedAt = SystemClock.elapsedRealtime()
         lastActionAt = startedAt
         BossAutomation.update { it.copy(paused = null) }
         BossAutomation.log("继续执行")
-        if (rootInActiveWindow?.packageName?.toString() != BossUiMap.PACKAGE) {
-            packageManager.getLaunchIntentForPackage(BossUiMap.PACKAGE)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        if (rootInActiveWindow?.packageName?.toString() != platform.packageName) {
+            packageManager.getLaunchIntentForPackage(platform.packageName)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
         }
         notify(current, "继续执行")
         refreshOverlay()
@@ -277,8 +293,8 @@ class BossAutomationService : AccessibilityService() {
     }
 
     /**
-     * 事件驱动：BOSS 界面有变化就唤醒，等界面稳定 SETTLE_MS 后读取；距上一步不足 stepDelayMs 时补足。
-     * 没有事件时每 FALLBACK_MS 也检查一次，保证超时、离开 BOSS 能被发现。只有这一个协程在执行步骤。
+     * 事件驱动：目标 App 界面有变化就唤醒，等界面稳定 SETTLE_MS 后读取；距上一步不足 stepDelayMs 时补足。
+     * 没有事件时每 FALLBACK_MS 也检查一次，保证超时、离开目标 App 能被发现。只有这一个协程在执行步骤。
      */
     private suspend fun tickLoop(stepDelayMs: Long) {
         while (scope.isActive && task != null) {
@@ -300,11 +316,14 @@ class BossAutomationService : AccessibilityService() {
         val current = task ?: return
         val state = repository.state.value
         val day = AutoApplyRules.localDay(System.currentTimeMillis(), zone)
-        val limit = state.autoApply.settings.dailyLimit
+        val limit = AutoApplyRules.limitFor(state.autoApply.settings, platform)
         val records = state.autoApply.records
         val diagnostics = BossAutomation.status.value.diagnostics
         val (count, text) = when {
             current == BossTask.DIAGNOSE -> diagnostics to "诊断中 · 已记录 $diagnostics 页"
+            platform == JobPlatform.ZHAOPIN -> (zhaopinRun?.applied ?: 0).let {
+                it to "${if (current.live) "智联投递中" else "智联试运行"} · 本次 $it · 今日 ${AutoApplyRules.contactedOn(records, day, zone, platform)}/$limit"
+            }
             current.resume -> (resumeRun?.sent ?: 0).let { it to "${if (current.live) "发简历中" else "发简历试运行"} · 本次 $it · 今日 ${AutoApplyRules.resumesSentOn(records, day, zone)}/$limit" }
             else -> (run?.contacted ?: 0).let { it to "${if (current.live) "沟通中" else "试运行"} · 本次 $it · 今日 ${AutoApplyRules.contactedOn(records, day, zone)}/$limit" }
         }
@@ -312,18 +331,19 @@ class BossAutomationService : AccessibilityService() {
     }
 
     private suspend fun tick() {
-        if (run == null && resumeRun == null) return
+        if (run == null && resumeRun == null && zhaopinRun == null) return
         if (!getSystemService(PowerManager::class.java).isInteractive) return pause("屏幕已熄灭，已暂停；亮屏后点悬浮按钮继续")
         val root = rootInActiveWindow
-        val inBoss = root?.packageName?.toString() == BossUiMap.PACKAGE
-        if (!inBoss) {
-            if (seenBoss) return pause("已离开 BOSS 直聘，已暂停；点悬浮按钮继续会切回 BOSS")
-            if (SystemClock.elapsedRealtime() - startedAt > AutoApplyEngine.STEP_TIMEOUT_MS) halt("没有打开 BOSS 直聘，已停止")
+        val inTarget = root?.packageName?.toString() == platform.packageName
+        if (!inTarget) {
+            if (seenTarget) return pause("已离开${platform.label}，已暂停；点悬浮按钮继续会切回${platform.short}")
+            if (SystemClock.elapsedRealtime() - startedAt > AutoApplyEngine.STEP_TIMEOUT_MS) halt("没有打开${platform.label}，已停止")
             return
         }
-        seenBoss = true
-        val reading = BossScreenReader.read(BossUiMap.snapshot(root!!), System.currentTimeMillis())
+        seenTarget = true
+        val reading = PlatformReader.read(platform, BossUiMap.snapshot(root!!), System.currentTimeMillis())
         resumeRun?.let { return resumeTick(it, root, reading) }
+        zhaopinRun?.let { return zhaopinTick(it, root, reading) }
         val current = run ?: return
         val state = repository.state.value
         val step = AutoApplyEngine.step(current, reading.observation, state.autoApply.settings, state.autoApply.records, zone) { UUID.randomUUID().toString() }
@@ -337,7 +357,7 @@ class BossAutomationService : AccessibilityService() {
         if (step.run.phase == AutoApplyPhase.STOPPED) {
             if (current.mode == AutoApplyMode.DRY_RUN && step.run.preview.isNotEmpty()) {
                 BossAutomation.update { it.copy(preview = step.run.preview) }
-                BossUiMap.installedVersion(this)?.let { repository.saveAutoApplySettings(state.autoApply.settings.copy(calibratedVersion = it)) }
+                BossUiMap.installedVersion(this, JobPlatform.BOSS)?.let { repository.saveAutoApplySettings(state.autoApply.settings.copy(calibratedVersion = it)) }
             }
             return halt(step.run.stopReason ?: "已停止")
         }
@@ -361,12 +381,49 @@ class BossAutomationService : AccessibilityService() {
         if (step.run.phase == ResumePhase.STOPPED) {
             if (current.mode == AutoApplyMode.DRY_RUN && step.run.listRecognized) {
                 BossAutomation.update { it.copy(resumePreview = step.run.preview) }
-                BossUiMap.installedVersion(this)?.let { repository.saveAutoApplySettings(state.autoApply.settings.copy(resumeCalibratedVersion = it)) }
+                BossUiMap.installedVersion(this, JobPlatform.BOSS)?.let { repository.saveAutoApplySettings(state.autoApply.settings.copy(resumeCalibratedVersion = it)) }
             }
             return halt(step.run.stopReason ?: "已停止")
         }
         if (!performResume(root, reading, step.action)) {
             halt(ResumeEngine.fail(step.run, "找不到要点击的界面元素，已停止；BOSS 界面可能已更新", System.currentTimeMillis()).run.stopReason ?: "已停止")
+        }
+    }
+
+    private suspend fun zhaopinTick(current: ZhaopinRun, root: AccessibilityNodeInfo, reading: BossReading) {
+        val state = repository.state.value
+        val step = ZhaopinApplyEngine.step(current, reading.observation, state.autoApply.settings, state.autoApply.records, zone) { UUID.randomUUID().toString() }
+        zhaopinRun = step.run
+        step.log?.let(BossAutomation::log)
+        step.record?.let { record ->
+            repository.addAutoApplyRecord(record)
+            notify(BossTask.LIVE, "本次已投递 ${step.run.applied} 个")
+        }
+        refreshOverlay()
+        if (step.run.phase == ZhaopinPhase.STOPPED) {
+            if (current.mode == AutoApplyMode.DRY_RUN && step.run.preview.isNotEmpty()) {
+                BossAutomation.update { it.copy(preview = step.run.preview) }
+                BossUiMap.installedVersion(this, JobPlatform.ZHAOPIN)?.let { repository.saveAutoApplySettings(state.autoApply.settings.copy(zhaopinCalibratedVersion = it)) }
+            }
+            return halt(step.run.stopReason ?: "已停止")
+        }
+        if (!performZhaopin(root, reading, step.action)) {
+            val failed = ZhaopinApplyEngine.fail(step.run, "找不到要点击的界面元素，已停止；智联界面可能已更新", System.currentTimeMillis()) { UUID.randomUUID().toString() }
+            failed.record?.let { repository.addAutoApplyRecord(it) }
+            halt(failed.run.stopReason ?: "已停止")
+        }
+    }
+
+    private fun performZhaopin(root: AccessibilityNodeInfo, reading: BossReading, action: ZhaopinAction): Boolean = when (action) {
+        ZhaopinAction.Wait -> true
+        is ZhaopinAction.OpenCard -> clickPath(root, reading.cardPaths.getOrNull(action.index))
+        ZhaopinAction.TapApply -> clickPath(root, reading.contactPath)
+        is ZhaopinAction.PickResume -> clickPath(root, reading.resumeOptionPaths.getOrNull(action.index))
+        ZhaopinAction.Confirm -> clickPath(root, reading.confirmPath)
+        ZhaopinAction.Back -> { lastActionAt = SystemClock.elapsedRealtime(); performGlobalAction(GLOBAL_ACTION_BACK) }
+        ZhaopinAction.ScrollList -> {
+            val list = reading.listPath?.let { BossUiMap.find(root, it) }
+            if (list == null) false else { lastActionAt = SystemClock.elapsedRealtime(); list.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) }
         }
     }
 
@@ -412,7 +469,7 @@ class BossAutomationService : AccessibilityService() {
                 // 输入后发送按钮才出现，等界面刷新再重新读取一次。
                 delay(SEND_SETTLE_MS)
                 val fresh = rootInActiveWindow ?: return false
-                val again = BossScreenReader.read(BossUiMap.snapshot(fresh), System.currentTimeMillis())
+                val again = PlatformReader.read(JobPlatform.BOSS, BossUiMap.snapshot(fresh), System.currentTimeMillis())
                 val send = again.sendPath?.let { BossUiMap.find(fresh, it) } ?: return false
                 var node: AccessibilityNodeInfo = send
                 while (!node.isClickable) node = node.parent ?: return false
@@ -425,8 +482,8 @@ class BossAutomationService : AccessibilityService() {
     private fun capture() {
         if (task != BossTask.DIAGNOSE) return
         val root = rootInActiveWindow
-        if (root?.packageName?.toString() != BossUiMap.PACKAGE) { BossAutomation.log("当前不是 BOSS 界面，未记录"); return }
-        val page = BossUiMap.diagnostic(BossUiMap.snapshot(root), BossUiMap.installedVersion(this), System.currentTimeMillis())
+        if (root?.packageName?.toString() != platform.packageName) { BossAutomation.log("当前不是${platform.short}界面，未记录"); return }
+        val page = BossUiMap.diagnostic(BossUiMap.snapshot(root), platform, BossUiMap.installedVersion(this, platform), System.currentTimeMillis())
         val count = synchronized(BossAutomation.diagnosticPages) {
             if (BossAutomation.diagnosticPages.size >= MAX_DIAGNOSTIC_PAGES) BossAutomation.diagnosticPages.removeAt(0)
             BossAutomation.diagnosticPages += page.toString()
@@ -443,7 +500,7 @@ class BossAutomationService : AccessibilityService() {
 
     private fun channel() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL, "BOSS 自动投递", NotificationManager.IMPORTANCE_LOW).apply {
+            NotificationChannel(CHANNEL, "求职自动化", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "显示自动投递进度与暂停、停止按钮"; setSound(null, null); enableVibration(false)
             })
     }
@@ -462,8 +519,9 @@ class BossAutomationService : AccessibilityService() {
     private fun notify(current: BossTask, text: String) {
         if (!allowed()) return
         channel()
-        val builder = builder().setContentTitle(when (current) { BossTask.DIAGNOSE -> "BOSS 界面诊断"; BossTask.DRY_RUN, BossTask.RESUME_DRY_RUN -> "BOSS 试运行"
-            BossTask.LIVE -> "BOSS 自动投递中"; BossTask.RESUME_LIVE -> "BOSS 自动发简历中" })
+        val name = platform.short
+        val builder = builder().setContentTitle(when (current) { BossTask.DIAGNOSE -> "$name 界面诊断"; BossTask.DRY_RUN, BossTask.RESUME_DRY_RUN -> "$name 试运行"
+            BossTask.LIVE -> if (platform == JobPlatform.ZHAOPIN) "智联自动投递中" else "BOSS 自动沟通中"; BossTask.RESUME_LIVE -> "BOSS 自动发简历中" })
             .setContentText(text).setOngoing(true).setOnlyAlertOnce(true).setSilent(true)
         if (current == BossTask.DIAGNOSE) builder.addAction(0, "记录本页", broadcast(ACTION_CAPTURE, 1))
         else builder.addAction(0, if (paused != null) "继续" else "暂停", broadcast(ACTION_TOGGLE, 3))
@@ -475,7 +533,7 @@ class BossAutomationService : AccessibilityService() {
     private fun notifyStopped(reason: String) {
         if (!allowed()) return
         channel()
-        NotificationManagerCompat.from(this).notify(STOPPED_ID, builder().setContentTitle("BOSS 自动投递已停止").setContentText(reason)
+        NotificationManagerCompat.from(this).notify(STOPPED_ID, builder().setContentTitle("${platform.short} 自动化已停止").setContentText(reason)
             .setStyle(NotificationCompat.BigTextStyle().bigText(reason)).setAutoCancel(true).build())
     }
 

@@ -35,19 +35,12 @@
       ],
     },
     week: {
-      total: 1440,
-      nightMinutes: 185,
       bars: [210, 180, 192, 198, 216, 240, 204],
       labels: ["一", "二", "三", "四", "五", "六", "日"],
-      apps: [
-        { name: "微信", glyph: "聊", minutes: 480, color: "#f5e8dc", ink: "#b8753e" },
-        { name: "哔哩哔哩", glyph: "哔", minutes: 390, color: "#f4e5e7", ink: "#bd8d9a" },
-        { name: "浏览器", glyph: "览", minutes: 330, color: "#e2eaf0", ink: "#7594ac" },
-        { name: "其他应用", glyph: "其", minutes: 240, color: "#ebe9df", ink: "#9d9981" },
-      ],
     },
     night: { startHour: 23, endHour: 5 },
   });
+  const USAGE_PERIODS = Object.freeze(["today", "week", "month", "year"]);
   /**
    * 今日示例用屏片段 [开始分钟, 时长, 应用]，相对今天 0 点；负数表示昨晚。
    * 每个应用的片段之和、每两小时之和分别与 USAGE.today.apps / bars 对齐，单测校验。
@@ -420,15 +413,61 @@
     return records;
   }
 
-  function sampleUsageSegments(now = new Date()) {
-    const { start } = periodRange("day", now);
-    return SAMPLE_USAGE.map(([minute, minutes, app]) => {
-      const startedAt = new Date(start);
+  function weekdayIndex(date) {
+    requireDate(date);
+    return (date.getDay() + DAYS_PER_WEEK - 1) % DAYS_PER_WEEK;
+  }
+
+  function usageModelPeriod(period) {
+    const id = { today: "day", week: "week", month: "month", year: "year" }[period];
+    if (!id) throw new Error("请选择有效的用时周期。");
+    return id;
+  }
+
+  function tuplesToSegments(dayStart, tuples) {
+    return tuples.map(([minute, minutes, app]) => {
+      const startedAt = new Date(dayStart);
       startedAt.setMinutes(minute);
       const endedAt = new Date(startedAt);
       endedAt.setMinutes(endedAt.getMinutes() + minutes);
       return { app, startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString() };
-    });
+    }).filter(segment => Date.parse(segment.endedAt) > Date.parse(segment.startedAt));
+  }
+
+  function allocateMinutes(shares, total) {
+    const sum = shares.reduce((value, share) => value + share, 0);
+    if (!sum) return shares.map(() => 0);
+    if (sum === total) return shares.slice();
+    const exact = shares.map(share => share * total / sum);
+    const floors = exact.map(Math.floor);
+    let remain = total - floors.reduce((value, share) => value + share, 0);
+    const order = exact.map((value, index) => ({ index, frac: value - floors[index] }))
+      .sort((left, right) => right.frac - left.frac || left.index - right.index);
+    for (let index = 0; index < remain; index += 1) floors[order[index].index] += 1;
+    return floors;
+  }
+
+  function scaleUsageTuples(targetMinutes) {
+    const positive = SAMPLE_USAGE.filter(([minute]) => minute >= 0);
+    const overnight = SAMPLE_USAGE.filter(([minute]) => minute < 0);
+    const allocated = allocateMinutes(positive.map(tuple => tuple[1]), targetMinutes);
+    const factor = USAGE.today.total ? targetMinutes / USAGE.today.total : 0;
+    return [
+      ...overnight.map(([minute, minutes, app]) => [minute, Math.max(0, Math.round(minutes * factor)), app]),
+      ...positive.map(([minute, , app], index) => [minute, allocated[index], app]),
+    ].filter(([, minutes]) => minutes > 0);
+  }
+
+  function sampleUsageSegments(now = new Date()) {
+    return tuplesToSegments(periodRange("day", now).start, SAMPLE_USAGE);
+  }
+
+  /** 某一日历日的示例用屏。今天用 SAMPLE_USAGE；其它天按星期模式缩放，互不串天。 */
+  function sampleUsageSegmentsForDate(date, now = new Date()) {
+    requireDate(date);
+    requireDate(now);
+    if (localDateKey(date) === localDateKey(now)) return sampleUsageSegments(now);
+    return tuplesToSegments(periodRange("day", date).start, scaleUsageTuples(USAGE.week.bars[weekdayIndex(date)]));
   }
 
   /** 专注记录按真实活动片段裁剪到 [start, end)，返回按开始时间排序的 [from, to] 毫秒区间。 */
@@ -464,6 +503,64 @@
       spans, apps, total: minutesOf(spans), nightMinutes: minutesOf(night),
       lastNightUse: night.length ? new Date(Math.max(...night.map(span => span.to))) : null,
       overlapCount: spans.filter(span => focus.some(([from, to]) => span.from < to && from < span.to)).length,
+    };
+  }
+
+  function mergeUsageApps(days) {
+    const minutes = new Map();
+    for (const day of days) {
+      for (const app of day.apps) minutes.set(app.name, (minutes.get(app.name) || 0) + app.minutes);
+    }
+    return [...minutes.entries()].map(([name, value]) => ({ name, minutes: value }))
+      .sort((left, right) => right.minutes - left.minutes || left.name.localeCompare(right.name, "zh"));
+  }
+
+  /**
+   * 用时页周期汇总：今日为双轨尺所需的当日裁剪结果；本周/本月按日、全年按月出柱。
+   * 每天的示例片段单独生成，避免跨天拼接把「昨夜」片段算进前一日总量。
+   */
+  function usagePeriodSummary(records = [], period, now = new Date()) {
+    const modelPeriod = usageModelPeriod(period);
+    const { start, end } = periodRange(modelPeriod, now);
+    const todayKey = localDateKey(now);
+    const days = [];
+    for (const date = new Date(start); date < end; date.setDate(date.getDate() + 1)) {
+      const anchor = new Date(date);
+      const { start: dayStart, end: dayEnd } = periodRange("day", anchor);
+      const summary = usageDaySummary(sampleUsageSegmentsForDate(anchor, now), focusSpans(records, dayStart, dayEnd), anchor);
+      days.push({ date: anchor, ...summary });
+    }
+    if (period === "today") {
+      const day = days[0];
+      return { total: day.total, nightMinutes: day.nightMinutes, lastNightUse: day.lastNightUse, overlapCount: day.overlapCount, spans: day.spans, apps: day.apps, bars: [] };
+    }
+    const focusBins = focusTrend(records, modelPeriod, now);
+    const bars = period === "year"
+      ? Array.from({ length: MONTHS_PER_YEAR }, (_, month) => {
+        const slice = days.filter(day => day.date.getMonth() === month);
+        return {
+          key: `${start.getFullYear()}-${padDatePart(month + 1)}`,
+          label: `${month + 1}月`,
+          minutes: slice.reduce((sum, day) => sum + day.total, 0),
+          focusMinutes: Math.round(focusBins[month].minutes),
+          current: now.getFullYear() === start.getFullYear() && now.getMonth() === month,
+        };
+      })
+      : days.map((day, index) => ({
+        key: localDateKey(day.date),
+        label: period === "week" ? USAGE.week.labels[index] : String(day.date.getDate()),
+        minutes: day.total,
+        focusMinutes: Math.round(focusBins[index].minutes),
+        current: localDateKey(day.date) === todayKey,
+      }));
+    return {
+      total: days.reduce((sum, day) => sum + day.total, 0),
+      nightMinutes: days.reduce((sum, day) => sum + day.nightMinutes, 0),
+      lastNightUse: null,
+      overlapCount: days.reduce((sum, day) => sum + day.overlapCount, 0),
+      spans: [],
+      apps: mergeUsageApps(days),
+      bars,
     };
   }
 
@@ -1182,7 +1279,10 @@
   }
 
   const JOB_ASSIST_LIMITS = Object.freeze({ maxCompany: 100, maxPosition: 120, maxDescription: 10000, maxMessage: 3000, maxJobs: 500, maxNote: 200, maxSalary: 40 });
-  const JOB_ASSIST_STATUS = Object.freeze({ draft: "draft", copied: "copied", appliedSelfReported: "applied-self-reported", autoContacted: "auto-contacted", autoResumeSent: "auto-resume-sent" });
+  /** 每次运行只操作一个平台；今日计数、上限和去重按平台分开，方案与简历共用。与 Android JobPlatform 同名。 */
+  const JOB_PLATFORMS = Object.freeze({ boss: Object.freeze({ label: "BOSS 直聘", short: "BOSS" }), zhaopin: Object.freeze({ label: "智联招聘", short: "智联" }) });
+
+  const JOB_ASSIST_STATUS = Object.freeze({ draft: "draft", copied: "copied", appliedSelfReported: "applied-self-reported", autoContacted: "auto-contacted", autoResumeSent: "auto-resume-sent", autoApplied: "auto-applied" });
   /** 用户手动标记的结果；与自动推进的 status 分开存，自动记录不会覆盖，清除后回到自动阶段。 */
   const JOB_OUTCOMES = Object.freeze(["interview", "offer", "closed"]);
   const JOB_STAGES = Object.freeze([
@@ -1211,14 +1311,17 @@
     const source = input?.source === "auto" ? "auto" : "manual";
     const preset = String(input?.preset ?? "").trim().slice(0, AUTO_PRESET_NAME_MAX);
     const outcome = JOB_OUTCOMES.includes(input?.outcome) ? input.outcome : null;
-    return { id, company, position, description, message, status, createdAt, updatedAt, note, salary, source, preset, outcome };
+    // 自动建档的来源平台；手动职位为 null。
+    const platform = source === "auto" ? (JOB_PLATFORMS[input?.platform] ? input.platform : "boss") : null;
+    return { id, company, position, description, message, status, createdAt, updatedAt, note, salary, source, preset, outcome, platform };
   }
 
   /** 进度看板阶段：手动结果优先，否则按自动推进的 status 归档。 */
   function jobStage(job) {
     if (job.outcome) return job.outcome;
     const STATUS = JOB_ASSIST_STATUS;
-    if (job.status === STATUS.autoResumeSent) return "resume";
+    // 智联投递即附带简历，与已发简历同一阶段。
+    if (job.status === STATUS.autoResumeSent || job.status === STATUS.autoApplied) return "resume";
     if (job.status === STATUS.autoContacted || job.status === STATUS.appliedSelfReported) return "contacted";
     return "prep";
   }
@@ -1240,15 +1343,15 @@
    * 只代表界面上发出，不代表 HR 已读；手动结果 outcome 不受影响。职位已满 500 条时不新建。
    */
   function upsertJobFromRecord(jobs, record, newId, now = new Date()) {
-    const status = record.result === "contacted" ? JOB_ASSIST_STATUS.autoContacted : record.result === "resume-sent" ? JOB_ASSIST_STATUS.autoResumeSent : null;
+    const status = { contacted: JOB_ASSIST_STATUS.autoContacted, "resume-sent": JOB_ASSIST_STATUS.autoResumeSent, applied: JOB_ASSIST_STATUS.autoApplied }[record.result] ?? null;
     if (!status) return jobs;
     const at = new Date(record.at ?? now).toISOString();
     if (jobs.some(job => sameJob(job, record))) {
-      return jobs.map(job => sameJob(job, record) && !(status === JOB_ASSIST_STATUS.autoContacted && job.status === JOB_ASSIST_STATUS.autoResumeSent)
+      return jobs.map(job => sameJob(job, record) && !(status === JOB_ASSIST_STATUS.autoContacted && jobStage({ ...job, outcome: null }) === "resume")
         ? { ...job, status, updatedAt: at > job.updatedAt ? at : job.updatedAt } : job);
     }
     if (jobs.length >= JOB_ASSIST_LIMITS.maxJobs) return jobs;
-    return [validateJobOpportunity({ id: newId, company: record.company, position: record.position, salary: record.salary, preset: record.preset, source: "auto", status, createdAt: at, updatedAt: at }), ...jobs];
+    return [validateJobOpportunity({ id: newId, company: record.company, position: record.position, salary: record.salary, preset: record.preset, source: "auto", platform: record.platform ?? "boss", status, createdAt: at, updatedAt: at }), ...jobs];
   }
 
   // 自动投递规则与 Android domain/AutoApply.kt 同口径；原型只用来模拟试运行，不操作任何 App。
@@ -1257,8 +1360,19 @@
   const AUTO_APPLY_SALARY = /^\s*(\d+(?:\.\d+)?)\s*(?:[-~]\s*(\d+(?:\.\d+)?))?\s*([Kk]|万|元\/(?:天|时|小时|月))/;
 
   function defaultAutoApplySettings() {
-    return { includeKeywords: [], excludeKeywords: [], minSalaryK: null, city: "", companyBlacklist: [], dailyLimit: AUTO_APPLY_LIMITS.defaultDailyLimit, stepDelaySeconds: AUTO_APPLY_LIMITS.defaultStepDelaySeconds, greeting: "", riskAccepted: false, resumes: [], presets: [], activePresetId: null };
+    return { includeKeywords: [], excludeKeywords: [], minSalaryK: null, city: "", companyBlacklist: [], dailyLimit: AUTO_APPLY_LIMITS.defaultDailyLimit, stepDelaySeconds: AUTO_APPLY_LIMITS.defaultStepDelaySeconds, greeting: "", riskAccepted: false, resumes: [], presets: [], activePresetId: null,
+      platform: "boss", zhaopinDailyLimit: AUTO_APPLY_LIMITS.defaultDailyLimit };
   }
+
+  /** dailyLimit 属于 BOSS；智联另存 zhaopinDailyLimit。 */
+  function autoApplyLimit(settings, platform = settings.platform) {
+    return platform === "zhaopin" ? settings.zhaopinDailyLimit : settings.dailyLimit;
+  }
+
+  /** 旧记录没有 platform，视为 BOSS。 */
+  const recordPlatform = item => item.platform ?? "boss";
+  /** BOSS 的发起沟通和智联的投递都算主动联系。 */
+  const isReach = item => item.result === "contacted" || item.result === "applied";
 
   /** 方案只包含这些筛选字段；黑名单、每日上限、间隔与简历是全局设置，不随方案切换。 */
   const AUTO_PRESET_FIELDS = Object.freeze(["includeKeywords", "excludeKeywords", "minSalaryK", "city", "greeting"]);
@@ -1321,7 +1435,8 @@
     words(value.companyBlacklist, "公司黑名单");
     if (value.minSalaryK !== null && !(Number.isInteger(value.minSalaryK) && value.minSalaryK >= 1 && value.minSalaryK <= AUTO_APPLY_LIMITS.maxSalaryK)) throw new Error(`最低薪资须为 1–${AUTO_APPLY_LIMITS.maxSalaryK} K。`);
     if (String(value.city).length > AUTO_APPLY_LIMITS.maxCity) throw new Error(`城市最多 ${AUTO_APPLY_LIMITS.maxCity} 个字符。`);
-    if (!Number.isInteger(value.dailyLimit) || value.dailyLimit < 1 || value.dailyLimit > AUTO_APPLY_LIMITS.maxDailyLimit) throw new Error(`每日上限须为 1–${AUTO_APPLY_LIMITS.maxDailyLimit}。`);
+    if (!JOB_PLATFORMS[value.platform]) throw new Error("平台无效。");
+    if ([value.dailyLimit, value.zhaopinDailyLimit].some(limit => !Number.isInteger(limit) || limit < 1 || limit > AUTO_APPLY_LIMITS.maxDailyLimit)) throw new Error(`每日上限须为 1–${AUTO_APPLY_LIMITS.maxDailyLimit}。`);
     if (!Number.isInteger(value.stepDelaySeconds) || value.stepDelaySeconds < AUTO_APPLY_LIMITS.minStepDelaySeconds || value.stepDelaySeconds > AUTO_APPLY_LIMITS.maxStepDelaySeconds) throw new Error(`步骤间隔须为 ${AUTO_APPLY_LIMITS.minStepDelaySeconds}–${AUTO_APPLY_LIMITS.maxStepDelaySeconds} 秒。`);
     if (String(value.greeting).length > AUTO_APPLY_LIMITS.maxGreeting) throw new Error(`招呼语最多 ${AUTO_APPLY_LIMITS.maxGreeting} 个字符。`);
     if (!Array.isArray(value.resumes) || value.resumes.length > AUTO_APPLY_LIMITS.maxResumes) throw new Error(`简历最多 ${AUTO_APPLY_LIMITS.maxResumes} 份。`);
@@ -1348,14 +1463,18 @@
     return { ...value, city: String(value.city).trim(), greeting: String(value.greeting).trim(), riskAccepted: Boolean(value.riskAccepted) };
   }
 
-  /** records: [{ jobKey, company, day: "YYYY-MM-DD", result: "contacted" | "already" | "failed" }] */
-  function autoApplyDecision(card, settings, records, day) {
+  /**
+   * records: [{ jobKey, company, day: "YYYY-MM-DD", result: "contacted" | "applied" | "already" | "failed", platform }]
+   * 去重与「同公司每天一次」只看同一平台的记录。
+   */
+  function autoApplyDecision(card, settings, records, day, platform = "boss") {
     const includes = (text, word) => String(text).toLowerCase().includes(String(word).toLowerCase());
     if (!String(card.position ?? "").trim() || !String(card.company ?? "").trim()) return { apply: false, reason: "未识别出职位或公司" };
     const key = autoApplyJobKey(card);
-    if (records.some(item => item.jobKey === key && item.result !== "failed")) return { apply: false, reason: "已沟通过" };
+    const own = records.filter(item => recordPlatform(item) === platform);
+    if (own.some(item => item.jobKey === key && item.result !== "failed")) return { apply: false, reason: platform === "zhaopin" ? "已投递过" : "已沟通过" };
     const company = String(card.company).trim().toLowerCase();
-    if (records.some(item => item.result === "contacted" && String(item.company).trim().toLowerCase() === company && item.day === day)) return { apply: false, reason: "今天已联系过这家公司" };
+    if (own.some(item => isReach(item) && String(item.company).trim().toLowerCase() === company && item.day === day)) return { apply: false, reason: "今天已联系过这家公司" };
     const black = settings.companyBlacklist.find(word => includes(card.company, word));
     if (black) return { apply: false, reason: `公司在黑名单「${black}」` };
     const excluded = settings.excludeKeywords.find(word => includes(card.position, word));
@@ -1370,24 +1489,33 @@
     return { apply: true, reason: "" };
   }
 
-  function autoApplyContactedOn(records, day) {
-    return records.filter(item => item.result === "contacted" && item.day === day).length;
+  function autoApplyContactedOn(records, day, platform = "boss") {
+    return records.filter(item => recordPlatform(item) === platform && isReach(item) && item.day === day).length;
   }
 
-  /** 模拟一次运行：按顺序决定，达到每日上限即停止；dryRun 时不产生记录。 */
-  function simulateAutoApply(cards, settings, records, day, dryRun) {
+  /**
+   * 模拟一次运行：按顺序决定，达到所选平台的每日上限即停止；dryRun 时不产生记录。
+   * BOSS 记为发起沟通；智联记为投递，按岗位关键词选「我的简历」，都没命中时用智联默认简历。
+   */
+  function simulateAutoApply(cards, settings, records, day, dryRun, platform = settings.platform ?? "boss") {
     const preview = [];
     const added = [];
+    const limit = autoApplyLimit(settings, platform);
+    const zhaopin = platform === "zhaopin";
     let stopReason = null;
     for (const card of cards) {
       const all = records.concat(added);
-      if (!dryRun && autoApplyContactedOn(all, day) >= settings.dailyLimit) { stopReason = `已达到今日上限 ${settings.dailyLimit} 条，已停止`; break; }
-      const decision = autoApplyDecision(card, settings, all, day);
+      if (!dryRun && autoApplyContactedOn(all, day, platform) >= limit) { stopReason = `已达到${zhaopin ? "智联" : ""}今日上限 ${limit} 条，已停止`; break; }
+      const decision = autoApplyDecision(card, settings, all, day, platform);
       preview.push({ card, ...decision });
-      if (!dryRun && decision.apply) added.push({ jobKey: autoApplyJobKey(card), company: card.company, position: card.position, salary: card.salary, day, result: "contacted", preset: activePresetName(settings) });
+      if (!dryRun && decision.apply) {
+        const resume = zhaopin ? pickResume(card.position, settings.resumes) : null;
+        added.push({ jobKey: autoApplyJobKey(card), company: card.company, position: card.position, salary: card.salary, day, result: zhaopin ? "applied" : "contacted",
+          preset: activePresetName(settings), platform, ...(zhaopin ? { note: resume ? `简历：${resume}` : "智联默认简历" } : {}) });
+      }
     }
     const applying = preview.filter(item => item.apply).length;
-    return { preview, records: added, stopReason: stopReason ?? (dryRun ? `试运行完成：识别 ${preview.length} 个职位，其中 ${applying} 个符合条件；未点击任何按钮` : "列表没有更多新职位，已停止") };
+    return { preview, records: added, stopReason: stopReason ?? (dryRun ? `${zhaopin ? "智联" : ""}试运行完成：识别 ${preview.length} 个职位，其中 ${applying} 个符合条件；未点击任何按钮` : "列表没有更多新职位，已停止") };
   }
 
   /** 先按列表顺序找关键词命中的简历，再退回默认简历；都没有时返回 null（跳过）。 */
@@ -1434,7 +1562,7 @@
     const sent = new Set(records.filter(item => item.result === "resume-sent").map(item => item.jobKey));
     const seen = new Set();
     return records.filter(item => {
-      if (item.result !== "contacted" || sent.has(item.jobKey) || seen.has(item.jobKey)) return false;
+      if (recordPlatform(item) !== "boss" || item.result !== "contacted" || sent.has(item.jobKey) || seen.has(item.jobKey)) return false;
       seen.add(item.jobKey);
       return true;
     });
@@ -1462,24 +1590,27 @@
     return { preview, records: added, stopReason: stopReason ?? (dryRun ? `发简历试运行完成：识别 ${conversations.length} 个会话，其中 ${sending} 个会发简历；未点击任何按钮` : "没有更多待发简历的新回复，已停止") };
   }
 
-  /** 「我的」入口卡与全局状态条共用：task 为 null / "contact" / "resume"，只汇总已有计数，不新增口径。 */
-  function autoApplyEntry({ task = null, paused = false, stopReason = null, contacted = 0, resumes = 0, awaiting = 0, limit }) {
+  /** 「我的」入口卡与全局状态条共用：task 为 null / "contact" / "resume"，只汇总已有计数，不新增口径。contacted 是所选平台的今日联系数。 */
+  function autoApplyEntry({ task = null, paused = false, stopReason = null, contacted = 0, resumes = 0, awaiting = 0, limit, platform = "boss" }) {
     const state = task ? (paused ? "paused" : "running") : stopReason ? "stopped" : "idle";
-    const label = { running: task === "resume" ? "自动发简历中" : "自动沟通中", paused: "已暂停", stopped: "已停止", idle: "空闲" }[state];
-    return { state, label, summary: `沟通 ${contacted}/${limit} · 简历 ${resumes}/${limit} · 待回复 ${awaiting}` };
+    const running = platform === "zhaopin" ? "智联投递中" : task === "resume" ? "自动发简历中" : "自动沟通中";
+    const label = { running, paused: "已暂停", stopped: "已停止", idle: "空闲" }[state];
+    const summary = platform === "zhaopin" ? `智联 · 投递 ${contacted}/${limit}` : `沟通 ${contacted}/${limit} · 简历 ${resumes}/${limit} · 待回复 ${awaiting}`;
+    return { state, label, summary };
   }
 
   /**
-   * 复盘：近 days 天（含今天）的自动沟通记录。漏斗以职位为单位：沟通 → 其中已发简历 → 其中手动标为面试/Offer；
-   * 已发简历只说明对方回复过，不等于 HR 已查看。dailyContacted 按日期从早到晚，不含未来日期。
+   * 复盘：近 days 天（含今天）的自动联系记录（BOSS 沟通 + 智联投递）。漏斗以职位（平台 + jobKey）为单位：联系 → 其中已发简历 → 其中手动标为面试/Offer；
+   * BOSS 的已发简历只说明对方回复过，智联投递即附带简历直接计入；都不等于 HR 已查看。dailyContacted 按日期从早到晚，不含未来日期。
    */
   function jobReviewSummary(records, jobs, today, days) {
     const keys = Array.from({ length: days }, (_, index) => localDateKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() - (days - 1 - index))));
     const inRange = new Set(keys);
-    const contacted = records.filter(item => item.result === "contacted" && inRange.has(item.day));
-    const sent = new Set(records.filter(item => item.result === "resume-sent").map(item => item.jobKey));
+    const keyOf = item => `${recordPlatform(item)}|${item.jobKey}`;
+    const contacted = records.filter(item => isReach(item) && inRange.has(item.day));
+    const sent = new Set(records.filter(item => item.result === "resume-sent" || item.result === "applied").map(keyOf));
     const first = new Map();
-    contacted.forEach(item => { if (!first.has(item.jobKey)) first.set(item.jobKey, item); });
+    contacted.forEach(item => { if (!first.has(keyOf(item))) first.set(keyOf(item), item); });
     const contactedKeys = [...first.keys()];
     const stages = contactedKeys.map(key => { const job = jobs.find(item => sameJob(item, first.get(key))); return job ? jobStage(job) : null; });
     const byPreset = new Map();
@@ -1505,14 +1636,14 @@
   }
 
   const api = Object.freeze({
-    LIMITS, MODES, CATEGORIES, USAGE, sampleUsageSegments, focusSpans, usageDaySummary, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, daysBetween, formatTime, Timer,
+    LIMITS, MODES, CATEGORIES, USAGE, USAGE_PERIODS, sampleUsageSegments, sampleUsageSegmentsForDate, focusSpans, usageDaySummary, usagePeriodSummary, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, daysBetween, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
     validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary,
     allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,
     completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks,
     DIARY_LIMITS, initialDiaryEntries, diaryEntryDate, parseDiaryDateQuery, validateDiaryEntry, selectDiaryEntries, trashedDiaryEntries, listDiaryDrafts, moveDiaryToTrash, restoreDiaryEntry,
     diaryStreak, JOB_ASSIST_LIMITS, JOB_ASSIST_STATUS, validateJobOpportunity,
-    AUTO_APPLY_LIMITS, defaultAutoApplySettings, parseKeywordList, salaryLowerK, autoApplyJobKey, validateAutoApplySettings, autoApplyDecision, autoApplyContactedOn, simulateAutoApply,
+    AUTO_APPLY_LIMITS, JOB_PLATFORMS, autoApplyLimit, defaultAutoApplySettings, parseKeywordList, salaryLowerK, autoApplyJobKey, validateAutoApplySettings, autoApplyDecision, autoApplyContactedOn, simulateAutoApply,
     pickResume, upsertResume, moveResume, resumeNameMatches, sameCompany, awaitingResume, resumesSentOn, simulateResumeRun, autoApplyEntry,
     JOB_OUTCOMES, JOB_STAGES, jobStage, setJobOutcome, upsertJobFromRecord, jobReviewSummary,
     activePresetName, applyAutoApplyPreset, saveAutoApplyPreset, deleteAutoApplyPreset,

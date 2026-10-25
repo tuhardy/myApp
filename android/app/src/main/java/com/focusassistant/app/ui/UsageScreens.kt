@@ -61,6 +61,7 @@ import com.focusassistant.app.domain.NightSummary
 import com.focusassistant.app.domain.Period
 import com.focusassistant.app.domain.Statistics
 import com.focusassistant.app.domain.UsageInsights
+import com.focusassistant.app.domain.UsagePeriod
 import com.focusassistant.app.platform.AppUsage
 import com.focusassistant.app.platform.UsageBucket
 import com.focusassistant.app.platform.UsageReport
@@ -82,6 +83,23 @@ private val NightTint = Color(0xFFE9ECEF)
 private val NightCardSurface = Color(0xFFEEF1F4)
 private val WheelIdle = Color(0xFFA3A3A3)
 private val USAGE_WEEK_LABELS = listOf("一", "二", "三", "四", "五", "六", "日")
+private val USAGE_PERIOD_TABS = listOf(
+    UsagePeriod.TODAY to "今日",
+    UsagePeriod.WEEK to "本周",
+    UsagePeriod.MONTH to "本月",
+    UsagePeriod.YEAR to "全年"
+)
+
+/** 夜间足迹日期：今日只看昨夜；周/月/年从该周期起点累加到今天。 */
+private fun usageNightDates(period: UsagePeriod, today: LocalDate): List<LocalDate> {
+    val start = when (period) {
+        UsagePeriod.TODAY -> today
+        UsagePeriod.WEEK -> today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+        UsagePeriod.MONTH -> today.withDayOfMonth(1)
+        UsagePeriod.YEAR -> today.withDayOfYear(1)
+    }
+    return generateSequence(start) { it.plusDays(1) }.takeWhile { !it.isAfter(today) }.toList()
+}
 
 internal object UsageLimits {
     const val GOAL_TICKS = 40
@@ -123,12 +141,12 @@ internal fun UsageScreen(
     permissionGranted: Boolean,
     loading: Boolean,
     error: String?,
-    week: Boolean,
+    period: UsagePeriod,
     settings: AppSettings,
     sessions: List<FocusSession>,
     onGrant: () -> Unit,
     onRefresh: () -> Unit,
-    onWeek: (Boolean) -> Unit,
+    onPeriod: (UsagePeriod) -> Unit,
     onGoal: () -> Unit,
     onZoom: () -> Unit,
     onReminders: (Boolean) -> Unit,
@@ -138,11 +156,9 @@ internal fun UsageScreen(
     val reading = permissionGranted && error == null && (loading || report == null)
     val visibleReport = report.takeIf { permissionGranted && !reading && error == null }
     val zone = ZoneId.systemDefault()
-    val night = remember(visibleReport, week, today) {
+    val night = remember(visibleReport, period, today) {
         visibleReport?.takeIf { it.hasData }?.let { data ->
-            val monday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-            val dates = if (week) generateSequence(monday) { it.plusDays(1) }.takeWhile { it <= today }.toList() else listOf(today)
-            UsageInsights.night(data.spans, dates, zone)
+            UsageInsights.night(data.spans, usageNightDates(period, today), zone)
         }
     }
     ScreenBody {
@@ -164,29 +180,38 @@ internal fun UsageScreen(
             TextButton(onClick = if (permissionGranted) onHelp else onGrant) { Text(if (permissionGranted) "说明" else "授权") }
         }
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(SoftSurface).padding(4.dp).selectableGroup()) {
-            listOf("今日", "本周").forEachIndexed { index, label ->
-                val selected = week == (index == 1)
+            USAGE_PERIOD_TABS.forEach { (value, label) ->
+                val selected = period == value
                 Box(Modifier.weight(1f).clip(RoundedCornerShape(9.dp)).background(if (selected) AccentSoft else Color.Transparent)
-                    .selectable(selected = selected, role = Role.Tab, onClick = { onWeek(index == 1) }).heightIn(min = 44.dp).padding(10.dp), contentAlignment = Alignment.Center) {
-                    Text(label, color = if (selected) AccentDark else Muted, fontSize = 14.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                    .selectable(selected = selected, role = Role.Tab, onClick = { onPeriod(value) }).heightIn(min = 44.dp).padding(vertical = 10.dp, horizontal = 4.dp), contentAlignment = Alignment.Center) {
+                    Text(label, color = if (selected) AccentDark else Muted, fontSize = 13.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
                 }
             }
         }
-        UsageHero(week, visibleReport, when {
+        UsageHero(period, visibleReport, when {
             !permissionGranted -> "授权后展示，不使用示例数据"
             reading -> "正在读取系统使用事件…"
             error != null -> "读取失败，请刷新重试"
             visibleReport?.hasData != true -> "暂无可确认数据，不代表用时为零"
-            week -> "周一至今 · 根据系统前台事件统计"
+            period == UsagePeriod.WEEK -> "周一至今 · 根据系统前台事件统计"
+            period == UsagePeriod.MONTH -> "本月 1 日至今 · 根据系统前台事件统计"
+            period == UsagePeriod.YEAR -> "今年 1 月至今 · 根据系统前台事件统计"
             else -> "根据系统前台事件统计 · 不含专注助手"
         }, settings.dailyGoalMinutes, onGoal)
         if (reading) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (error != null && permissionGranted) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         if (!permissionGranted) OutlinedButton(onClick = onGrant, modifier = Modifier.fillMaxWidth()) { Text("授予使用情况访问权限") }
         Caption(goalSummary(settings.dailyGoalMinutes, visibleReport?.todayMillis))
-        if (week) UsageWeekChart(visibleReport?.buckets.orEmpty(), Statistics.trend(sessions, Period.WEEK, today).map { it.seconds }, today)
-        else UsageRibbon(visibleReport, sessions, today, onZoom)
-        NightCard(week, night, permissionGranted)
+        when (period) {
+            UsagePeriod.TODAY -> UsageRibbon(visibleReport, sessions, today, onZoom)
+            UsagePeriod.WEEK -> UsagePairedChart(visibleReport?.buckets.orEmpty(), Statistics.trend(sessions, Period.WEEK, today).map { it.seconds },
+                USAGE_WEEK_LABELS, today.dayOfWeek.value - 1, { "周${USAGE_WEEK_LABELS[it]}" })
+            UsagePeriod.MONTH -> UsagePairedChart(visibleReport?.buckets.orEmpty(), Statistics.trend(sessions, Period.MONTH, today).map { it.seconds },
+                (1..today.lengthOfMonth()).map { it.toString() }, today.dayOfMonth - 1, { "${it + 1}日" }, scrollable = true)
+            UsagePeriod.YEAR -> UsagePairedChart(visibleReport?.buckets.orEmpty(), Statistics.trend(sessions, Period.YEAR, today).map { it.seconds },
+                (1..12).map { "${it}月" }, today.monthValue - 1, { "${it + 1}月" })
+        }
+        NightCard(period, night, permissionGranted)
         if (visibleReport?.hasData == true) Text("系统记录可能不完整，统计口径见说明。", color = Muted, fontSize = 12.sp)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("时间花在哪里", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -219,11 +244,16 @@ private fun goalSummary(goalMinutes: Int, todayMillis: Long?): String {
 
 /** 暖橙主卡：左边总时长，右边 40 格目标刻度环。 */
 @Composable
-private fun UsageHero(week: Boolean, report: UsageReport?, caption: String, goalMinutes: Int, onGoal: () -> Unit) {
+private fun UsageHero(period: UsagePeriod, report: UsageReport?, caption: String, goalMinutes: Int, onGoal: () -> Unit) {
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(AccentSoft).padding(start = 18.dp, end = 14.dp, top = 16.dp, bottom = 16.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(if (week) "本周应用使用" else "今日应用使用", color = AccentDark, fontSize = 12.sp)
+            Text(when (period) {
+                UsagePeriod.TODAY -> "今日应用使用"
+                UsagePeriod.WEEK -> "本周应用使用"
+                UsagePeriod.MONTH -> "本月应用使用"
+                UsagePeriod.YEAR -> "全年应用使用"
+            }, color = AccentDark, fontSize = 12.sp)
             if (report?.hasData == true) UsageTotal(report.totalMillis)
             else Text("—", fontSize = 40.sp, fontWeight = FontWeight.Light, color = Muted, style = NumeralStyle)
             Text(caption, color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
@@ -349,49 +379,77 @@ private fun LegendSwatch(color: Color) {
     Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(color))
 }
 
-/** 本周：每天「用屏灰 / 专注橙」两根并排，今天深灰高亮；未开始或无数据的日子显示 —，专注为 0 不画。 */
+/** 周/月/年：「用屏灰 / 专注橙」并排柱；当前桶深灰高亮；未开始或无数据的桶显示 —，专注为 0 不画。月视图可横向滚动。 */
 @Composable
-private fun UsageWeekChart(buckets: List<UsageBucket>, focusSeconds: List<Long>, today: LocalDate) {
-    var selected by remember(today) { mutableIntStateOf(-1) }
-    val todayIndex = today.dayOfWeek.value - 1
+private fun UsagePairedChart(
+    buckets: List<UsageBucket>,
+    focusSeconds: List<Long>,
+    labels: List<String>,
+    currentIndex: Int,
+    describeLabel: (Int) -> String,
+    scrollable: Boolean = false
+) {
+    var selected by remember(labels.size, currentIndex) { mutableIntStateOf(currentIndex.coerceAtLeast(0)) }
     val maximum = maxOf(buckets.maxOfOrNull { it.durationMillis } ?: 0L, (focusSeconds.maxOrNull() ?: 0L) * UiLimits.MILLIS_PER_SECOND, 1L)
     fun describe(index: Int): String {
         val bucket = buckets.getOrNull(index)
         val screen = if (bucket?.available == true) durationText(bucket.durationMillis / UiLimits.MILLIS_PER_SECOND) else "暂无数据或尚未开始"
-        return "周${USAGE_WEEK_LABELS[index]} · 用屏 $screen · 专注 ${durationText(focusSeconds.getOrElse(index) { 0L })}"
+        return "${describeLabel(index)} · 用屏 $screen · 专注 ${durationText(focusSeconds.getOrElse(index) { 0L })}"
     }
+    val barWidth = if (scrollable || labels.size > 7) 10.dp else 14.dp
+    val columnWidth = 32.dp
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(Modifier.fillMaxWidth().height(120.dp)) {
-            Canvas(Modifier.fillMaxSize()) {
-                repeat(4) { index ->
-                    val y = size.height * index / 3
-                    drawLine(Color(0xFFEDEDED), Offset(0f, y), Offset(size.width, y), 1.dp.toPx())
+        Column(
+            Modifier.fillMaxWidth().then(if (scrollable) Modifier.horizontalScroll(rememberScrollState()) else Modifier)
+        ) {
+            Box((if (scrollable) Modifier.width(columnWidth * labels.size) else Modifier.fillMaxWidth()).height(120.dp)) {
+                Canvas(Modifier.fillMaxSize()) {
+                    repeat(4) { index ->
+                        val y = size.height * index / 3
+                        drawLine(Color(0xFFEDEDED), Offset(0f, y), Offset(size.width, y), 1.dp.toPx())
+                    }
                 }
-            }
-            Row(Modifier.fillMaxSize().selectableGroup()) {
-                repeat(USAGE_WEEK_LABELS.size) { index ->
-                    val bucket = buckets.getOrNull(index)
-                    val available = bucket?.available == true
-                    val screenMillis = bucket?.durationMillis?.takeIf { available } ?: 0L
-                    val focusMillis = focusSeconds.getOrElse(index) { 0L } * UiLimits.MILLIS_PER_SECOND
-                    val description = describe(index)
-                    Box(Modifier.weight(1f).fillMaxHeight().selectable(selected == index, role = Role.Tab, onClick = { selected = index })
-                        .clearAndSetSemantics { contentDescription = description }, contentAlignment = Alignment.BottomCenter) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.Bottom) {
-                            if (screenMillis > 0) Box(Modifier.width(14.dp)
-                                .height((110f * screenMillis / maximum).coerceAtLeast(2f).dp)
-                                .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp)).background(if (index == todayIndex) TodayBar else ScreenBar))
-                            else Text(if (available) "0" else "—", fontSize = 10.sp, color = Muted, modifier = Modifier.padding(bottom = 4.dp))
-                            if (focusMillis > 0) Box(Modifier.width(14.dp)
-                                .height((110f * focusMillis / maximum).coerceAtLeast(2f).dp)
-                                .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp)).background(Accent))
+                Row(Modifier.fillMaxSize().selectableGroup()) {
+                    repeat(labels.size) { index ->
+                        val bucket = buckets.getOrNull(index)
+                        val available = bucket?.available == true
+                        val screenMillis = bucket?.durationMillis?.takeIf { available } ?: 0L
+                        val focusMillis = focusSeconds.getOrElse(index) { 0L } * UiLimits.MILLIS_PER_SECOND
+                        val description = describe(index)
+                        val column = if (scrollable) Modifier.width(columnWidth) else Modifier.weight(1f)
+                        Box(column.fillMaxHeight()
+                            .background(if (selected == index) AccentSoft else Color.Transparent, RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                            .selectable(selected == index, role = Role.Tab, onClick = { selected = index })
+                            .clearAndSetSemantics { contentDescription = description }, contentAlignment = Alignment.BottomCenter) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.Bottom) {
+                                if (screenMillis > 0) Box(Modifier.width(barWidth)
+                                    .height((110f * screenMillis / maximum).coerceAtLeast(2f).dp)
+                                    .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp)).background(if (index == currentIndex) TodayBar else ScreenBar))
+                                else Text(if (available) "0" else "—", fontSize = 10.sp, color = Muted, modifier = Modifier.padding(bottom = 4.dp))
+                                if (focusMillis > 0) Box(Modifier.width(barWidth)
+                                    .height((110f * focusMillis / maximum).coerceAtLeast(2f).dp)
+                                    .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp)).background(Accent))
+                            }
                         }
                     }
                 }
             }
-        }
-        Row(Modifier.fillMaxWidth()) {
-            USAGE_WEEK_LABELS.forEach { Text(it, color = Muted, fontSize = 11.sp, textAlign = TextAlign.Center, modifier = Modifier.weight(1f)) }
+            Row(if (scrollable) Modifier.width(columnWidth * labels.size) else Modifier.fillMaxWidth()) {
+                labels.forEachIndexed { index, label ->
+                    val item = if (scrollable) Modifier.width(columnWidth) else Modifier.weight(1f)
+                    Text(
+                        label,
+                        color = if (index == selected) Ink else Muted,
+                        fontSize = 12.sp,
+                        fontWeight = if (index == selected) FontWeight.SemiBold else FontWeight.Normal,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Visible,
+                        modifier = item.clickable { selected = index }.padding(top = 2.dp)
+                    )
+                }
+            }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             LegendSwatch(ScreenBar)
@@ -400,20 +458,32 @@ private fun UsageWeekChart(buckets: List<UsageBucket>, focusSeconds: List<Long>,
             LegendSwatch(Accent)
             Text("专注", color = Muted, fontSize = 12.sp)
         }
-        Text(if (selected < 0) "点击柱形查看当天 · — 表示暂无数据或尚未开始" else describe(selected),
-            color = Muted, fontSize = 11.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        Text(
+            if (labels.isEmpty()) "暂无分档" else describe(selected.coerceIn(0, labels.lastIndex)),
+            color = AccentDark,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
-/** 石板灰夜间足迹卡：今日看前一晚 23 点至今天 5 点，本周看周一至今每晚之和。 */
+/** 石板灰夜间足迹卡：今日看前一晚 23 点至今天 5 点，周/月/年看该周期起点至今每晚之和。 */
 @Composable
-private fun NightCard(week: Boolean, night: NightSummary?, permissionGranted: Boolean) {
-    val label = if (week) "本周夜间足迹" else "昨夜足迹"
+private fun NightCard(period: UsagePeriod, night: NightSummary?, permissionGranted: Boolean) {
+    val range = when (period) {
+        UsagePeriod.TODAY -> "昨夜"
+        UsagePeriod.WEEK -> "本周"
+        UsagePeriod.MONTH -> "本月"
+        UsagePeriod.YEAR -> "全年"
+    }
+    val label = if (period == UsagePeriod.TODAY) "昨夜足迹" else "${range}夜间足迹"
     val (title, detail) = when {
         night == null -> label to if (permissionGranted) "暂无可确认的夜间数据，不代表没有使用。" else "授权后查看 23 点到 5 点的使用情况。"
         night.millis == 0L -> "$label · 没有" to "23 点到 5 点没有记录到前台使用，睡得很安静。"
-        week -> "$label · ${durationText(night.millis / UiLimits.MILLIS_PER_SECOND)}" to
-            "本周 23 点到 5 点共用了 ${durationText(night.millis / UiLimits.MILLIS_PER_SECOND)}，夜里的时间留给睡眠吧。"
+        period != UsagePeriod.TODAY -> "$label · ${durationText(night.millis / UiLimits.MILLIS_PER_SECOND)}" to
+            "${range} 23 点到 5 点共用了 ${durationText(night.millis / UiLimits.MILLIS_PER_SECOND)}，夜里的时间留给睡眠吧。"
         else -> "$label · ${durationText(night.millis / UiLimits.MILLIS_PER_SECOND)}" to
             "最后一次放下手机是 ${night.lastUse?.let { clockLabel(it) } ?: "—"}，今晚试着早一点说晚安。"
     }

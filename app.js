@@ -1,7 +1,7 @@
 "use strict";
 
 (() => {
-  const { LIMITS, CATEGORIES, USAGE, sampleUsageSegments, focusSpans, usageDaySummary, initialTasks, integerInRange, validateTask, taskSummary, formatTime, Timer,
+  const { LIMITS, CATEGORIES, USAGE, USAGE_PERIODS, sampleUsageSegments, focusSpans, usageDaySummary, usagePeriodSummary, initialTasks, integerInRange, validateTask, taskSummary, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv,
     initialFocusItems, validateFocusItem, focusHourDistribution, initialProgressEntries, validateProgress,
     latestProjectProgress, allTimeFocusSummary, allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods } = FocusModel;
@@ -29,7 +29,7 @@
   const TIMING_NAMES = { countdown: "倒计时", countup: "正计时" };
   const timer = new Timer();
   const state = {
-    tasks: initialTasks(), filter: "pending", period: "today", goal: UI.initialGoalMinutes,
+    tasks: initialTasks(), filter: "pending", period: "today", usageChartSelection: null, goal: UI.initialGoalMinutes,
     taskDrafts: new Map(), taskEditorId: null, taskEditorReturn: null, lastTaskCategory: "", taskExpanded: new Set(), taskSearch: "",
     historyMonth: localDateKey(new Date()).slice(0, 7), historyUndated: false, historyViews: new Map(),
     finishingTasks: new Map(), taskUndo: [],
@@ -38,7 +38,7 @@
     statsPickerOpen: false, statsPickerCursor: null, statsSelection: {}, statsBins: {}, openRecords: new Set(),
     focusItems: initialFocusItems(), selectedFocusItem: "focus-reading", nextFocusItemId: 1,
     jobOpportunities: [], nextJobOpportunityId: 1,
-    autoApply: { settings: FocusModel.defaultAutoApplySettings(), records: [], preview: [], log: [], stopReason: null, calibrated: false, resumePreview: null, resumeCalibrated: false, tab: "contact", run: null, nextResumeId: 1, nextPresetId: 1, stageFilter: "all", reviewDays: 7 },
+    autoApply: { settings: FocusModel.defaultAutoApplySettings(), records: [], preview: [], log: [], stopReason: null, calibrated: { boss: false, zhaopin: false }, resumePreview: null, resumeCalibrated: false, tab: "contact", run: null, nextResumeId: 1, nextPresetId: 1, stageFilter: "all", reviewDays: 7 },
     reminders: false, nextTaskId: 1, nextRecordId: 1, nextStepId: 1,
     openProjects: new Set(), progressEntries: [], progressDrafts: new Map(), nextProgressId: 1,
     pendingProgressPrompts: [], progressDialogRecord: null, progressReturnHome: false,
@@ -2882,25 +2882,32 @@
 
   function renderUsage() {
     const now = new Date();
-    const isToday = state.period === "today";
-    const day = usageDaySummary(sampleUsageSegments(now), focusSpans(state.records, periodRange("day", now).start, periodRange("day", now).end), now);
-    const data = isToday ? { ...USAGE.today, total: day.total, nightMinutes: day.nightMinutes } : USAGE.week;
-    $("usage-total-label").textContent = isToday ? "今日屏幕使用" : "本周屏幕使用";
+    const period = USAGE_PERIODS.includes(state.period) ? state.period : "today";
+    const today = usagePeriodSummary(state.records, "today", now);
+    const data = period === "today" ? today : usagePeriodSummary(state.records, period, now);
+    const names = { today: "今日", week: "本周", month: "本月", year: "全年" };
+    $("usage-total-label").textContent = `${names[period]}屏幕使用`;
     $("usage-total").replaceChildren(element("strong", "", Math.floor(data.total / LIMITS.secondsPerMinute)), document.createTextNode(" 小时 "), element("strong", "", data.total % LIMITS.secondsPerMinute), document.createTextNode(" 分钟"));
-    $("usage-comparison").textContent = isToday ? "比昨日少 36 分钟，继续保持" : "日均约 3 小时 26 分钟 · 示例统计";
+    const average = Math.round(data.total / Math.max(1, data.bars.length));
+    $("usage-comparison").textContent = period === "today" ? "比昨日少 36 分钟，继续保持"
+      : period === "year" ? `月均约 ${durationLabel(average)} · 示例统计`
+      : `日均约 ${durationLabel(average)} · 示例统计`;
     document.querySelectorAll("[data-period]").forEach(button => {
-      const selected = button.dataset.period === state.period;
+      const selected = button.dataset.period === period;
       button.classList.toggle("selected", selected);
       button.setAttribute("aria-pressed", String(selected));
     });
-    $("usage-day").hidden = !isToday;
-    $("usage-week").hidden = isToday;
-    if (isToday) renderUsageRibbon(day, now);
-    else renderUsageWeek(data, now);
-    renderGoalRing(day.total);
-    renderNightCard(data.nightMinutes, isToday ? day.lastNightUse : null, isToday);
+    $("usage-day").hidden = period !== "today";
+    $("usage-week").hidden = period === "today";
+    $("usage-week").dataset.range = period;
+    $("usage-week").classList.toggle("dense", period === "month");
+    if (period === "today") renderUsageRibbon(today, now);
+    else renderUsageChart(data, period);
+    renderGoalRing(today.total);
+    renderNightCard(data.nightMinutes, period === "today" ? today.lastNightUse : null, period);
+    $("usage-list-caption").textContent = period === "today" ? "按使用时长 · 示例" : `${names[period]}累计 · 示例`;
     const glyphs = new Map(USAGE.today.apps.map(app => [app.name, app]));
-    const apps = isToday ? day.apps.map(app => ({ ...glyphs.get(app.name), ...app })) : data.apps;
+    const apps = data.apps.map(app => ({ ...glyphs.get(app.name), ...app }));
     $("usage-apps").replaceChildren(...apps.map(app => {
       const row = element("div", "app-row");
       const avatar = element("div", "app-avatar", app.glyph);
@@ -2909,7 +2916,7 @@
       const details = element("div", "app-details");
       const heading = element("div");
       heading.append(element("span", "", app.name), element("small", "", durationLabel(app.minutes)));
-      const filled = Math.round(app.minutes / data.total * UI.gaugeTicks);
+      const filled = data.total ? Math.round(app.minutes / data.total * UI.gaugeTicks) : 0;
       const ticks = element("span", "project-gauge-ticks app-ticks");
       ticks.setAttribute("aria-hidden", "true");
       ticks.append(...Array.from({ length: UI.gaugeTicks }, (_, tick) => element("i", tick < filled ? "on" : "")));
@@ -3007,24 +3014,53 @@
     scroller.scrollLeft = Math.max(0, (now - start) / (end - start) * scroller.scrollWidth - scroller.clientWidth * 0.6);
   }
 
-  /** 本周：每天一对柱子，灰色是示例用屏，暖橙是同一天真实的专注时长，共用同一纵轴。 */
-  function renderUsageWeek(data, now) {
-    const focus = focusTrend(state.records, "week", now).map(bin => Math.round(bin.minutes));
-    const maximum = Math.max(...data.bars, ...focus);
-    $("usage-chart").replaceChildren(...data.bars.map((value, index) => {
-      const column = element("div", "bar-column");
-      const bar = element("div", `chart-bar${index === data.bars.length - 1 ? " highlight" : ""}`);
-      bar.style.height = `${value / maximum * 100}%`;
-      bar.title = `用屏 ${value} 分钟`;
+  function usageBarCaption(bar, period) {
+    const name = period === "week" ? `周${bar.label}` : period === "month" ? `${bar.label}日` : bar.label;
+    return `${name} · 用屏 ${durationLabel(bar.minutes)} · 专注 ${durationLabel(bar.focusMinutes)}`;
+  }
+
+  /** 本周/本月按日、全年按月：灰色示例用屏，暖橙同一档真实专注，共用纵轴；当前档深灰。轴上标出每一档日期，点柱显示该档用屏与专注。 */
+  function renderUsageChart(data, period) {
+    const names = { week: "本周", month: "本月", year: "全年" };
+    const maximum = Math.max(1, ...data.bars.flatMap(bar => [bar.minutes, bar.focusMinutes]));
+    const currentIndex = data.bars.findIndex(bar => bar.current);
+    let selected = state.usageChartSelection;
+    if (!Number.isInteger(selected) || selected < 0 || selected >= data.bars.length) {
+      selected = currentIndex < 0 ? 0 : currentIndex;
+      state.usageChartSelection = selected;
+    }
+    $("usage-week").style.setProperty("--bars", data.bars.length);
+    $("usage-chart").classList.toggle("dense", period === "month");
+    $("usage-chart").classList.toggle("year-bars", period === "year");
+    $("chart-labels").classList.toggle("dense", period === "month");
+    $("usage-chart").replaceChildren(...data.bars.map((bar, index) => {
+      const column = element("div", `bar-column${index === selected ? " selected" : ""}`);
+      column.setAttribute("role", "listitem");
+      column.tabIndex = 0;
+      column.setAttribute("aria-label", usageBarCaption(bar, period));
+      const screen = element("div", `chart-bar${bar.current ? " highlight" : ""}`);
+      screen.style.height = `${bar.minutes / maximum * 100}%`;
       const focusBar = element("div", "chart-focus");
-      focusBar.style.height = `${focus[index] / maximum * 100}%`;
-      focusBar.title = `专注 ${focus[index]} 分钟`;
-      column.append(bar, focusBar);
-      focusBar.hidden = !focus[index];
+      focusBar.style.height = `${bar.focusMinutes / maximum * 100}%`;
+      focusBar.hidden = !bar.focusMinutes;
+      column.append(screen, focusBar);
+      const pick = () => {
+        if (state.usageChartSelection === index) return;
+        state.usageChartSelection = index;
+        renderUsageChart(data, period);
+      };
+      column.addEventListener("click", pick);
+      column.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); pick(); } });
       return column;
     }));
-    $("usage-chart").setAttribute("aria-label", `示例本周每日使用分钟数：${data.bars.join("、")}；本周每日专注分钟数：${focus.join("、")}`);
-    $("chart-labels").replaceChildren(...data.labels.map(label => element("span", "", label)));
+    $("usage-chart").setAttribute("aria-label", `示例${names[period]}用屏与专注柱状图，点柱查看具体时长`);
+    $("chart-labels").replaceChildren(...data.bars.map((bar, index) => element("span", index === selected ? "on" : "", bar.label)));
+    $("chart-caption").textContent = usageBarCaption(data.bars[selected], period);
+    if (period === "month") {
+      const scroller = $("usage-chart").parentElement;
+      const mark = $("usage-chart").children[selected];
+      if (scroller && mark) scroller.scrollLeft = Math.max(0, mark.offsetLeft - scroller.clientWidth / 2 + mark.offsetWidth / 2);
+    }
   }
 
   /** 目标刻度环：40 格按已用 / 目标点亮，超出部分从起点再走一圈并换深色。 */
@@ -3044,12 +3080,14 @@
     $("goal-summary").textContent = remaining > 0 ? `今天还剩 ${durationLabel(remaining)}，留一点时间给生活。` : remaining === 0 ? "今天已达到目标时长，休息一下吧。" : `今天已超出目标 ${durationLabel(-remaining)}，给眼睛一点休息。`;
   }
 
-  function renderNightCard(minutes, lastUse, isToday) {
+  function renderNightCard(minutes, lastUse, period) {
+    const isToday = period === "today";
+    const rangeName = { today: "昨夜", week: "本周", month: "本月", year: "全年" }[period];
     $("night-card").classList.toggle("quiet", minutes === 0);
-    $("night-title").textContent = isToday ? `昨夜足迹 · ${minutes ? durationLabel(minutes) : "没有"}` : `本周夜间足迹 · ${durationLabel(minutes)}`;
+    $("night-title").textContent = isToday ? `昨夜足迹 · ${minutes ? durationLabel(minutes) : "没有"}` : `${rangeName}夜间足迹 · ${durationLabel(minutes)}`;
     $("night-summary").textContent = !minutes ? "23 点到 5 点没有拿起手机，昨晚睡得很安静。"
       : isToday ? `最后一次放下手机是 ${clockLabel(lastUse)}，今晚试着早一点说晚安。`
-      : `本周 23 点到 5 点共用了 ${durationLabel(minutes)}，夜里的时间留给睡眠吧。`;
+      : `${rangeName} 23 点到 5 点共用了 ${durationLabel(minutes)}，夜里的时间留给睡眠吧。`;
   }
 
   /**
@@ -3315,16 +3353,23 @@
     if (status === STATUS.appliedSelfReported) return "已沟通 · 本人记录";
     if (status === STATUS.autoContacted) return "自动化已发起沟通";
     if (status === STATUS.autoResumeSent) return "自动化已发送简历";
+    if (status === STATUS.autoApplied) return "自动化已投递（智联）";
     return "准备中";
   }
 
-  // 模拟的 BOSS 职位列表，仅用于演示规则匹配；不代表真实职位。
+  // 模拟的职位列表，仅用于演示规则匹配；不代表真实职位。智联用另一组卡片，演示两个平台分开去重。
   const AUTO_APPLY_SAMPLE_CARDS = Object.freeze([
     { position: "Android 开发工程师", company: "示例科技", salary: "15-25K·13薪", city: "上海" },
     { position: "Kotlin 客户端开发", company: "演示网络", salary: "20-30K", city: "上海" },
     { position: "iOS 开发工程师", company: "样例互动", salary: "18-28K", city: "上海" },
     { position: "Android 实习生", company: "示例外包服务", salary: "150-200元/天", city: "上海" },
     { position: "移动端开发（Android）", company: "演示数据", salary: "12-15K", city: "杭州" },
+  ]);
+  const ZHAOPIN_SAMPLE_CARDS = Object.freeze([
+    { position: "Android 开发工程师", company: "示例科技", salary: "1.5-2.5万", city: "上海" },
+    { position: "Android 高级工程师", company: "样例软件", salary: "2-3万", city: "上海" },
+    { position: "前端开发工程师", company: "演示网络", salary: "1.2-2万", city: "上海" },
+    { position: "Kotlin 开发（外包）", company: "示例外包服务", salary: "1-1.5万", city: "上海" },
   ]);
 
   // 原型没有真实消息页：已模拟沟通的公司中，排在单数位的视为“对方有新消息”，用于演示发简历流程。
@@ -3337,8 +3382,33 @@
     state.autoApply.log = [...state.autoApply.log, `${stamp}  ${line}`].slice(-80);
   }
 
-  const AUTO_TASK_LABELS = Object.freeze({ contact: "自动沟通中", resume: "自动发简历中" });
-  const AUTO_RESULT_LABELS = Object.freeze({ contacted: "已沟通", already: "之前沟通过", failed: "失败", "resume-sent": "已发简历" });
+  const AUTO_TASK_LABELS = Object.freeze({ contact: "自动沟通中", resume: "自动发简历中", apply: "智联投递中" });
+  const AUTO_RESULT_LABELS = Object.freeze({ contacted: "已沟通", already: "之前沟通过", failed: "失败", "resume-sent": "已发简历", applied: "已投递" });
+
+  /** 运行中以任务平台为准，空闲时用设置里选中的平台。 */
+  function autoPlatform(auto) {
+    return auto.run?.platform ?? auto.settings.platform;
+  }
+
+  function renderAutoPlatform(auto) {
+    const current = autoPlatform(auto);
+    document.querySelectorAll("[data-platform]").forEach(button => {
+      const active = button.dataset.platform === current;
+      button.setAttribute("aria-checked", String(active));
+      button.tabIndex = active ? 0 : -1;
+      button.disabled = Boolean(auto.run);
+    });
+    autoHint("auto-platform-hint", auto.run ? "运行中不能切换平台" : null);
+  }
+
+  function chooseAutoPlatform(platform, focus = false) {
+    const auto = state.autoApply;
+    if (auto.run || auto.settings.platform === platform) return;
+    auto.settings = { ...auto.settings, platform };
+    auto.preview = [];
+    renderAutoApply();
+    if (focus) document.querySelector(`[data-platform="${platform}"]`).focus();
+  }
   const AUTO_SHOWN_RECORDS = 30;
 
   function autoHint(id, reason) {
@@ -3350,14 +3420,23 @@
     const run = auto.run;
     const card = $("auto-status");
     card.classList.toggle("running", Boolean(run));
+    const platform = autoPlatform(auto);
+    const zhaopin = platform === "zhaopin";
+    const short = FocusModel.JOB_PLATFORMS[platform].short;
+    const limit = FocusModel.autoApplyLimit(settings, platform);
+    renderAutoPlatform(auto);
     $("auto-status-headline").textContent = run ? (run.paused ? "已暂停" : AUTO_TASK_LABELS[run.kind]) : "空闲";
     const detail = run
-      ? run.paused ? "原型模拟暂停。Android 上触碰 BOSS、离开 BOSS 或熄屏也会暂停，可从悬浮按钮继续或停止。"
+      ? run.paused ? `原型模拟暂停。Android 上触碰${short}、离开${short}或熄屏也会暂停，可从悬浮按钮继续或停止。`
         : `原型每 ${settings.stepDelaySeconds} 秒模拟一步，还剩 ${run.queue.length} 步；Android 运行中保持亮屏，可从悬浮按钮暂停或停止。`
       : auto.stopReason ? `最近停止：${auto.stopReason}` : "";
     $("auto-status-detail").hidden = !detail;
     $("auto-status-detail").textContent = detail;
-    $("auto-apply-count").textContent = `${FocusModel.autoApplyContactedOn(auto.records, today)}/${settings.dailyLimit}`;
+    $("auto-apply-count").textContent = `${FocusModel.autoApplyContactedOn(auto.records, today, platform)}/${limit}`;
+    $("auto-apply-count-label").textContent = zhaopin ? "今日投递" : "今日沟通";
+    // 智联只做投递，没有回复后发简历的计数。
+    $("auto-resume-count-cell").hidden = zhaopin;
+    $("auto-awaiting-count-cell").hidden = zhaopin;
     $("auto-resume-count").textContent = `${FocusModel.resumesSentOn(auto.records, today)}/${settings.dailyLimit}`;
     $("auto-awaiting-count").textContent = String(FocusModel.awaitingResume(auto.records).length);
     $("auto-status-actions").hidden = !run;
@@ -3366,11 +3445,14 @@
 
   function renderAutoReadiness(auto, settings) {
     const running = Boolean(auto.run);
+    const platform = settings.platform;
+    const { label, short } = FocusModel.JOB_PLATFORMS[platform];
+    const calibrated = auto.calibrated[platform];
     const steps = [
-      [false, "原型未检测 BOSS 直聘（Android 读取已安装版本）", null],
+      [false, `原型未检测${label}（Android 读取已安装版本）`, null],
       [false, "原型无无障碍服务（Android 需在系统设置中手动开启）", null],
       [settings.riskAccepted, settings.riskAccepted ? "已确认风险" : "阅读并确认自动化风险", ["auto-apply-risk", "确认", autoApplyRiskDialog, true]],
-      [auto.calibrated, auto.calibrated ? "已试运行" : "在职位列表页做一次沟通试运行", ["auto-ready-dry-run", "试运行", () => runAutoApply(true), settings.riskAccepted]],
+      [calibrated, calibrated ? "已试运行" : `在${short}职位列表页做一次试运行`, ["auto-ready-dry-run", "试运行", () => runAutoApply(true), settings.riskAccepted]],
     ];
     $("auto-ready-heading").textContent = `准备 ${steps.filter(step => step[0]).length}/${steps.length}`;
     $("auto-apply-checklist").replaceChildren(...steps.map(([ok, text, action], index) => {
@@ -3406,26 +3488,37 @@
 
   function renderAutoContact(auto, settings, today) {
     const running = Boolean(auto.run);
-    $("auto-apply-today").textContent = `今日 ${FocusModel.autoApplyContactedOn(auto.records, today)}/${settings.dailyLimit}`;
+    const platform = settings.platform;
+    const zhaopin = platform === "zhaopin";
+    const calibrated = auto.calibrated[platform];
+    const limit = FocusModel.autoApplyLimit(settings, platform);
+    $("auto-contact-title").textContent = zhaopin ? "智联自动投递" : "自动沟通";
+    $("auto-contact-intro").textContent = zhaopin
+      ? "在智联职位列表里按规则打开职位、点“申请职位”；需要选简历时按「我的简历」选择同名简历后确认。遇到验证、登录或次数上限立即停止，不识别验证码。"
+      : "在职位推荐列表里按规则打开职位、点“立即沟通”并发送招呼语。遇到验证、登录或次数上限立即停止，不识别验证码。";
+    $("auto-rules-title").textContent = zhaopin ? "投递规则 ›" : "沟通规则 ›";
+    $("auto-apply-start").textContent = zhaopin ? "开始投递" : "开始沟通";
+    $("auto-apply-today").textContent = `今日 ${FocusModel.autoApplyContactedOn(auto.records, today, platform)}/${limit}`;
     $("auto-apply-rules").textContent = [
       settings.includeKeywords.length ? `关键词：${settings.includeKeywords.join("、")}` : "关键词：不限",
       settings.excludeKeywords.length ? `排除：${settings.excludeKeywords.join("、")}` : null,
       settings.minSalaryK !== null ? `最低 ${settings.minSalaryK}K` : null,
       settings.city ? `城市：${settings.city}` : null,
       settings.companyBlacklist.length ? `黑名单 ${settings.companyBlacklist.length} 家` : null,
-      `每日 ${settings.dailyLimit} 条`,
+      `每日 ${limit} 条`,
       `间隔 ${settings.stepDelaySeconds} 秒`,
-      settings.greeting ? "自定义招呼语" : "BOSS 默认招呼语",
+      // 智联投递不发招呼语。
+      zhaopin ? null : settings.greeting ? "自定义招呼语" : "BOSS 默认招呼语",
     ].filter(Boolean).join(" · ");
     renderAutoPresets(auto, settings);
     $("auto-apply-edit-rules").disabled = running;
     $("auto-apply-dry-run").disabled = running;
-    $("auto-apply-start").disabled = running || !auto.calibrated;
-    autoHint("auto-apply-hint", running ? "有任务在运行，先暂停或停止" : !auto.calibrated ? "先试运行一次，核对清单后才能开始" : null);
+    $("auto-apply-start").disabled = running || !calibrated;
+    autoHint("auto-apply-hint", running ? "有任务在运行，先暂停或停止" : !calibrated ? `先在${FocusModel.JOB_PLATFORMS[platform].short}职位列表页试运行一次，核对清单后才能开始` : null);
     const preview = $("auto-apply-preview");
     preview.hidden = !auto.preview.length;
     preview.replaceChildren(...(auto.preview.length ? [element("strong", "", "试运行清单（未点击）")] : []),
-      ...auto.preview.map(item => element("p", item.apply ? "apply" : "", `${item.apply ? "会沟通" : "跳过"} · ${item.card.position} · ${item.card.company} · ${item.card.salary}${item.apply ? "" : `（${item.reason}）`}`)));
+      ...auto.preview.map(item => element("p", item.apply ? "apply" : "", `${item.apply ? (zhaopin ? "会投递" : "会沟通") : "跳过"} · ${item.card.position} · ${item.card.company} · ${item.card.salary}${item.apply ? "" : `（${item.reason}）`}`)));
   }
 
   function renderAutoPresets(auto, settings) {
@@ -3508,10 +3601,18 @@
   function renderAutoResume(auto, settings, today) {
     const running = Boolean(auto.run);
     const resumes = settings.resumes;
-    $("auto-resume-today").textContent = `今日 ${FocusModel.resumesSentOn(auto.records, today)}/${settings.dailyLimit} · 待回复 ${FocusModel.awaitingResume(auto.records).length}`;
+    const zhaopin = settings.platform === "zhaopin";
+    $("auto-resume-title").textContent = zhaopin ? "投递用简历" : "自动发简历";
+    $("auto-resume-intro").textContent = zhaopin
+      ? "智联投递时直接附带简历，不需要等回复。弹出简历选择时按岗位关键词选简历，没命中用默认简历；找不到同名简历会停止，不投递。"
+      : "对方回复后才能发附件简历。只处理本应用自动沟通过、会话有新消息的公司，不读消息内容；按岗位关键词选简历，没命中用默认简历。";
+    // 智联没有回复后发简历，只管理两个平台共用的「我的简历」。
+    $("auto-resume-actions").hidden = zhaopin;
+    $("auto-resume-default-hint").textContent = zhaopin ? "没有默认简历：关键词都没命中、且智联要求选简历时会停止。" : "没有默认简历：关键词都没命中的会话会跳过。";
+    $("auto-resume-today").textContent = zhaopin ? "两个平台共用" : `今日 ${FocusModel.resumesSentOn(auto.records, today)}/${settings.dailyLimit} · 待回复 ${FocusModel.awaitingResume(auto.records).length}`;
     $("auto-resume-total").textContent = `${resumes.length}/${FocusModel.AUTO_APPLY_LIMITS.maxResumes}`;
     const list = $("auto-resume-list");
-    if (!resumes.length) list.replaceChildren(element("li", "auto-resume-empty", "还没有简历。名称要和 BOSS「附件简历」里的文件名一致，例如「张三-Android.pdf」。"));
+    if (!resumes.length) list.replaceChildren(element("li", "auto-resume-empty", "还没有简历。名称要和招聘 App 里的简历名称一致，例如 BOSS 附件「张三-Android.pdf」。"));
     else list.replaceChildren(...resumes.map((resume, index) => {
       const item = element("li", "auto-resume-item");
       const head = element("div", "auto-resume-item-head");
@@ -3546,9 +3647,9 @@
     $("auto-resume-default-hint").hidden = !resumes.length || resumes.some(resume => resume.isDefault);
     $("auto-resume-dry-run").disabled = running || !resumes.length;
     $("auto-resume-start").disabled = running || !resumes.length || !auto.resumeCalibrated;
-    autoHint("auto-resume-hint", running ? "有任务在运行，先暂停或停止" : !resumes.length ? "先添加至少一份简历" : !auto.resumeCalibrated ? "先做一次发简历试运行，核对清单后才能开始" : null);
+    autoHint("auto-resume-hint", zhaopin ? null : running ? "有任务在运行，先暂停或停止" : !resumes.length ? "先添加至少一份简历" : !auto.resumeCalibrated ? "先做一次发简历试运行，核对清单后才能开始" : null);
     const resumePreview = $("auto-resume-preview");
-    resumePreview.hidden = auto.resumePreview === null;
+    resumePreview.hidden = zhaopin || auto.resumePreview === null;
     resumePreview.replaceChildren(...(auto.resumePreview === null ? [] : [
       element("strong", "", "发简历试运行清单（未点击）"),
       ...(auto.resumePreview.length ? auto.resumePreview.map(item => element("p", item.resumeName ? "apply" : "",
@@ -3561,14 +3662,14 @@
     const records = [...auto.records].sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
     $("auto-records-count").textContent = `共 ${records.length} 条`;
     const list = $("auto-records-list");
-    if (!records.length) list.replaceChildren(element("li", "auto-resume-empty", "还没有记录。自动沟通和发简历的结果会出现在这里。"));
+    if (!records.length) list.replaceChildren(element("li", "auto-resume-empty", "还没有记录。自动沟通、发简历和智联投递的结果会出现在这里。"));
     else list.replaceChildren(...records.slice(0, AUTO_SHOWN_RECORDS).map(record => {
       const item = element("li", "");
       const head = element("div", "auto-record-head");
       head.append(element("strong", "", `${record.position} · ${record.company}`), element("span", record.result === "failed" ? "failed" : "", AUTO_RESULT_LABELS[record.result] ?? record.result));
       const time = record.at ? new Date(record.at) : null;
       const stamp = time ? `${String(time.getMonth() + 1).padStart(2, "0")}-${String(time.getDate()).padStart(2, "0")} ${time.toTimeString().slice(0, 5)}` : record.day;
-      item.append(head, element("small", "", [stamp, record.salary, record.note].filter(Boolean).join(" · ")));
+      item.append(head, element("small", "", [stamp, FocusModel.JOB_PLATFORMS[record.platform ?? "boss"].short, record.salary, record.note].filter(Boolean).join(" · ")));
       return item;
     }));
     autoHint("auto-records-more", records.length > AUTO_SHOWN_RECORDS ? `只显示最近 ${AUTO_SHOWN_RECORDS} 条` : null);
@@ -3580,7 +3681,7 @@
   function renderJobReview(auto) {
     const review = FocusModel.jobReviewSummary(auto.records, state.jobOpportunities, new Date(), auto.reviewDays);
     document.querySelectorAll("[data-review-days]").forEach(button => button.setAttribute("aria-pressed", String(Number(button.dataset.reviewDays) === auto.reviewDays)));
-    const steps = [["沟通", review.funnel.contacted], ["已发简历", review.funnel.resumes], ["面试", review.funnel.interviews], ["Offer", review.funnel.offers]];
+    const steps = [["联系", review.funnel.contacted], ["已发简历", review.funnel.resumes], ["面试", review.funnel.interviews], ["Offer", review.funnel.offers]];
     $("job-review-funnel").replaceChildren(...steps.map(([label, count]) => {
       const item = element("li", "");
       item.append(element("strong", "", String(count)), element("small", "", label));
@@ -3588,9 +3689,9 @@
     }), (() => { const item = element("li", "closed"); item.append(element("strong", "", String(review.funnel.closed)), element("small", "", "不合适")); return item; })());
     const peak = Math.max(0, ...review.dailyContacted);
     const total = review.dailyContacted.reduce((sum, count) => sum + count, 0);
-    $("job-review-peak").textContent = total ? `共 ${total} 次 · 单日最多 ${peak}` : "这段时间没有沟通";
+    $("job-review-peak").textContent = total ? `共 ${total} 次 · 单日最多 ${peak}` : "这段时间没有联系";
     const chart = $("job-review-chart");
-    chart.setAttribute("aria-label", `近 ${auto.reviewDays} 天每日沟通，共 ${total} 次`);
+    chart.setAttribute("aria-label", `近 ${auto.reviewDays} 天每日联系，共 ${total} 次`);
     chart.replaceChildren(...review.dailyContacted.map((count, index) => {
       const column = element("div", "trend-column");
       column.title = `${review.days[index].slice(5)} · ${count} 次`;
@@ -3603,7 +3704,7 @@
       const item = element("li", "");
       item.append(element("span", "", row.preset || "未用方案"), element("strong", "", `${row.contacted} · ${row.resumes}`));
       return item;
-    }) : [element("li", "auto-resume-empty", "还没有自动沟通记录。")]));
+    }) : [element("li", "auto-resume-empty", "还没有自动沟通或投递记录。")]));
   }
 
   function renderAutoApply() {
@@ -3624,10 +3725,11 @@
   function renderJobEntry() {
     const auto = state.autoApply;
     const today = localDateKey(new Date());
+    const platform = autoPlatform(auto);
     const entry = FocusModel.autoApplyEntry({
       task: auto.run?.kind ?? null, paused: Boolean(auto.run?.paused), stopReason: auto.stopReason,
-      contacted: FocusModel.autoApplyContactedOn(auto.records, today), resumes: FocusModel.resumesSentOn(auto.records, today),
-      awaiting: FocusModel.awaitingResume(auto.records).length, limit: auto.settings.dailyLimit,
+      contacted: FocusModel.autoApplyContactedOn(auto.records, today, platform), resumes: FocusModel.resumesSentOn(auto.records, today),
+      awaiting: FocusModel.awaitingResume(auto.records).length, limit: FocusModel.autoApplyLimit(auto.settings, platform), platform,
     });
     $("job-entry-card").dataset.state = entry.state;
     $("job-entry-badge").textContent = entry.label;
@@ -3644,11 +3746,11 @@
   function autoApplyRiskDialog() {
     const content = element("div", "modal-copy auto-apply-risk-dialog");
     [
-      "自动操作招聘 App 可能违反 BOSS 直聘用户协议，账号可能被限制沟通或封禁，后果由你自行承担。",
+      "自动操作招聘 App 可能违反 BOSS 直聘、智联招聘等平台的用户协议，账号可能被限制沟通、投递或封禁，后果由你自行承担。",
       "本功能不会识别或绕过验证码、不伪装设备、不随机化节奏；平台出现验证、登录或次数上限时会立即停止。",
-      "运行中会保持亮屏，建议插上充电器；触碰 BOSS 界面、离开 BOSS 或熄屏会暂停，可从悬浮按钮继续。",
-      "只操作你手机上已登录的 BOSS 直聘，不联网、不读取或保存账号与 Cookie。",
-      "“自动化已发起沟通”只表示界面上已发出，不代表对方已读或投递成功。",
+      "运行中会保持亮屏，建议插上充电器；触碰招聘 App 界面、离开它或熄屏会暂停，可从悬浮按钮继续。",
+      "只操作你手机上已登录的 BOSS 直聘或智联招聘，不联网、不读取或保存账号与 Cookie。",
+      "“自动化已发起沟通”“自动化已投递”只表示界面上已发出，不代表对方已读。",
     ].forEach(text => content.append(element("p", "", `· ${text}`)));
     const label = element("label", "auto-apply-check");
     const box = element("input");
@@ -3679,6 +3781,8 @@
   function autoApplyRulesDialog() {
     const settings = state.autoApply.settings;
     const L = FocusModel.AUTO_APPLY_LIMITS;
+    const zhaopin = settings.platform === "zhaopin";
+    const limitKey = zhaopin ? "zhaopinDailyLimit" : "dailyLimit";
     const form = element("form", "job-assist-form");
     const fields = [
       ["includeKeywords", "岗位关键词（逗号分隔，留空不限）", settings.includeKeywords.join("，")],
@@ -3686,9 +3790,10 @@
       ["minSalaryK", "最低月薪（K，留空不限）", settings.minSalaryK ?? ""],
       ["city", "城市（留空不限）", settings.city],
       ["companyBlacklist", "公司黑名单", settings.companyBlacklist.join("，")],
-      ["dailyLimit", `每日上限（1–${L.maxDailyLimit}）`, settings.dailyLimit],
+      [limitKey, `${FocusModel.JOB_PLATFORMS[settings.platform].short} 每日上限（1–${L.maxDailyLimit}）`, settings[limitKey]],
       ["stepDelaySeconds", `步骤最短间隔（${L.minStepDelaySeconds}–${L.maxStepDelaySeconds} 秒，固定不随机）`, settings.stepDelaySeconds],
-      ["greeting", "自定义招呼语（留空用 BOSS 默认）", settings.greeting],
+      // 智联投递不发招呼语。
+      ...(zhaopin ? [] : [["greeting", "自定义招呼语（留空用 BOSS 默认）", settings.greeting]]),
     ];
     const inputs = {};
     fields.forEach(([key, label, value]) => {
@@ -3696,15 +3801,16 @@
       const input = key === "greeting" ? element("textarea") : element("input");
       input.name = key;
       input.value = String(value);
-      if (key !== "greeting") input.type = ["minSalaryK", "dailyLimit", "stepDelaySeconds"].includes(key) ? "number" : "text";
+      if (key !== "greeting") input.type = ["minSalaryK", limitKey, "stepDelaySeconds"].includes(key) ? "number" : "text";
       if (key === "greeting") input.maxLength = L.maxGreeting;
       if (key === "city") input.maxLength = L.maxCity;
       field.append(input);
       form.append(field);
       inputs[key] = input;
     });
-    form.append(element("p", "job-assist-privacy", "Android 上 BOSS 界面一变化就进入下一步，两步之间至少间隔上面的秒数。"));
-    form.append(element("p", "job-assist-privacy", "同一职位只沟通一次、只发一次简历，同一公司每天只联系一次；每日上限对沟通和发简历分别计算。"));
+    form.append(element("p", "job-assist-privacy", "Android 上界面一变化就进入下一步，两步之间至少间隔上面的秒数。关键词、黑名单和间隔两个平台共用，每日上限按平台分开。"));
+    form.append(element("p", "job-assist-privacy", zhaopin ? "同一职位只投递一次，同一公司每天只投一次；智联记录不影响 BOSS 的去重和计数。"
+      : "同一职位只沟通一次、只发一次简历，同一公司每天只联系一次；每日上限对沟通和发简历分别计算。"));
     const actions = element("div", "modal-actions");
     const cancel = element("button", "secondary-button", "取消");
     cancel.type = "button";
@@ -3724,25 +3830,25 @@
           minSalaryK: number(inputs.minSalaryK.value),
           city: inputs.city.value,
           companyBlacklist: FocusModel.parseKeywordList(inputs.companyBlacklist.value),
-          dailyLimit: number(inputs.dailyLimit.value) ?? 0,
+          [limitKey]: number(inputs[limitKey].value) ?? 0,
           stepDelaySeconds: number(inputs.stepDelaySeconds.value) ?? 0,
-          greeting: inputs.greeting.value,
+          greeting: inputs.greeting?.value ?? settings.greeting,
         };
         // 有当前方案时同步更新该方案，避免切换回来时丢失刚改的规则。
         const active = FocusModel.activePresetName(settings);
         state.autoApply.settings = FocusModel.validateAutoApplySettings(active ? FocusModel.saveAutoApplyPreset(edited, active, settings.activePresetId) : edited);
         closeModal();
         renderAutoApply();
-        toast(active ? `沟通规则已保存，并更新方案「${active}」` : "沟通规则已保存");
+        toast(active ? `规则已保存，并更新方案「${active}」` : "规则已保存");
       } catch (error) { toast(error.message); }
     });
-    showModal("沟通规则", form);
+    showModal(zhaopin ? "投递规则" : "沟通规则", form);
   }
 
   function resumeEditor(existing = null) {
     const L = FocusModel.AUTO_APPLY_LIMITS;
     const form = element("form", "job-assist-form");
-    const nameField = element("label", "field job-assist-field", "简历名称（与 BOSS 附件简历文件名一致，可省略扩展名）");
+    const nameField = element("label", "field job-assist-field", "简历名称（与 BOSS 附件简历文件名或智联简历名称一致，可省略扩展名）");
     const name = element("input");
     name.name = "resumeName";
     name.maxLength = L.maxResumeName;
@@ -3797,11 +3903,14 @@
     if (auto.run) return;
     if (!auto.settings.riskAccepted) { autoApplyRiskDialog(); return; }
     const today = localDateKey(new Date());
-    autoApplyLog(dryRun ? "试运行：只读取模拟职位列表，不点击任何按钮" : `开始模拟沟通，每日上限 ${auto.settings.dailyLimit} 条`);
-    const result = FocusModel.simulateAutoApply(AUTO_APPLY_SAMPLE_CARDS, auto.settings, auto.records, today, dryRun);
-    if (!dryRun) { startAutoRun("contact", result); return; }
+    const platform = auto.settings.platform;
+    const zhaopin = platform === "zhaopin";
+    const limit = FocusModel.autoApplyLimit(auto.settings, platform);
+    autoApplyLog(dryRun ? `${FocusModel.JOB_PLATFORMS[platform].short} 试运行：只读取模拟职位列表，不点击任何按钮` : zhaopin ? `开始模拟智联投递，每日上限 ${limit} 条` : `开始模拟沟通，每日上限 ${limit} 条`);
+    const result = FocusModel.simulateAutoApply(zhaopin ? ZHAOPIN_SAMPLE_CARDS : AUTO_APPLY_SAMPLE_CARDS, auto.settings, auto.records, today, dryRun, platform);
+    if (!dryRun) { startAutoRun(zhaopin ? "apply" : "contact", result, platform); return; }
     auto.preview = result.preview;
-    auto.calibrated = true;
+    auto.calibrated = { ...auto.calibrated, [platform]: true };
     auto.stopReason = result.stopReason;
     autoApplyLog(result.stopReason);
     renderJobAssist();
@@ -3817,7 +3926,7 @@
     const result = FocusModel.simulateResumeRun(autoResumeSampleConversations(auto.records), auto.settings, auto.records, today, dryRun);
     if (!dryRun) {
       result.preview.filter(item => !item.resumeName).forEach(item => autoApplyLog(`没有匹配的简历，跳过「${item.position} · ${item.company}」`));
-      startAutoRun("resume", result);
+      startAutoRun("resume", result, "boss");
       return;
     }
     auto.resumePreview = result.preview;
@@ -3829,8 +3938,8 @@
   }
 
   // 原型一次算好本次结果，再按步骤间隔逐条写入，用来演示暂停与继续；不操作任何 App。
-  function startAutoRun(kind, result) {
-    state.autoApply.run = { kind, queue: [...result.records], stopReason: result.stopReason, paused: false, timer: null };
+  function startAutoRun(kind, result, platform) {
+    state.autoApply.run = { kind, platform, queue: [...result.records], stopReason: result.stopReason, paused: false, timer: null };
     if (result.records.length) scheduleAutoStep();
     else finishAutoRun(result.stopReason);
     renderJobAssist();
@@ -3852,6 +3961,7 @@
       const committed = { ...record, at: Date.now() };
       auto.records = [...auto.records, committed];
       if (run.kind === "contact") autoApplyLog(`已发起沟通「${record.position} · ${record.company}」（模拟）`);
+      else if (run.kind === "apply") autoApplyLog(`已投递「${record.position} · ${record.company}」，${record.note}（模拟）`);
       else autoApplyLog(`已发送简历「${record.note.replace("简历：", "")}」给「${record.position} · ${record.company}」（模拟）`);
       markJobs(committed);
     }
@@ -3956,7 +4066,7 @@
     }
     if (!state.jobOpportunities.length) {
       const empty = element("div", "job-assist-empty");
-      empty.append(element("strong", "", "还没有职位"), element("p", "", "开始自动沟通后，职位会出现在这里；自己联系或内推的职位，可点右上角“手动添加”。"));
+      empty.append(element("strong", "", "还没有职位"), element("p", "", "开始自动沟通或投递后，职位会出现在这里；自己联系或内推的职位，可点右上角“手动添加”。"));
       list.replaceChildren(empty);
       return;
     }
@@ -3969,7 +4079,7 @@
       title.append(element("strong", "", job.position), element("small", "", [job.company, job.salary].filter(Boolean).join(" · ")));
       heading.append(title, element("span", "job-assist-status", job.outcome ? stageLabel[stage] : jobStatusLabel(job.status)));
       card.append(heading);
-      card.append(element("small", "job-assist-meta", [job.source === "auto" ? "自动沟通加入" : "手动添加", job.preset ? `方案 ${job.preset}` : null].filter(Boolean).join(" · ")));
+      card.append(element("small", "job-assist-meta", [job.source === "auto" ? `${FocusModel.JOB_PLATFORMS[job.platform ?? "boss"].short} 自动加入` : "手动添加", job.preset ? `方案 ${job.preset}` : null].filter(Boolean).join(" · ")));
       if (job.note) card.append(element("p", "job-assist-note", job.note));
       const actions = element("div", "job-assist-actions");
       const stageButton = element("button", "secondary-button", "阶段与备注");
@@ -4451,7 +4561,12 @@
     document.querySelector(`[data-filter="${state.filter}"]`).focus();
   });
   document.addEventListener("pointerdown", event => { if (!event.target.closest(".task-swipe.swipe-open")) closeSwipes(); });
-  document.querySelectorAll("[data-period]").forEach(button => button.addEventListener("click", () => { state.period = button.dataset.period; renderUsage(); }));
+  document.querySelectorAll("[data-period]").forEach(button => button.addEventListener("click", () => {
+    const next = button.dataset.period;
+    if (state.period !== next) state.usageChartSelection = null;
+    state.period = next;
+    renderUsage();
+  }));
   $("timer-toggle").addEventListener("click", () => {
     const wasRunning = timer.running;
     tickTimer();
@@ -4608,9 +4723,24 @@
   $("auto-stop").addEventListener("click", stopAutoRun);
   $("auto-apply-edit-rules").addEventListener("click", autoApplyRulesDialog);
   $("auto-apply-dry-run").addEventListener("click", () => runAutoApply(true));
+  document.querySelectorAll("[data-platform]").forEach(button => {
+    button.addEventListener("click", () => chooseAutoPlatform(button.dataset.platform));
+    button.addEventListener("keydown", event => {
+      const step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: 1, ArrowUp: -1 }[event.key];
+      if (!step) return;
+      event.preventDefault();
+      const platforms = Object.keys(FocusModel.JOB_PLATFORMS);
+      chooseAutoPlatform(platforms[(platforms.indexOf(button.dataset.platform) + step + platforms.length) % platforms.length], true);
+    });
+  });
   $("auto-apply-start").addEventListener("click", () => {
     const settings = state.autoApply.settings;
-    const left = Math.max(settings.dailyLimit - FocusModel.autoApplyContactedOn(state.autoApply.records, localDateKey(new Date())), 0);
+    const platform = settings.platform;
+    const left = Math.max(FocusModel.autoApplyLimit(settings, platform) - FocusModel.autoApplyContactedOn(state.autoApply.records, localDateKey(new Date()), platform), 0);
+    if (platform === "zhaopin") {
+      confirmAction("开始智联自动投递？", `Android 版将切换到智联招聘，界面变化后执行下一步（两步至少间隔 ${settings.stepDelaySeconds} 秒），今天最多再投递 ${left} 个职位；需要选简历时按「我的简历」选择同名简历，找不到会停止。运行中保持亮屏；触碰智联、离开智联或熄屏会暂停，可从悬浮按钮继续或停止。原型只模拟结果，不操作任何 App。`, () => runAutoApply(false), "开始");
+      return;
+    }
     confirmAction("开始自动沟通？", `Android 版将切换到 BOSS 直聘，界面变化后执行下一步（两步至少间隔 ${settings.stepDelaySeconds} 秒），今天最多再发起 ${left} 条沟通。运行中保持亮屏；触碰 BOSS、离开 BOSS 或熄屏会暂停，可从悬浮按钮继续或停止。原型只模拟结果，不操作任何 App。`, () => runAutoApply(false), "开始");
   });
   $("auto-resume-add").addEventListener("click", () => resumeEditor());

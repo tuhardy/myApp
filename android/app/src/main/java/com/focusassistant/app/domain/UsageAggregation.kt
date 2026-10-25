@@ -5,25 +5,46 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.temporal.TemporalAdjusters
 
+enum class UsagePeriod { TODAY, WEEK, MONTH, YEAR }
+
 internal data class UsageBucketWindow(val label: String, val start: Long, val end: Long)
 internal data class UsageBucketTotal(val label: String, val durationMillis: Long, val available: Boolean)
 
-internal class UsageOverviewRange(today: LocalDate, week: Boolean, zone: ZoneId) {
+internal class UsageOverviewRange(today: LocalDate, period: UsagePeriod, zone: ZoneId) {
+    constructor(today: LocalDate, week: Boolean, zone: ZoneId) :
+        this(today, if (week) UsagePeriod.WEEK else UsagePeriod.TODAY, zone)
+
     val todayStart: Long = today.atStartOfDay(zone).toInstant().toEpochMilli()
     val todayEnd: Long = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
-    val buckets: List<UsageBucketWindow> = if (week) {
-        val monday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-        WEEK_LABELS.mapIndexed { index, label ->
-            val date = monday.plusDays(index.toLong())
-            UsageBucketWindow(label, date.atStartOfDay(zone).toInstant().toEpochMilli(),
-                date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli())
+    val buckets: List<UsageBucketWindow> = when (period) {
+        UsagePeriod.TODAY -> {
+            val boundaries = (0 until HOURS_PER_DAY step HOURS_PER_BUCKET).map { hour ->
+                today.atTime(hour, 0).atZone(zone).toInstant().toEpochMilli()
+            } + todayEnd
+            (0 until HOURS_PER_DAY / HOURS_PER_BUCKET).map { index ->
+                UsageBucketWindow((index * HOURS_PER_BUCKET).toString().padStart(2, '0'), boundaries[index], boundaries[index + 1])
+            }
         }
-    } else {
-        val boundaries = (0 until HOURS_PER_DAY step HOURS_PER_BUCKET).map { hour ->
-            today.atTime(hour, 0).atZone(zone).toInstant().toEpochMilli()
-        } + todayEnd
-        (0 until HOURS_PER_DAY / HOURS_PER_BUCKET).map { index ->
-            UsageBucketWindow((index * HOURS_PER_BUCKET).toString().padStart(2, '0'), boundaries[index], boundaries[index + 1])
+        UsagePeriod.WEEK -> {
+            val monday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+            WEEK_LABELS.mapIndexed { index, label ->
+                val date = monday.plusDays(index.toLong())
+                UsageBucketWindow(label, date.atStartOfDay(zone).toInstant().toEpochMilli(),
+                    date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli())
+            }
+        }
+        UsagePeriod.MONTH -> {
+            val first = today.withDayOfMonth(1)
+            (0 until today.lengthOfMonth()).map { index ->
+                val date = first.plusDays(index.toLong())
+                UsageBucketWindow((index + 1).toString(), date.atStartOfDay(zone).toInstant().toEpochMilli(),
+                    date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli())
+            }
+        }
+        UsagePeriod.YEAR -> (1..MONTHS_PER_YEAR).map { month ->
+            val first = LocalDate.of(today.year, month, 1)
+            UsageBucketWindow("${month}月", first.atStartOfDay(zone).toInstant().toEpochMilli(),
+                first.plusMonths(1).atStartOfDay(zone).toInstant().toEpochMilli())
         }
     }
     val start: Long = buckets.first().start
@@ -32,6 +53,7 @@ internal class UsageOverviewRange(today: LocalDate, week: Boolean, zone: ZoneId)
     companion object {
         private const val HOURS_PER_DAY = 24
         private const val HOURS_PER_BUCKET = 2
+        private const val MONTHS_PER_YEAR = 12
         private val WEEK_LABELS = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
     }
 }

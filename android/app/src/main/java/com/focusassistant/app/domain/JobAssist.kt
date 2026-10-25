@@ -1,7 +1,8 @@
 package com.focusassistant.app.domain
 
 /** 本地职位记录与用户手动准备的求职文案；不代表招聘平台上的实际状态。 */
-enum class JobAssistStatus { DRAFT, COPIED, APPLIED_SELF_REPORTED, AUTO_CONTACTED, AUTO_RESUME_SENT }
+/** AUTO_APPLIED：智联投递，投递即附带简历，阶段与已发简历相同。 */
+enum class JobAssistStatus { DRAFT, COPIED, APPLIED_SELF_REPORTED, AUTO_CONTACTED, AUTO_RESUME_SENT, AUTO_APPLIED }
 
 /** 用户手动标记的结果；与自动推进的 status 分开存，自动记录不会覆盖，置空即回到自动阶段。 */
 enum class JobOutcome(val label: String) { INTERVIEW("面试"), OFFER("Offer"), CLOSED("不合适") }
@@ -25,7 +26,9 @@ data class JobOpportunity(
     val source: JobSource = JobSource.MANUAL,
     /** 自动建档时所用筛选方案的名称。 */
     val preset: String = "",
-    val outcome: JobOutcome? = null
+    val outcome: JobOutcome? = null,
+    /** 自动建档的来源平台；手动职位为空。 */
+    val platform: JobPlatform? = null
 )
 
 object JobAssistRules {
@@ -60,7 +63,7 @@ object JobAssistRules {
         JobOutcome.OFFER -> JobStage.OFFER
         JobOutcome.CLOSED -> JobStage.CLOSED
         null -> when (value.status) {
-            JobAssistStatus.AUTO_RESUME_SENT -> JobStage.RESUME
+            JobAssistStatus.AUTO_RESUME_SENT, JobAssistStatus.AUTO_APPLIED -> JobStage.RESUME
             JobAssistStatus.AUTO_CONTACTED, JobAssistStatus.APPLIED_SELF_REPORTED -> JobStage.CONTACTED
             JobAssistStatus.DRAFT, JobAssistStatus.COPIED -> JobStage.PREP
         }
@@ -81,15 +84,16 @@ object JobAssistRules {
         val status = when (record.result) {
             AutoApplyResult.CONTACTED -> JobAssistStatus.AUTO_CONTACTED
             AutoApplyResult.RESUME_SENT -> JobAssistStatus.AUTO_RESUME_SENT
+            AutoApplyResult.APPLIED -> JobAssistStatus.AUTO_APPLIED
             else -> return values
         }
         if (values.any { sameJob(it, record) }) return values.map {
-            if (sameJob(it, record) && !(status == JobAssistStatus.AUTO_CONTACTED && it.status == JobAssistStatus.AUTO_RESUME_SENT))
+            if (sameJob(it, record) && !(status == JobAssistStatus.AUTO_CONTACTED && stage(it.copy(outcome = null)) == JobStage.RESUME))
                 it.copy(status = status, updatedAt = maxOf(it.updatedAt, record.at)) else it
         }
         if (values.size >= MAX_JOBS) return values
         val created = JobOpportunity(newId, record.company.trim().take(MAX_COMPANY), record.position.trim().take(MAX_POSITION), "", "", status, record.at, record.at,
-            salary = record.salary.trim().take(MAX_SALARY), source = JobSource.AUTO, preset = record.preset)
+            salary = record.salary.trim().take(MAX_SALARY), source = JobSource.AUTO, preset = record.preset, platform = record.platform)
         return listOf(created) + values
     }
 
@@ -99,6 +103,7 @@ object JobAssistRules {
         JobAssistStatus.APPLIED_SELF_REPORTED -> "已沟通 · 本人记录"
         JobAssistStatus.AUTO_CONTACTED -> "自动化已发起沟通"
         JobAssistStatus.AUTO_RESUME_SENT -> "自动化已发送简历"
+        JobAssistStatus.AUTO_APPLIED -> "自动化已投递（智联）"
     }
 
     /** 卡片上的阶段文字：有手动结果时显示结果，否则显示自动状态。 */

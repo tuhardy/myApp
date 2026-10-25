@@ -4,23 +4,23 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.view.accessibility.AccessibilityNodeInfo
 import com.focusassistant.app.domain.AutoApplyRules
-import com.focusassistant.app.domain.BossScreenReader
+import com.focusassistant.app.domain.JobPlatform
+import com.focusassistant.app.domain.PlatformReader
 import com.focusassistant.app.domain.UiNode
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** BOSS 直聘界面的读取与诊断导出。识别规则在 domain/BossScreenReader，这里只做节点转换和按路径找回节点。 */
+/** 招聘 App 界面的读取与诊断导出。识别规则在 domain/BossScreenReader、ZhaopinScreenReader，这里只做节点转换和按路径找回节点。 */
 internal object BossUiMap {
-    /** 预期包名，需在真机用诊断导出核对；与 boss_automation_service.xml、清单 <queries> 保持一致。 */
-    const val PACKAGE = "com.hpbr.bosszhipin"
     private const val MAX_DEPTH = 40
     private const val MAX_NODES = 3000
 
     /** 诊断导出只保留这些界面固定文字的命中情况，不记录职位、公司、聊天等正文。 */
-    private val knownLabels = listOf("立即沟通", "继续沟通", "发送", "常用语", "发简历", "选择附件简历", "确定", "消息", "安全验证", "滑动验证", "拖动滑块", "请完成验证", "手机号登录", "验证码登录", "上限", "推荐", "附近", "最新")
+    private val knownLabels = listOf("立即沟通", "继续沟通", "发送", "常用语", "发简历", "选择附件简历", "确定", "消息", "安全验证", "滑动验证", "拖动滑块", "请完成验证", "手机号登录", "验证码登录", "上限", "推荐", "附近", "最新",
+        "申请职位", "投递简历", "立即申请", "已申请", "已投递", "投递成功", "申请成功", "选择简历", "确认投递")
 
-    fun installedVersion(context: Context): String? = try {
-        context.packageManager.getPackageInfo(PACKAGE, 0).versionName ?: "unknown"
+    fun installedVersion(context: Context, platform: JobPlatform): String? = try {
+        context.packageManager.getPackageInfo(platform.packageName, 0).versionName ?: "unknown"
     } catch (_: PackageManager.NameNotFoundException) { null }
 
     fun snapshot(root: AccessibilityNodeInfo): UiNode {
@@ -44,7 +44,7 @@ internal object BossUiMap {
     }
 
     /** 一页界面的结构摘要：viewId、类名、文字长度与是否像薪资，不含正文。 */
-    fun diagnostic(root: UiNode, version: String?, at: Long): JSONObject {
+    fun diagnostic(root: UiNode, platform: JobPlatform, version: String?, at: Long): JSONObject {
         val nodes = JSONArray()
         root.walk().forEach { node ->
             nodes.put(JSONObject().put("path", JSONArray(node.path)).put("id", node.viewId).put("cls", node.className.substringAfterLast('.'))
@@ -53,8 +53,8 @@ internal object BossUiMap {
                 .put("salaryLike", node.text.isNotBlank() && AutoApplyRules.isSalaryText(node.text))
                 .put("click", node.clickable).put("edit", node.editable).put("scroll", node.scrollable).put("children", node.children.size))
         }
-        val reading = BossScreenReader.read(root, at)
-        return JSONObject().put("bossVersion", version ?: JSONObject.NULL).put("at", at)
+        val reading = PlatformReader.read(platform, root, at)
+        return JSONObject().put("platform", platform.name).put("appVersion", version ?: JSONObject.NULL).put("at", at)
             .put("recognized", reading.observation.screen.name).put("cards", reading.observation.cards.size).put("nodes", nodes)
     }
 }

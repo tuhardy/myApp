@@ -75,10 +75,10 @@ class UsageScreenshotTest {
         }
     }
 
-    private fun renderScreen(week: Boolean, onZoom: () -> Unit = {}, onGoal: () -> Unit = {}) {
+    private fun renderScreen(period: UsagePeriod, onZoom: () -> Unit = {}, onGoal: () -> Unit = {}) {
         compose.setContent {
             FocusTheme {
-                UsageScreen(report(), true, false, null, week, AppSettings(dailyGoalMinutes = 60), sessions,
+                UsageScreen(report(), true, false, null, period, AppSettings(dailyGoalMinutes = 60), sessions,
                     {}, {}, {}, onGoal, onZoom, {}, {}, today)
             }
         }
@@ -87,7 +87,7 @@ class UsageScreenshotTest {
     @Test fun todayWithRibbonRingAndNightCard() {
         var zoomed = false
         var goal = false
-        renderScreen(week = false, onZoom = { zoomed = true }, onGoal = { goal = true })
+        renderScreen(UsagePeriod.TODAY, onZoom = { zoomed = true }, onGoal = { goal = true })
         capture("usage-today")
         compose.onNodeWithText("昨夜足迹 · 1 小时 20 分钟").assertExists()
         compose.onNodeWithText("最后一次放下手机是 00:40，今晚试着早一点说晚安。").assertExists()
@@ -98,10 +98,31 @@ class UsageScreenshotTest {
     }
 
     @Test fun weekWithPairedBars() {
-        renderScreen(week = true)
+        renderScreen(UsagePeriod.WEEK)
         capture("usage-week")
         compose.onNodeWithText("本周应用使用").assertExists()
+        compose.onNodeWithText("一").assertExists()
+        compose.onNodeWithText("日").assertExists()
+        compose.onNode(hasText("· 用屏", substring = true) and hasText("· 专注", substring = true)).assertExists()
+        compose.onNode(hasContentDescription("周一", substring = true)).performClick()
+        compose.onNode(hasText("周一", substring = true) and hasText("用屏", substring = true)).assertExists()
         compose.onNode(hasText("本周夜间足迹", substring = true)).assertExists()
+    }
+
+    @Test fun monthAndYearShowPeriodTotalsAndNightCards() {
+        renderScreen(UsagePeriod.MONTH)
+        compose.onNodeWithText("本月").assertExists()
+        compose.onNodeWithText("本月应用使用").assertExists()
+        compose.onNode(hasContentDescription("1日", substring = true)).assertExists()
+        compose.onNode(hasText("日", substring = true) and hasText("用屏", substring = true) and hasText("专注", substring = true)).assertExists()
+        compose.onNode(hasText("本月夜间足迹", substring = true)).assertExists()
+        renderScreen(UsagePeriod.YEAR)
+        compose.onNodeWithText("全年").assertExists()
+        compose.onNodeWithText("全年应用使用").assertExists()
+        compose.onNodeWithText("1月").assertExists()
+        compose.onNodeWithText("12月").assertExists()
+        compose.onNode(hasText("月", substring = true) and hasText("用屏", substring = true) and hasText("专注", substring = true)).assertExists()
+        compose.onNode(hasText("全年夜间足迹", substring = true)).assertExists()
     }
 
     @Test fun zoomSheetListsSegmentsAndMarksFocusOverlap() {

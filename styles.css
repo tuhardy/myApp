@@ -509,6 +509,7 @@ h3 { font-size: 13px; font-weight: 600; margin: 0; }
 .permission-note .icon { width: 14px; height: 14px; }
 .permission-note button { margin-left: auto; font-size: 12px; color: var(--accent-dark); padding: 4px; flex-shrink: 0; }
 .usage-tabs { margin-top: 16px; }
+.usage-tabs button { min-width: 0; padding: 9px 2px; }
 .usage-hero { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 20px; padding: 16px 14px 16px 18px; border-radius: 20px; background: var(--accent-soft); }
 .usage-total { min-width: 0; }
 .usage-total > span:first-child { color: var(--accent-dark); font-size: 12px; }
@@ -540,6 +541,7 @@ h3 { font-size: 13px; font-weight: 600; margin: 0; }
 .usage-legend i.screen { background: #9a9a9a; }
 .usage-legend i.focus { margin-left: 8px; background: var(--accent); }
 .usage-overlap { flex-basis: 100%; color: var(--accent-dark); }
+.usage-sample-hint { margin-left: auto; font-size: 11px; color: var(--muted); }
 /* 用时页刻度尺放大：#modal 的底部面板变体，时间轴横向滚动，明细纵向滚动。 */
 .usage-ruler:hover .usage-track.screen i { background: #7f7f7f; }
 .usage-ruler:active { transform: none; }
@@ -605,12 +607,25 @@ h3 { font-size: 13px; font-weight: 600; margin: 0; }
 .night-card p { margin: 3px 0 0; font-size: 12px; line-height: 1.6; color: #5d6b7c; }
 .night-moon { flex-shrink: 0; width: 22px; height: 22px; margin-top: 1px; border-radius: 50%; box-shadow: inset -6px -3px 0 0 #5d6b7c; transform: rotate(-20deg); }
 .night-card.quiet .night-moon { box-shadow: inset -6px -3px 0 0 #a3adb8; }
-.chart { height: 110px; margin: 0 8px; padding-top: 10px; border-bottom: 1px solid var(--line); background: repeating-linear-gradient(to top, transparent 0, transparent 32px, #ededed 32px, #ededed 33px); display: flex; gap: 10px; align-items: flex-end; justify-content: space-around; }
-.bar-column { height: 100%; flex: 1; display: flex; align-items: flex-end; justify-content: center; gap: 3px; }
+.usage-chart-scroll { margin: 0 8px; }
+.usage-week.dense .usage-chart-scroll { overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; }
+.usage-week.dense .chart, .usage-week.dense .chart-labels { width: max(100%, calc(var(--bars, 31) * 22px)); }
+.chart { height: 110px; padding-top: 10px; border-bottom: 1px solid var(--line); background: repeating-linear-gradient(to top, transparent 0, transparent 32px, #ededed 32px, #ededed 33px); display: flex; gap: 10px; align-items: flex-end; justify-content: space-around; }
+.chart.dense { gap: 4px; }
+.chart.year-bars { gap: 6px; }
+.bar-column { height: 100%; flex: 1; min-width: 0; display: flex; align-items: flex-end; justify-content: center; gap: 3px; cursor: pointer; border-radius: 6px 6px 0 0; }
+.bar-column.selected { background: var(--accent-soft); }
+.bar-column:focus-visible { outline: 3px solid var(--green-dark); outline-offset: 2px; }
 .chart-bar, .chart-focus { width: 100%; max-width: 14px; background: #bdbdbd; border-radius: 5px 5px 0 0; min-height: 2px; }
+.chart.dense .chart-bar, .chart.dense .chart-focus { max-width: 8px; }
+.chart.year-bars .chart-bar, .chart.year-bars .chart-focus { max-width: 12px; }
 .chart-bar.highlight { background: #6f6f6f; }
 .chart-focus { background: var(--accent); }
-.chart-labels { display: flex; justify-content: space-between; margin: 9px 8px 0; color: var(--muted); font-size: 11px; }
+.chart-labels { display: flex; justify-content: space-between; margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.chart-labels span { flex: 1; min-width: 0; text-align: center; overflow: visible; white-space: nowrap; }
+.chart-labels.dense { font-size: 11px; }
+.chart-labels .on { color: var(--ink); font-weight: 600; }
+.chart-caption { margin: 8px 8px 0; min-height: 20px; text-align: center; color: var(--accent-dark); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .app-list { display: flex; flex-direction: column; gap: 17px; }
 .app-row { display: flex; gap: 10px; align-items: center; }
 .app-avatar { width: 33px; height: 33px; border-radius: 11px; font-size: 13px; display: grid; place-items: center; font-weight: 600; flex-shrink: 0; }
@@ -844,6 +859,10 @@ h3 { font-size: 13px; font-weight: 600; margin: 0; }
 .job-review-days { flex: 0 0 auto; }
 .job-review-days button { min-width: 64px; padding: 6px 8px; }
 .job-review-days button[aria-pressed="true"] { background: var(--white); color: var(--accent-dark); font-weight: 600; }
+.auto-platform { margin-bottom: 4px; }
+.auto-platform button { min-height: 40px; font-size: 13px; }
+.auto-platform button[aria-checked="true"] { background: var(--white); color: var(--accent-dark); font-weight: 600; box-shadow: 0 1px 3px #29292912; }
+.auto-platform button:disabled { cursor: not-allowed; }
 .job-review-funnel { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
 .job-review-funnel li { display: grid; gap: 2px; padding: 10px 4px; border-radius: 12px; background: var(--accent-soft); text-align: center; }
 .job-review-funnel li.closed { background: var(--surface); }

@@ -444,7 +444,7 @@ private fun JobEntryCard(entry: AutoApplyEntry, onOpen: () -> Unit) {
             Icon(Icons.Outlined.ChevronRight, null, tint = Muted, modifier = Modifier.size(18.dp))
         }
         Text(entry.summary, fontSize = 12.sp, color = Muted, style = NumeralStyle)
-        Text("BOSS 自动沟通 · 自动发简历 · 职位草稿", fontSize = 11.sp, color = Muted)
+        Text("BOSS 自动沟通 · 智联自动投递 · 求职进度", fontSize = 11.sp, color = Muted)
     }
 }
 

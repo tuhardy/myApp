@@ -180,7 +180,7 @@
           <section class="page" id="page-usage" aria-labelledby="usage-heading" hidden>
             <header class="page-header"><div><p class="overline">了解习惯，而不是责备自己</p><h2 id="usage-heading">时间足迹<span class="heading-dot">.</span></h2></div><span class="sample-tag">示例数据</span></header>
             <div class="permission-note"><svg class="icon"><use href="#i-shield"/></svg><span>正式版需授权「使用情况访问权限」</span><button id="usage-permission" aria-label="查看使用统计权限说明">了解</button></div>
-            <div class="segmented usage-tabs"><button class="selected" data-period="today" aria-pressed="true">今日</button><button data-period="week" aria-pressed="false">本周</button></div>
+            <div class="segmented usage-tabs" role="tablist" aria-label="用时周期"><button class="selected" data-period="today" aria-pressed="true">今日</button><button data-period="week" aria-pressed="false">本周</button><button data-period="month" aria-pressed="false">本月</button><button data-period="year" aria-pressed="false">全年</button></div>
             <div class="usage-hero">
               <div class="usage-total"><span id="usage-total-label">今日屏幕使用</span><div id="usage-total"><strong>3</strong> 小时 <strong>24</strong> 分钟</div><span class="comparison" id="usage-comparison">比昨日少 36 分钟，继续保持</span></div>
               <button class="goal-ring" id="edit-goal" type="button" aria-label="每日使用目标"><span class="goal-ring-ticks" id="goal-ring-ticks" aria-hidden="true"></span><span class="goal-ring-label"><strong id="goal-percent">85%</strong><small id="goal-target">目标 4 小时</small></span></button>
@@ -192,11 +192,15 @@
               <p class="usage-legend" id="usage-focus-legend"></p>
             </div>
             <div class="usage-week" id="usage-week" hidden>
-              <div class="chart" id="usage-chart" role="img" aria-label="示例柱状图"></div><div class="chart-labels" id="chart-labels"></div>
-              <p class="usage-legend"><i class="screen"></i>用屏<i class="focus"></i>专注</p>
+              <div class="usage-chart-scroll">
+                <div class="chart" id="usage-chart" role="list" aria-label="示例柱状图"></div>
+                <div class="chart-labels" id="chart-labels"></div>
+              </div>
+              <p class="usage-legend"><i class="screen"></i>用屏<i class="focus"></i>专注<span class="usage-sample-hint">示例统计</span></p>
+              <p class="chart-caption" id="chart-caption">点击柱形查看该周期时间</p>
             </div>
             <div class="night-card" id="night-card"><span class="night-moon" aria-hidden="true"></span><div><strong id="night-title">夜间足迹</strong><p id="night-summary"></p></div></div>
-            <div class="section-heading"><h3>时间花在哪里</h3><small id="usage-list-caption">按使用时长</small></div>
+            <div class="section-heading"><h3>时间花在哪里</h3><small id="usage-list-caption">按使用时长 · 示例</small></div>
             <div class="app-list" id="usage-apps"></div>
             <div class="reminder-row"><div><strong>每日超时提醒</strong><small id="reminder-caption">仅演示开关，不发送系统通知</small></div><button class="switch" id="reminder-switch" role="switch" aria-checked="false" aria-label="每日超时提醒演示"><span></span></button></div>
           </section>
@@ -221,7 +225,7 @@
               </div>
               <div class="asset-foot"><button class="secondary-button" id="asset-open-history" type="button">余额历史</button><button class="secondary-button" id="asset-update" type="button">更新余额</button></div>
             </div>
-            <button type="button" class="job-entry-card" id="job-entry-card" data-state="idle"><div class="job-entry-top"><strong>求职辅助</strong><span class="job-entry-badge" id="job-entry-badge">空闲</span><svg class="icon arrow"><use href="#i-arrow"/></svg></div><small id="job-entry-summary"></small><small class="job-entry-note">BOSS 自动沟通 · 自动发简历 · 职位草稿（原型模拟）</small></button>
+            <button type="button" class="job-entry-card" id="job-entry-card" data-state="idle"><div class="job-entry-top"><strong>求职辅助</strong><span class="job-entry-badge" id="job-entry-badge">空闲</span><svg class="icon arrow"><use href="#i-arrow"/></svg></div><small id="job-entry-summary"></small><small class="job-entry-note">BOSS 自动沟通 · 智联自动投递 · 求职进度（原型模拟）</small></button>
             <div class="section-heading"><h3>心愿</h3><small id="wish-caption">单个账户或所有资产</small></div>
             <div class="wish-list" id="wish-list"></div>
             <div class="section-heading"><h3>生活概览</h3><small>点开看详情</small></div>
@@ -237,15 +241,20 @@
             <p class="version-note">专注助手 · 界面原型 V0.4<br>更少打扰，更多属于你的时间</p>
           </section>
           <section class="page" id="page-job-assist" aria-labelledby="job-assist-heading" hidden>
-            <header class="job-assist-header"><button type="button" id="job-assist-back" class="secondary-button">‹ 返回我的</button><div><h2 id="job-assist-heading">求职辅助</h2><small>BOSS 自动沟通 · 自动发简历 · 职位草稿</small></div></header>
+            <header class="job-assist-header"><button type="button" id="job-assist-back" class="secondary-button">‹ 返回我的</button><div><h2 id="job-assist-heading">求职辅助</h2><small>BOSS / 智联自动投递 · 求职进度</small></div></header>
             <p class="auto-apply-simulated">原型模拟，不操作任何 App</p>
             <section id="auto-status" class="auto-status-card" aria-labelledby="auto-status-headline">
+              <div class="segmented auto-platform" id="auto-platform" role="radiogroup" aria-label="招聘平台">
+                <button type="button" role="radio" data-platform="boss" aria-checked="true">BOSS 直聘</button>
+                <button type="button" role="radio" data-platform="zhaopin" aria-checked="false" tabindex="-1">智联招聘</button>
+              </div>
+              <p id="auto-platform-hint" class="auto-hint" hidden></p>
               <strong id="auto-status-headline" role="status">空闲</strong>
               <p id="auto-status-detail" class="auto-status-detail" hidden></p>
               <div class="auto-status-counts">
-                <div><strong id="auto-apply-count">0/30</strong><small>今日沟通</small></div>
-                <div><strong id="auto-resume-count">0/30</strong><small>今日简历</small></div>
-                <div><strong id="auto-awaiting-count">0</strong><small>待回复</small></div>
+                <div><strong id="auto-apply-count">0/30</strong><small id="auto-apply-count-label">今日沟通</small></div>
+                <div id="auto-resume-count-cell"><strong id="auto-resume-count">0/30</strong><small>今日简历</small></div>
+                <div id="auto-awaiting-count-cell"><strong id="auto-awaiting-count">0</strong><small>待回复</small></div>
               </div>
               <div id="auto-status-actions" class="auto-two-actions" hidden>
                 <button type="button" id="auto-pause" class="secondary-button">暂停</button>
@@ -263,11 +272,11 @@
               <button type="button" role="tab" id="job-tab-data" data-job-tab="data" aria-controls="job-panel-data" aria-selected="false" tabindex="-1">数据</button>
             </div>
             <section id="job-panel-contact" class="auto-apply-card" role="tabpanel" aria-labelledby="job-tab-contact">
-              <div class="auto-apply-heading"><h3>自动沟通</h3><strong id="auto-apply-today">今日 0/30</strong></div>
-              <p class="job-assist-intro">在职位推荐列表里按规则打开职位、点“立即沟通”并发送招呼语。遇到验证、登录或次数上限立即停止，不识别验证码。</p>
+              <div class="auto-apply-heading"><h3 id="auto-contact-title">自动沟通</h3><strong id="auto-apply-today">今日 0/30</strong></div>
+              <p class="job-assist-intro" id="auto-contact-intro">在职位推荐列表里按规则打开职位、点“立即沟通”并发送招呼语。遇到验证、登录或次数上限立即停止，不识别验证码。</p>
               <div class="auto-presets" id="auto-presets" role="group" aria-label="筛选方案"></div>
               <p id="auto-presets-hint" class="auto-hint" hidden></p>
-              <button type="button" id="auto-apply-edit-rules" class="auto-rules-card"><strong>沟通规则 ›</strong><span id="auto-apply-rules"></span></button>
+              <button type="button" id="auto-apply-edit-rules" class="auto-rules-card"><strong id="auto-rules-title">沟通规则 ›</strong><span id="auto-apply-rules"></span></button>
               <div class="auto-two-actions">
                 <button type="button" id="auto-apply-dry-run" class="secondary-button">试运行</button>
                 <button type="button" id="auto-apply-start" class="primary-button">开始沟通</button>
@@ -276,13 +285,13 @@
               <div id="auto-apply-preview" class="auto-apply-preview" hidden></div>
             </section>
             <section id="job-panel-resume" class="auto-apply-card" role="tabpanel" aria-labelledby="job-tab-resume" hidden>
-              <div class="auto-apply-heading"><h3>自动发简历</h3><strong id="auto-resume-today">今日 0/30 · 待回复 0</strong></div>
-              <p class="job-assist-intro">对方回复后才能发附件简历。只处理本应用自动沟通过、会话有新消息的公司，不读消息内容；按岗位关键词选简历，没命中用默认简历。</p>
+              <div class="auto-apply-heading"><h3 id="auto-resume-title">自动发简历</h3><strong id="auto-resume-today">今日 0/30 · 待回复 0</strong></div>
+              <p class="job-assist-intro" id="auto-resume-intro">对方回复后才能发附件简历。只处理本应用自动沟通过、会话有新消息的公司，不读消息内容；按岗位关键词选简历，没命中用默认简历。</p>
               <div class="auto-apply-heading auto-resume-heading"><h4>我的简历</h4><small id="auto-resume-total">0/10</small></div>
               <ul id="auto-resume-list" class="auto-resume-list"></ul>
               <button type="button" id="auto-resume-add" class="secondary-button auto-wide-button">＋ 添加简历</button>
               <p id="auto-resume-default-hint" class="auto-hint" hidden>没有默认简历：关键词都没命中的会话会跳过。</p>
-              <div class="auto-two-actions">
+              <div class="auto-two-actions" id="auto-resume-actions">
                 <button type="button" id="auto-resume-dry-run" class="secondary-button">发简历试运行</button>
                 <button type="button" id="auto-resume-start" class="primary-button">开始发简历</button>
               </div>
@@ -309,8 +318,8 @@
               <div class="job-stage-filter" id="job-stage-filter" role="group" aria-label="按阶段筛选"></div>
               <div id="job-assist-list" class="job-assist-list"></div>
             </section>
-            <details class="auto-apply-card auto-advanced"><summary>高级 · 界面诊断</summary><p class="job-assist-privacy">Android 版识别不了 BOSS 界面时，可导出控件结构给开发者核对；只记录控件结构和文字长度，不含职位与聊天正文。BOSS 更新后需重新诊断和试运行。原型没有界面诊断。</p></details>
-            <p class="job-assist-privacy">Android 运行时显示悬浮按钮并保持亮屏；触碰 BOSS、离开 BOSS 或熄屏会暂停，可从悬浮按钮继续或停止。职位、简历名称、规则和模拟记录仅保存在当前页面内存，刷新后清空。</p>
+            <details class="auto-apply-card auto-advanced"><summary>高级 · 界面诊断</summary><p class="job-assist-privacy">Android 版识别不了 BOSS 或智联界面时，可导出控件结构给开发者核对；只记录控件结构和文字长度，不含职位与聊天正文。App 更新后需重新诊断和试运行。原型没有界面诊断。</p></details>
+            <p class="job-assist-privacy">Android 运行时显示悬浮按钮并保持亮屏；触碰、离开所选招聘 App 或熄屏会暂停，可从悬浮按钮继续或停止。职位、简历名称、规则和模拟记录仅保存在当前页面内存，刷新后清空。</p>
           </section>
         </div>
         <div id="task-undo" role="region" aria-label="操作撤销" hidden><span id="task-undo-message" role="status"></span><button id="undo-task" type="button">撤销</button><button id="dismiss-task-undo" type="button" aria-label="关闭提示">关闭提示</button></div>

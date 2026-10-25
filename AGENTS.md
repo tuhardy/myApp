@@ -22,7 +22,7 @@
 | 用时页（浏览器 + Android） | `rules/usage.md` |
 | 日记（浏览器 + Android） | `rules/diary.md` |
 | 我的页面（资产快照、心愿、生活概览） | `rules/profile.md` |
-| 求职辅助（BOSS 自动投递无障碍服务、本地职位草稿） | `rules/automation.md` |
+| 求职辅助（BOSS / 智联自动投递无障碍服务、求职进度） | `rules/automation.md` |
 | 验证命令、Android 构建与签名、截图测试、GitHub Pages | `rules/verify.md` |
 
 新增或修改某模块的约定时写进对应模块文件；只有跨模块的硬规则才写回本文件。
