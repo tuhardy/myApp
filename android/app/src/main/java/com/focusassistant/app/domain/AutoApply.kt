@@ -145,7 +145,8 @@ object AutoApplyRules {
         if (settings.includeKeywords.isNotEmpty() && settings.includeKeywords.none { card.position.contains(it, ignoreCase = true) }) {
             return AutoApplyDecision.Skip("岗位不含关键词")
         }
-        if (settings.city.isNotBlank() && card.city.isNotBlank() && !card.city.contains(settings.city.trim())) return AutoApplyDecision.Skip("城市不符")
+        if (settings.city.isNotBlank() && card.city.isBlank()) return AutoApplyDecision.Skip("未识别城市")
+        if (settings.city.isNotBlank() && !card.city.contains(settings.city.trim())) return AutoApplyDecision.Skip("城市不符")
         settings.minSalaryK?.let { min ->
             val low = salaryLowerK(card.salary) ?: return AutoApplyDecision.Skip("薪资无法识别")
             if (low < min) return AutoApplyDecision.Skip("薪资低于 ${min}K")

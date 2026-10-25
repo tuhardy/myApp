@@ -1480,7 +1480,8 @@
     const excluded = settings.excludeKeywords.find(word => includes(card.position, word));
     if (excluded) return { apply: false, reason: `包含排除词「${excluded}」` };
     if (settings.includeKeywords.length && !settings.includeKeywords.some(word => includes(card.position, word))) return { apply: false, reason: "岗位不含关键词" };
-    if (settings.city && card.city && !String(card.city).includes(settings.city)) return { apply: false, reason: "城市不符" };
+    if (settings.city && !String(card.city ?? "").trim()) return { apply: false, reason: "未识别城市" };
+    if (settings.city && !String(card.city).includes(settings.city)) return { apply: false, reason: "城市不符" };
     if (settings.minSalaryK !== null) {
       const low = salaryLowerK(card.salary);
       if (low === null) return { apply: false, reason: "薪资无法识别" };

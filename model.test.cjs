@@ -41,6 +41,7 @@ test("自动投递规则与 Android 同口径：薪资、关键词、黑名单�
   assert.equal(autoApplyDecision(card, { ...base, includeKeywords: ["iOS"] }, [], day).apply, false);
   assert.equal(autoApplyDecision(card, { ...base, minSalaryK: 16 }, [], day).reason, "薪资低于 16K");
   assert.equal(autoApplyDecision(card, { ...base, companyBlacklist: ["示例"] }, [], day).reason, "公司在黑名单「示例」");
+  assert.equal(autoApplyDecision({ ...card, city: "" }, { ...base, city: "上海" }, [], day).reason, "未识别城市");
   const contacted = { jobKey: autoApplyJobKey(card), company: card.company, day: "2026-09-01", result: "contacted" };
   assert.equal(autoApplyDecision(card, base, [contacted], day).reason, "已沟通过");
   assert.equal(autoApplyDecision(card, base, [{ ...contacted, result: "failed" }], day).apply, true);

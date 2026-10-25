@@ -43,6 +43,7 @@ class AutoApplyTest {
         assertTrue(decide(AutoApplySettings(minSalaryK = 16)) is AutoApplyDecision.Skip)
         assertTrue(decide(AutoApplySettings(minSalaryK = 10), value = card.copy(salary = "面议")) is AutoApplyDecision.Skip)
         assertTrue(decide(AutoApplySettings(city = "北京")) is AutoApplyDecision.Skip)
+        assertEquals(AutoApplyDecision.Skip("未识别城市"), decide(AutoApplySettings(city = "上海"), value = card.copy(city = "")))
         assertTrue(decide(AutoApplySettings(companyBlacklist = listOf("示例"))) is AutoApplyDecision.Skip)
         assertEquals(listOf("Java 开发", "Kotlin"), AutoApplyRules.parseList(" Java 开发，Kotlin;Kotlin "))
     }
