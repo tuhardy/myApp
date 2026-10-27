@@ -74,26 +74,7 @@ internal class BossOverlay(
     @SuppressLint("ClickableViewAccessibility")
     fun show(diagnose: Boolean, masked: Boolean, showControl: Boolean) {
         if (root != null || (!showControl && !masked)) return
-        mask = LinearLayout(service).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(32), dp(48), dp(32), dp(48))
-            setBackgroundColor(ContextCompat.getColor(service, R.color.focus_white))
-            addView(TextView(service).apply {
-                text = "专注助手"
-                textSize = 28f
-                typeface = Typeface.DEFAULT_BOLD
-                gravity = Gravity.CENTER
-                setTextColor(ink)
-            })
-            addView(TextView(service).apply {
-                text = "专注中"
-                textSize = 16f
-                gravity = Gravity.CENTER
-                setTextColor(muted)
-                setPadding(0, dp(12), 0, 0)
-            })
-        }
+        mask = OverlayWallpaperView(service)
         if (masked) runCatching { windowManager.addView(mask, maskParams) }.onFailure { mask = null }
         bubble = TextView(service).apply {
             width = dp(52); height = dp(52)

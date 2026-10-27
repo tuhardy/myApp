@@ -511,6 +511,62 @@ class AutoApplyTest {
         assertEquals(BossScreen.OTHER, ZhaopinScreenReader.read(UiNode(emptyList()), noon).observation.screen)
     }
 
+    @Test fun zhaopinApplyPathSurvivesSkippedChildrenAndPrefersClickable() {
+        // 下标 0 的子树在屏幕外被跳过；按钮的可点击容器原始下标为 2，children 里排第 1。
+        val detail = UiNode(emptyList(), children = listOf(
+            UiNode(listOf(1), children = listOf(text(listOf(1, 0), "申请职位"))),
+            UiNode(listOf(2), clickable = true, children = listOf(text(listOf(2, 0), "申请职位")))))
+        assertEquals(listOf(2), ZhaopinScreenReader.read(detail, noon).contactPath)
+        assertTrue(ZhaopinApplyEngine.failReason(ZhaopinAction.TapApply).contains("申请职位"))
+    }
+
+    @Test fun zhaopinCardPathPointsAtClickableContainer() {
+        fun card(index: Int, inner: Boolean) = UiNode(listOf(0, index), children = listOf(
+            UiNode(listOf(0, index, 0), clickable = inner, children = listOf(
+                text(listOf(0, index, 0, 0), "Android 开发工程师", "com.zhaopin.social:id/tv_job_name"),
+                text(listOf(0, index, 0, 1), "1.5-2.5万", "com.zhaopin.social:id/tv_salary"),
+                text(listOf(0, index, 0, 2), "示例科技", "com.zhaopin.social:id/tv_company_name")))))
+        // 卡片容器不可点、内层唯一可点：取内层。
+        val inner = UiNode(emptyList(), children = listOf(UiNode(listOf(0), scrollable = true, children = listOf(card(0, true)))))
+        assertEquals(listOf(listOf(0, 0, 0)), ZhaopinScreenReader.read(inner, noon).cardPaths)
+        // 整条都不可点：退回可点击祖先（这里是可点的列表项之外没有，保持原路径）。
+        val none = UiNode(emptyList(), children = listOf(UiNode(listOf(0), scrollable = true, children = listOf(card(0, false)))))
+        assertEquals(listOf(listOf(0, 0)), ZhaopinScreenReader.read(none, noon).cardPaths)
+    }
+
+    @Test fun zhaopinPickerMatchesRealDialog() {
+        // 真机弹窗：标题带「请」，提交按钮只写「投递」，行里有「预览」和更新时间。
+        fun row(index: Int, name: String, date: String) = UiNode(listOf(index), children = listOf(
+            UiNode(listOf(index, 0), clickable = true, children = listOf(
+                text(listOf(index, 0, 0), name), text(listOf(index, 0, 1), date))),
+            UiNode(listOf(index, 1), clickable = true, text = "预览")))
+        val picker = UiNode(emptyList(), children = listOf(
+            text(listOf(0), "请选择要投递的简历"),
+            row(1, "在线简历", "2026.10.13更新"),
+            row(2, "涂林俊-简历.pdf", "2026.10.13上传"),
+            UiNode(listOf(3), clickable = true, text = "投递"),
+            text(listOf(4), "每次投递默认发送该简历")))
+        val reading = ZhaopinScreenReader.read(picker, noon)
+        assertEquals(BossScreen.RESUME_PICKER, reading.observation.screen)
+        assertEquals(listOf("在线简历", "涂林俊-简历.pdf"), reading.observation.resumeOptions)
+        assertTrue(reading.observation.hasConfirm)
+        assertEquals(listOf(3), reading.confirmPath)
+        // 选中第二份：点的是行内可点容器，不是「预览」。
+        assertEquals(listOf(2, 0), reading.resumeOptionPaths[1])
+    }
+
+    @Test fun zhaopinResumeOptionPathPointsAtClickableRow() {
+        // 简历名文字在不可点的 TextView 里，可点的是外层整行；行内只有这一个可点节点。
+        val picker = UiNode(emptyList(), children = listOf(text(listOf(0), "选择要投递的简历"),
+            UiNode(listOf(1), children = listOf(UiNode(listOf(1, 0), clickable = true, children = listOf(
+                text(listOf(1, 0, 0), "张三-Android.pdf"))))),
+            UiNode(listOf(2), clickable = true, text = "确认投递")))
+        val reading = ZhaopinScreenReader.read(picker, noon)
+        assertEquals(BossScreen.RESUME_PICKER, reading.observation.screen)
+        assertEquals(listOf("张三-Android.pdf"), reading.observation.resumeOptions)
+        assertEquals(listOf(listOf(1, 0)), reading.resumeOptionPaths)
+    }
+
     @Test fun zhaopinLiveRunAppliesWithResumeAndReturns() {
         val settings = resumeSettings
         var run = ZhaopinApplyEngine.start(AutoApplyMode.LIVE, noon)

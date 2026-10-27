@@ -680,7 +680,7 @@ private fun AdvancedSection(auto: AutoApplyPanel, actions: AutoApplyActions, bus
             Text("识别不了${auto.settings.platform.short}界面时，用诊断导出控件结构给开发者核对。只记录控件结构和文字长度，不含职位与聊天正文；App 更新后需要重新诊断和试运行。",
                 color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
             SettingSwitch("隐藏招聘页面", auto.settings.hideTargetPage, !running) { actions.setHideTargetPage(it) }
-            Text("真实执行时用专注助手遮罩覆盖招聘页面；诊断和试运行不隐藏。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+            Text("真实执行时用全屏动态壁纸覆盖招聘页面；诊断和试运行不隐藏。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
             SettingSwitch("显示悬浮控制按钮", auto.settings.showOverlay, !running) { actions.setShowOverlay(it) }
             Text("关闭后仍可从通知暂停、继续或停止。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

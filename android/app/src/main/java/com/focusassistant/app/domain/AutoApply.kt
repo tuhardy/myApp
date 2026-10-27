@@ -433,12 +433,13 @@ object BossScreenReader {
         if (list != null) {
             val parsed = list.children.mapNotNull { child -> parseCard(child)?.let { child.path to it } }
             if (parsed.isNotEmpty()) {
-                return BossReading(obs(BossScreen.JOB_LIST, parsed.map { it.second }), cardPaths = parsed.map { it.first }, listPath = list.path, messagesTabPath = tab)
+                return BossReading(obs(BossScreen.JOB_LIST, parsed.map { it.second }),
+                    cardPaths = parsed.map { cardClickPath(root, it.first) }, listPath = list.path, messagesTabPath = tab)
             }
             val chats = list.children.mapNotNull { child -> parseConversation(child)?.let { child.path to it } }
             if (chats.isNotEmpty()) {
-                return BossReading(obs(BossScreen.MESSAGE_LIST).copy(conversations = chats.map { it.second }), conversationPaths = chats.map { it.first },
-                    listPath = list.path, messagesTabPath = tab)
+                return BossReading(obs(BossScreen.MESSAGE_LIST).copy(conversations = chats.map { it.second }),
+                    conversationPaths = chats.map { cardClickPath(root, it.first) }, listPath = list.path, messagesTabPath = tab)
             }
         }
         return BossReading(obs(BossScreen.OTHER), messagesTabPath = tab)
@@ -469,9 +470,42 @@ internal fun clickablePath(root: UiNode, path: List<Int>): List<Int> {
     var best = path
     var node: UiNode? = root
     val chain = mutableListOf(root)
-    for (index in path) { node = node?.children?.getOrNull(index) ?: break; chain += node }
+    for (index in path) { node = node?.childAt(index) ?: break; chain += node }
     for (depth in chain.indices.reversed()) if (chain[depth].clickable) { best = path.take(depth); break }
     return best
+}
+
+internal fun hasClickable(root: UiNode, path: List<Int>): Boolean {
+    var node: UiNode = root
+    var found = root.clickable
+    for (index in path) { node = node.childAt(index) ?: return found; found = found || node.clickable }
+    return found
+}
+
+/** 快照跳过了屏幕外子树，children 下标与原始 child 下标不一致，按路径末位找。 */
+private fun UiNode.childAt(index: Int): UiNode? = children.firstOrNull { it.path.lastOrNull() == index }
+
+private fun nodeAt(root: UiNode, path: List<Int>): UiNode? {
+    var node: UiNode = root
+    for (index in path) node = node.childAt(index) ?: return null
+    return node
+}
+
+/**
+ * 列表项的点击目标：卡片容器本身常不可点，真正可点的既可能是它内部包一层的布局，也可能是外面的祖先。
+ * 先看自身，再按层向内找唯一的可点击节点（同层有多个说明是卡片内的按钮，不当成整卡点击），最后退回可点击祖先。
+ */
+internal fun cardClickPath(root: UiNode, path: List<Int>): List<Int> {
+    val item = nodeAt(root, path) ?: return path
+    if (item.clickable) return path
+    var level = item.children
+    while (level.isNotEmpty()) {
+        val clickable = level.filter { it.clickable }
+        if (clickable.size == 1) return clickable.single().path
+        if (clickable.size > 1) break
+        level = level.flatMap { it.children }
+    }
+    return clickablePath(root, path)
 }
 
 /**
@@ -487,7 +521,11 @@ object ZhaopinScreenReader {
     private val applyLabels = listOf("申请职位", "投递简历", "立即申请", "立即投递")
     private val appliedLabels = listOf("已申请", "已投递")
     private val confirmLabels = listOf("确认投递", "确定投递", "确认申请", "确定申请")
-    private val buttonLabels = setOf("确定", "确认", "取消", "关闭") + confirmLabels
+    /** 简历选择弹窗里的提交按钮只写「投递」「发送」；只在弹窗内认，避免详情页的同名按钮被当成确认框。 */
+    private val pickerConfirmLabels = confirmLabels + listOf("确定", "确认", "投递", "发送", "立即投递")
+    /** 弹窗里的更新时间、勾选说明不是简历名，排除后避免被当成候选整名比对。 */
+    private val noiseLine = Regex("""^\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2}\s*(更新|上传)?$|每次投递|默认发送""")
+    private val buttonLabels = setOf("确定", "确认", "取消", "关闭", "投递", "发送", "预览") + confirmLabels
 
     fun read(root: UiNode, now: Long): BossReading {
         val nodes = root.walk().toList()
@@ -500,25 +538,35 @@ object ZhaopinScreenReader {
         }
         if (labels.any { label -> doneWords.any { label.contains(it) } }) return BossReading(obs(BossScreen.APPLY_DONE))
         val confirm = nodes.firstOrNull { it.label.trim() in confirmLabels } ?: nodes.firstOrNull { it.label.trim() == "确定" || it.label.trim() == "确认" }
-        if (labels.any { it in pickerTitles }) {
-            // 标题和按钮以外的文字都作为候选；简历由状态机整名比对，这里不猜哪一行是简历。
-            val options = nodes.filter { it.label.isNotBlank() && it.label.trim() !in pickerTitles && it.label.trim() !in buttonLabels }
-            return BossReading(obs(BossScreen.RESUME_PICKER).copy(resumeOptions = options.map { it.label.trim() }, hasConfirm = confirm != null),
-                resumeOptionPaths = options.map { clickablePath(root, it.path) }, confirmPath = confirm?.let { clickablePath(root, it.path) })
+        // 标题可能带「请」等前后缀（真机为「请选择要投递的简历」），按包含匹配。
+        if (labels.any { label -> pickerTitles.any { label.contains(it) } }) {
+            // 标题、按钮、说明行以外的文字都作为候选；简历由状态机整名比对，这里不猜哪一行是简历。
+            val options = nodes.filter { node ->
+                val label = node.label.trim()
+                label.isNotEmpty() && pickerTitles.none { label.contains(it) } && label !in buttonLabels && !noiseLine.containsMatchIn(label)
+            }
+            val submit = nodes.firstOrNull { it.label.trim() in pickerConfirmLabels }
+            return BossReading(obs(BossScreen.RESUME_PICKER).copy(resumeOptions = options.map { it.label.trim() }, hasConfirm = submit != null),
+                resumeOptionPaths = options.map { cardClickPath(root, it.path) }, confirmPath = submit?.let { clickablePath(root, it.path) })
         }
         if (confirm != null && (confirm.label.trim() in confirmLabels || labels.any { it.contains("投递") && (it.contains("确定") || it.contains("是否") || it.contains("吗")) })) {
             return BossReading(obs(BossScreen.RESUME_CONFIRM).copy(resumeOptions = labels.filter { it !in buttonLabels }, hasConfirm = true),
                 confirmPath = clickablePath(root, confirm.path))
         }
         val applied = nodes.firstOrNull { it.label.trim() in appliedLabels }
-        val apply = nodes.firstOrNull { it.label.trim() in applyLabels }
+        // 同名文字可能先出现在不可点的标题或说明里，优先取自身或祖先可点击的那一个。
+        val applyNodes = nodes.filter { it.label.trim() in applyLabels }
+        val apply = applyNodes.firstOrNull { hasClickable(root, it.path) } ?: applyNodes.firstOrNull()
         if (applied != null || apply != null) {
             return BossReading(obs(BossScreen.JOB_DETAIL, applied = applied != null), contactPath = apply?.let { clickablePath(root, it.path) })
         }
         val list = nodes.filter { it.scrollable }.maxByOrNull { it.children.size }
         if (list != null) {
             val parsed = list.children.mapNotNull { child -> BossScreenReader.parseCard(child)?.let { child.path to it } }
-            if (parsed.isNotEmpty()) return BossReading(obs(BossScreen.JOB_LIST, parsed.map { it.second }), cardPaths = parsed.map { it.first }, listPath = list.path)
+            if (parsed.isNotEmpty()) {
+                return BossReading(obs(BossScreen.JOB_LIST, parsed.map { it.second }),
+                    cardPaths = parsed.map { cardClickPath(root, it.first) }, listPath = list.path)
+            }
         }
         return BossReading(obs(BossScreen.OTHER))
     }
@@ -936,6 +984,17 @@ object ZhaopinApplyEngine {
         }
         return ZhaopinStep(stop(run, reason, now), record = record, log = reason)
     }
+
+    /** 动作没能执行时的停止原因，写明卡在哪一步，便于对照界面诊断。 */
+    fun failReason(action: ZhaopinAction): String = when (action) {
+        is ZhaopinAction.OpenCard -> "点不开职位卡片"
+        ZhaopinAction.TapApply -> "找不到可点击的「申请职位 / 投递简历」按钮"
+        is ZhaopinAction.PickResume -> "点不到要选择的简历"
+        ZhaopinAction.Confirm -> "找不到可点击的确认投递按钮"
+        ZhaopinAction.Back -> "返回操作没有执行"
+        ZhaopinAction.ScrollList -> "找不到职位列表，无法滚动"
+        ZhaopinAction.Wait -> "界面操作没有执行"
+    } + "，已停止；智联界面可能已更新，请在当前页面做界面诊断"
 
     private fun scan(run: ZhaopinRun, obs: BossObservation, settings: AutoApplySettings, records: List<AutoApplyRecord>, zone: ZoneId): ZhaopinStep {
         val now = obs.now

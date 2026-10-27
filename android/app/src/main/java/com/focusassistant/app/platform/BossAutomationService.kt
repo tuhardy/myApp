@@ -170,6 +170,8 @@ class BossAutomationService : AccessibilityService() {
     private var lastEventAt = 0L
     private var lastActionAt = 0L
     private var seenTarget = false
+    /** 已经认出过列表页；之后用户再点界面就算手动操作，不再当成「还在自己找页面」。 */
+    private var sawList = false
     private var startedAt = 0L
     private val zone: ZoneId get() = ZoneId.systemDefault()
     private val repository get() = (application as FocusApplication).repository
@@ -205,11 +207,17 @@ class BossAutomationService : AccessibilityService() {
         if (task != null) runCatching { halt(reason) }.onFailure { task = null } else BossAutomation.log(reason)
     }
 
-    /** 遮罩窗口会成为活动窗口，所以先在全部窗口里找目标 App 的根节点。 */
+    /**
+     * 遮罩窗口会成为活动窗口，所以先在全部窗口里找目标 App 的根节点。
+     * 简历选择这类弹窗是目标 App 的另一个窗口，和详情页同时存在，必须取层级最高的那个，
+     * 否则只读到底下的详情页，弹窗一直识别不出来。
+     */
     private fun targetRoot(): AccessibilityNodeInfo? {
         val target = platform.packageName
-        return runCatching { windows.firstNotNullOfOrNull { window -> window.root?.takeIf { it.packageName?.toString() == target } } }.getOrNull()
-            ?: rootInActiveWindow?.takeIf { it.packageName?.toString() == target }
+        val top = runCatching {
+            windows.filter { it.root?.packageName?.toString() == target }.maxByOrNull { it.layer }?.root
+        }.getOrNull()
+        return top ?: rootInActiveWindow?.takeIf { it.packageName?.toString() == target }
     }
 
     private fun handleEvent(event: AccessibilityEvent) {
@@ -223,8 +231,10 @@ class BossAutomationService : AccessibilityService() {
         // 本服务点击后的界面回调会落在动作后的短时间内；之外的点击和输入视为用户在操作，暂停任务。
         val manual = event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED || event.eventType == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED ||
             event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
-        // 第一次自动动作之前允许用户自己切到职位列表。
-        if (manual && lastActionAt > startedAt && SystemClock.elapsedRealtime() - lastActionAt > OWN_EVENT_WINDOW_MS) pause("检测到手动操作，已暂停；处理完点悬浮按钮继续")
+        // 第一次自动动作之前允许用户自己切到列表页；但列表已经认出来之后再点（切换职位分类等）就算手动操作，
+        // 否则界面离开列表又没人暂停，扫描阶段会在 20 秒后直接停止任务。
+        val navigating = lastActionAt == startedAt && !sawList
+        if (manual && !navigating && SystemClock.elapsedRealtime() - lastActionAt > OWN_EVENT_WINDOW_MS) pause("检测到手动操作，已暂停；处理完点悬浮按钮继续")
     }
 
     override fun onInterrupt() = halt("系统中断了无障碍服务，已停止")
@@ -253,6 +263,7 @@ class BossAutomationService : AccessibilityService() {
         platform = target
         paused = null
         seenTarget = false
+        sawList = false
         startedAt = SystemClock.elapsedRealtime()
         lastActionAt = startedAt
         waitingForListNotice = false
@@ -348,6 +359,7 @@ class BossAutomationService : AccessibilityService() {
         paused = null
         // 继续后重新给出切回目标 App 的时间，第一步动作前也允许用户自己调整页面。
         seenTarget = false
+        sawList = false
         startedAt = SystemClock.elapsedRealtime()
         lastActionAt = startedAt
         BossAutomation.update { it.copy(paused = null) }
@@ -425,6 +437,7 @@ class BossAutomationService : AccessibilityService() {
         val reading = PlatformReader.read(platform, BossUiMap.snapshot(root!!, masked), System.currentTimeMillis())
         val seen = reading.observation.let { "${it.screen.name}${if (it.cards.isNotEmpty()) " · ${it.cards.size} 个职位" else ""}" }
         if (seen != lastScreen) { lastScreen = seen; BossAutomation.log("识别：$seen") }
+        if (reading.observation.screen == BossScreen.JOB_LIST || reading.observation.screen == BossScreen.MESSAGE_LIST) sawList = true
         resumeRun?.let { return resumeTick(it, root, reading) }
         zhaopinRun?.let { return zhaopinTick(it, root, reading) }
         val current = run ?: return
@@ -494,7 +507,7 @@ class BossAutomationService : AccessibilityService() {
             return halt(step.run.stopReason ?: "已停止")
         }
         if (!performZhaopin(root, reading, step.action)) {
-            val failed = ZhaopinApplyEngine.fail(step.run, "找不到要点击的界面元素，已停止；智联界面可能已更新", System.currentTimeMillis()) { UUID.randomUUID().toString() }
+            val failed = ZhaopinApplyEngine.fail(step.run, ZhaopinApplyEngine.failReason(step.action), System.currentTimeMillis()) { UUID.randomUUID().toString() }
             failed.record?.let { repository.addAutoApplyRecord(it) }
             halt(failed.run.stopReason ?: "已停止")
         }
@@ -507,17 +520,19 @@ class BossAutomationService : AccessibilityService() {
         is ZhaopinAction.PickResume -> clickPath(root, reading.resumeOptionPaths.getOrNull(action.index))
         ZhaopinAction.Confirm -> clickPath(root, reading.confirmPath)
         ZhaopinAction.Back -> { lastActionAt = SystemClock.elapsedRealtime(); performGlobalAction(GLOBAL_ACTION_BACK) }
-        ZhaopinAction.ScrollList -> {
-            val list = reading.listPath?.let { BossUiMap.find(root, it) }
-            if (list == null) false else { lastActionAt = SystemClock.elapsedRealtime(); list.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) }
-        }
+        ZhaopinAction.ScrollList -> scrollList(root, reading)
     }
 
     private fun clickPath(root: AccessibilityNodeInfo, path: List<Int>?): Boolean {
-        var node = path?.let { BossUiMap.find(root, it) } ?: return false
-        while (!node.isClickable) node = node.parent ?: return false
+        var node: AccessibilityNodeInfo? = path?.let { BossUiMap.find(root, it) } ?: return false
         lastActionAt = SystemClock.elapsedRealtime()
-        return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        // 部分控件 isClickable 为 false 但声明了点击动作，也可以点；点击被拒时继续向上试可点击的祖先。
+        while (node != null) {
+            val clickable = node.isClickable || AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK in node.actionList
+            if (clickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+            node = node.parent
+        }
+        return false
     }
 
     private fun performResume(root: AccessibilityNodeInfo, reading: BossReading, action: ResumeAction): Boolean = when (action) {
@@ -528,10 +543,15 @@ class BossAutomationService : AccessibilityService() {
         is ResumeAction.PickResume -> clickPath(root, reading.resumeOptionPaths.getOrNull(action.index))
         ResumeAction.Confirm -> clickPath(root, reading.confirmPath)
         ResumeAction.Back -> { lastActionAt = SystemClock.elapsedRealtime(); performGlobalAction(GLOBAL_ACTION_BACK) }
-        ResumeAction.ScrollList -> {
-            val list = reading.listPath?.let { BossUiMap.find(root, it) }
-            if (list == null) false else { lastActionAt = SystemClock.elapsedRealtime(); list.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) }
-        }
+        ResumeAction.ScrollList -> scrollList(root, reading)
+    }
+
+    /** 列表到底时滚动会返回 false，这不算找不到元素；没有新内容由状态机的空滚计数停止。 */
+    private fun scrollList(root: AccessibilityNodeInfo, reading: BossReading): Boolean {
+        val list = reading.listPath?.let { BossUiMap.find(root, it) } ?: return false
+        lastActionAt = SystemClock.elapsedRealtime()
+        list.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+        return true
     }
 
     private suspend fun perform(root: AccessibilityNodeInfo, reading: BossReading, action: AutoApplyAction): Boolean {
@@ -541,11 +561,7 @@ class BossAutomationService : AccessibilityService() {
             is AutoApplyAction.OpenCard -> click(reading.cardPaths.getOrNull(action.index))
             AutoApplyAction.TapContact -> click(reading.contactPath)
             AutoApplyAction.Back -> { lastActionAt = SystemClock.elapsedRealtime(); performGlobalAction(GLOBAL_ACTION_BACK) }
-            AutoApplyAction.ScrollList -> {
-                val list = reading.listPath?.let { BossUiMap.find(root, it) } ?: return false
-                lastActionAt = SystemClock.elapsedRealtime()
-                list.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
-            }
+            AutoApplyAction.ScrollList -> scrollList(root, reading)
             is AutoApplyAction.SendGreeting -> {
                 val input = reading.inputPath?.let { BossUiMap.find(root, it) } ?: return false
                 lastActionAt = SystemClock.elapsedRealtime()
