@@ -1492,6 +1492,67 @@ test("全部周期只取截至今天的记录，范围从首个完成日到明�
   assert.equal(focusMonthlyTrend([{ endedAt: new Date(2025, 11, 31).toISOString(), durationMinutes: 5 }], now)[0].label, "25年12月");
 });
 
+test("音乐回顾按日周月年过滤并生成播放次数与时长排行", () => {
+  const { musicListeningSummary } = require("./model.js");
+  const anchor = new Date(2026, 9, 30, 12);
+  const records = Object.freeze([
+    Object.freeze({ trackId: "sunny", playedAt: new Date(2026, 9, 30, 8).toISOString(), seconds: 100 }),
+    Object.freeze({ trackId: "sunny", playedAt: new Date(2026, 9, 30, 9).toISOString(), seconds: 120 }),
+    Object.freeze({ trackId: "if", playedAt: new Date(2026, 9, 29, 20).toISOString(), seconds: 274 }),
+    Object.freeze({ trackId: "lucky", playedAt: new Date(2026, 8, 30, 20).toISOString(), seconds: 266 }),
+    Object.freeze({ trackId: "special", playedAt: new Date(2025, 9, 30, 20).toISOString(), seconds: 259 }),
+  ]);
+  const snapshot = JSON.stringify(records);
+  assert.deepEqual(musicListeningSummary(records, "day", anchor), {
+    plays: 2, seconds: 220, activeDays: 1, averageSeconds: 220,
+    ranking: [{ ...require("./model.js").MUSIC_TRACKS[0], plays: 2, seconds: 220, lastPlayedAt: records[1].playedAt }],
+  });
+  assert.equal(musicListeningSummary(records, "week", anchor).ranking[0].title, "晴天");
+  assert.equal(musicListeningSummary(records, "month", anchor).plays, 3);
+  assert.equal(musicListeningSummary(records, "year", anchor).plays, 4);
+  assert.deepEqual(musicListeningSummary(records, "year", new Date(2024, 0, 1)), { plays: 0, seconds: 0, activeDays: 0, averageSeconds: 0, ranking: [] });
+  assert.equal(JSON.stringify(records), snapshot);
+});
+
+test("音乐次数相同时按时长与歌名稳定排序，示例每天独立且不写入未来", () => {
+  const { initialMusicListens, musicListeningSummary } = require("./model.js");
+  const anchor = new Date(2026, 9, 30, 12);
+  const records = [
+    { trackId: "lucky", playedAt: new Date(2026, 9, 30, 8).toISOString(), seconds: 100 },
+    { trackId: "if", playedAt: new Date(2026, 9, 30, 9).toISOString(), seconds: 100 },
+  ];
+  assert.deepEqual(musicListeningSummary(records, "day", anchor).ranking.map(track => track.id), ["if", "lucky"]);
+  const now = new Date();
+  const listens = initialMusicListens(now);
+  assert.equal(listens.length, initialMusicListens(now).length);
+  assert.equal(new Set(listens.map(record => record.id)).size, listens.length);
+  assert.equal(listens.filter(record => new Date(record.playedAt) > now).length, 0);
+  assert.ok(musicListeningSummary(listens, "day", now).ranking[0].plays > 1);
+});
+
+test("音乐趋势与汇总总时长一致，活跃日均和上一期对比口径稳定", () => {
+  const { MUSIC_TRACKS, initialMusicListens, musicListeningSummary, musicListeningTrend, compareMusicListening } = require("./model.js");
+  assert.equal(MUSIC_TRACKS.length, 24);
+  const anchor = new Date(2026, 8, 26, 16, 59, 40);
+  const records = Object.freeze(initialMusicListens(anchor).map(Object.freeze));
+  const snapshot = JSON.stringify(records);
+  for (const [period, bins, plays] of [["day", 24, 10], ["week", 7, 32], ["month", 30, 48], ["year", 12, 73]]) {
+    const summary = musicListeningSummary(records, period, anchor);
+    const trend = musicListeningTrend(records, period, anchor);
+    assert.equal(trend.length, bins);
+    assert.equal(trend.reduce((total, bin) => total + bin.seconds, 0), summary.seconds);
+    assert.equal(summary.plays, plays);
+    assert.equal(summary.averageSeconds, Math.round(summary.seconds / summary.activeDays));
+  }
+  assert.equal(musicListeningSummary(records, "week", anchor).activeDays, 4);
+  assert.equal(musicListeningSummary(records, "week", anchor).ranking.length, 24);
+  const comparison = compareMusicListening(records, "day", anchor);
+  assert.equal(comparison.current, musicListeningSummary(records, "day", anchor).seconds);
+  assert.equal(comparison.previous, musicListeningSummary(records, "day", new Date(2026, 8, 25)).seconds);
+  assert.equal(comparison.difference, comparison.current - comparison.previous);
+  assert.equal(JSON.stringify(records), snapshot);
+});
+
 test("周期平移按日周月年整段移动，环比与上一周期对比且不修改输入", () => {
   const { shiftPeriodAnchor, comparePeriods } = require("./model.js");
   const anchor = new Date(2026, 9, 16, 15);

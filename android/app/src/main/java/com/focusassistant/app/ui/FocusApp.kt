@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AssignmentTurnedIn
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Book
+import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.*
@@ -56,7 +57,7 @@ import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
 
-internal enum class Screen { PROJECTS, TIMER, TODOS, DIARY, STATISTICS, USAGE, SETTINGS, JOB_ASSIST }
+internal enum class Screen { PROJECTS, TIMER, TODOS, DIARY, MUSIC, STATISTICS, USAGE, SETTINGS, JOB_ASSIST }
 
 internal object TodoUiLimits {
     const val FINISH_HOLD_MS = 680L
@@ -168,6 +169,7 @@ class NativeUiModel : ViewModel() {
     var busy by mutableStateOf(false)
     internal val todos = TodoUiState()
     internal val diary = DiaryUiState()
+    internal val music = MusicUiState()
     private val todoAnimations = mutableMapOf<String, Job>()
     private var todoAnimationToken = 0L
     var period by mutableStateOf(Period.DAY)
@@ -455,7 +457,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { null }
     }
-    BackHandler(enabled = ui.dialog.isEmpty() && ui.screen !in setOf(Screen.PROJECTS, Screen.TODOS, Screen.DIARY, Screen.USAGE, Screen.SETTINGS)) {
+    BackHandler(enabled = ui.dialog.isEmpty() && ui.screen !in setOf(Screen.PROJECTS, Screen.TODOS, Screen.DIARY, Screen.MUSIC, Screen.USAGE, Screen.SETTINGS)) {
         ui.screen = if (ui.screen == Screen.JOB_ASSIST) Screen.SETTINGS else Screen.PROJECTS
     }
 
@@ -471,12 +473,13 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
                     }
                 ) {
                     val selected = when (ui.screen) { Screen.TIMER, Screen.STATISTICS -> Screen.PROJECTS; else -> ui.screen }
-                    listOf(Screen.PROJECTS, Screen.TODOS, Screen.DIARY, Screen.USAGE, Screen.SETTINGS).forEach { page ->
-                        val label = when (page) { Screen.PROJECTS -> "专注"; Screen.TODOS -> "待办"; Screen.DIARY -> "日记"; Screen.USAGE -> "用时"; else -> "我的" }
+                    listOf(Screen.PROJECTS, Screen.TODOS, Screen.DIARY, Screen.MUSIC, Screen.USAGE, Screen.SETTINGS).forEach { page ->
+                        val label = when (page) { Screen.PROJECTS -> "专注"; Screen.TODOS -> "待办"; Screen.DIARY -> "日记"; Screen.MUSIC -> "音乐"; Screen.USAGE -> "用时"; else -> "我的" }
                         val image = when (page) {
                             Screen.PROJECTS -> Icons.Outlined.Timer
                             Screen.TODOS -> Icons.Outlined.AssignmentTurnedIn
                             Screen.DIARY -> Icons.Outlined.Book
+                            Screen.MUSIC -> Icons.Outlined.LibraryMusic
                             Screen.USAGE -> Icons.Outlined.BarChart
                             else -> Icons.Outlined.PersonOutline
                         }
@@ -554,6 +557,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
                         help = { ui.open("diary-help") },
                         message = ui::message
                     ))
+                    Screen.MUSIC -> MusicScreen(emptyList(), emptyList(), emptyList(), ui.music, today, ui::message)
                     Screen.STATISTICS -> StatisticsScreen(state, ui.period, ui.statsAll, ui.anchor, ui.recordLimit, today,
                         onPeriod = { ui.period = it; ui.statsAll = false; ui.recordLimit = UiLimits.RECORD_PAGE },
                         onAll = { ui.statsAll = true; ui.recordLimit = UiLimits.RECORD_PAGE },

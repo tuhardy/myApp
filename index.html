@@ -33,6 +33,12 @@
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16ZM13 7l4 4"/></symbol>
     <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 8"/></symbol>
+    <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l11-2v13M9 8l11-2"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></symbol>
+    <symbol id="i-skip-back" viewBox="0 0 24 24"><path d="M6 5v14M19 6l-10 6 10 6Z"/></symbol>
+    <symbol id="i-skip-forward" viewBox="0 0 24 24"><path d="M18 5v14M5 6l10 6-10 6Z"/></symbol>
+    <symbol id="i-cover-wave" viewBox="0 0 100 100"><path d="M-5 52h14l6-18 9 36 10-50 10 62 10-44 9 26 8-12h34M-5 74h110" opacity=".9"/></symbol>
+    <symbol id="i-cover-bars" viewBox="0 0 100 100"><path d="M17 72V54M29 72V38M41 72V22M53 72V45M65 72V31M77 72V58M12 80h76"/></symbol>
+    <symbol id="i-cover-lines" viewBox="0 0 100 100"><path d="M8 30c15-16 28 16 43 0s28 16 43 0M8 50c15-16 28 16 43 0s28 16 43 0M8 70c15-16 28 16 43 0s28 16 43 0"/></symbol>
   </svg>
   <main class="workspace">
     <aside class="presentation">
@@ -45,8 +51,9 @@
           <button data-page="focus" class="feature-link active"><span>01</span><div><strong>专注当下</strong><small>一段时间，只做一件事</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
           <button data-page="tasks" class="feature-link"><span>02</span><div><strong>有序行动</strong><small>让每个小目标，都有着落</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
           <button data-page="diary" class="feature-link"><span>03</span><div><strong>记下生活</strong><small>随手记下发生的事与当下的感受</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
-          <button data-page="usage" class="feature-link"><span>04</span><div><strong>看见时间</strong><small>了解习惯，找回自己的节奏</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
-          <button data-page="profile" class="feature-link"><span>05</span><div><strong>由你定义</strong><small>本地数据与求职辅助草稿</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
+          <button data-page="music" class="feature-link"><span>04</span><div><strong>听见喜欢</strong><small>流行歌单、歌曲与日常收听</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
+          <button data-page="usage" class="feature-link"><span>05</span><div><strong>看见时间</strong><small>了解习惯，找回自己的节奏</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
+          <button data-page="profile" class="feature-link"><span>06</span><div><strong>由你定义</strong><small>本地数据与求职辅助草稿</small></div><svg class="icon"><use href="#i-arrow"/></svg></button>
         </div>
       </div>
       <footer class="presentation-footer"><span class="status-dot"></span> Android 界面提案 · V0.4 <span>本地优先 / 轻量生活</span></footer>
@@ -175,6 +182,110 @@
               <p id="diary-editor-error" class="diary-editor-error" role="alert" hidden></p>
               <p class="data-note">返回或退到后台时自动存入「更多 · 草稿」；原型刷新会丢失。</p>
               <div class="diary-editor-toolbar" aria-label="添加内容"><button id="diary-add-photo" type="button"><svg class="icon"><use href="#i-image"/></svg>添加照片</button><button id="diary-record" type="button" aria-pressed="false"><svg class="icon"><use href="#i-mic"/></svg><span id="diary-record-label">录音</span></button></div>
+            </div>
+          </section>
+          <section class="page" id="page-music" aria-labelledby="music-heading" hidden>
+            <header class="music-header" id="music-main-header">
+              <div class="page-header music-title-row"><div><p class="overline">流行歌单与日常收听</p><h2 id="music-heading">声音馆<span class="heading-dot">.</span></h2></div><div class="header-actions"><button class="icon-button music-square-button" id="music-history" type="button" aria-label="查看收听回顾"><svg class="icon"><use href="#i-chart"/></svg></button><button class="icon-button music-add-button" id="music-add" type="button" aria-label="添加歌曲，界面演示"><svg class="icon"><use href="#i-plus"/></svg></button></div></div>
+              <label class="music-search"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><span class="sr-only">搜索歌名或歌手</span><input id="music-search" type="search" placeholder="搜索歌名或歌手" autocomplete="off"></label>
+              <div class="music-tabs" role="tablist" aria-label="音乐分区"><button type="button" role="tab" id="music-tab-recommend" data-music-tab="recommend" aria-controls="music-panel-recommend" aria-selected="true">推荐</button><button type="button" role="tab" id="music-tab-playlists" data-music-tab="playlists" aria-controls="music-panel-playlists" aria-selected="false" tabindex="-1">歌单</button><button type="button" role="tab" id="music-tab-songs" data-music-tab="songs" aria-controls="music-panel-songs" aria-selected="false" tabindex="-1">歌曲</button><button type="button" role="tab" id="music-tab-history" data-music-tab="history" aria-controls="music-panel-history" aria-selected="false" tabindex="-1">回顾</button></div>
+            </header>
+            <section class="music-playlist-detail" id="music-playlist-detail" aria-labelledby="music-playlist-title" hidden>
+              <header class="music-detail-header"><button class="icon-button back-button" id="music-playlist-back" type="button" aria-label="返回歌单列表"><svg class="icon"><use href="#i-arrow"/></svg></button><h2>歌单</h2><span class="sample-tag">示例</span></header>
+              <div class="music-detail-body">
+                <div class="music-detail-hero"><span class="music-cover tone-one" id="music-detail-cover"><svg aria-hidden="true"><use href="#i-cover-wave"/></svg></span><div><h3 id="music-playlist-title">通勤流行</h3><p id="music-playlist-count">18 首 · 示例歌单</p><button type="button" class="primary-button" id="music-play-all"><svg class="icon"><use href="#i-play"/></svg>播放全部</button></div></div>
+                <div class="section-heading music-section-heading"><h3>歌单歌曲</h3><small>部分示例内容</small></div>
+                <div class="music-song-list" id="music-playlist-track-list"></div>
+              </div>
+            </section>
+            <div class="music-body" id="music-tab-content">
+              <section id="music-panel-recommend" data-music-panel="recommend" role="tabpanel" aria-labelledby="music-tab-recommend">
+                <section class="music-now" aria-labelledby="music-track-title">
+                  <div class="music-playing-state"><span><i aria-hidden="true"></i><span id="music-playing-label">正在播放</span></span><button type="button" id="music-more" aria-label="当前歌曲更多操作，界面演示"><svg class="icon"><use href="#i-more"/></svg></button></div>
+                  <h3 id="music-track-title">晴天</h3>
+                  <p class="music-track-meta" id="music-track-artist">周杰伦 · 4:29</p>
+                  <div class="music-wave-panel" role="img" aria-label="歌曲播放进度示意，1 分 42 秒，共 4 分 29 秒">
+                    <div class="music-waveform" aria-hidden="true">
+                      <i class="played" style="--h:18%"></i><i class="played" style="--h:32%"></i><i class="played" style="--h:48%"></i><i class="played" style="--h:26%"></i><i class="played" style="--h:66%"></i><i class="played" style="--h:88%"></i><i class="played" style="--h:56%"></i><i class="played" style="--h:36%"></i><i class="played" style="--h:74%"></i><i class="played" style="--h:46%"></i><i class="played" style="--h:24%"></i><i class="played" style="--h:60%"></i><i class="played" style="--h:82%"></i><i class="played" style="--h:44%"></i>
+                      <i style="--h:28%"></i><i style="--h:64%"></i><i style="--h:94%"></i><i style="--h:50%"></i><i style="--h:30%"></i><i style="--h:72%"></i><i style="--h:40%"></i><i style="--h:20%"></i><i style="--h:54%"></i><i style="--h:78%"></i><i style="--h:42%"></i><i style="--h:88%"></i><i style="--h:60%"></i><i style="--h:32%"></i><i style="--h:68%"></i><i style="--h:48%"></i><i style="--h:22%"></i><i style="--h:58%"></i><i style="--h:80%"></i><i style="--h:38%"></i>
+                    </div>
+                    <span class="music-playhead" aria-hidden="true"></span>
+                    <div class="music-time-row"><span>01:42</span><span>-02:47</span></div>
+                  </div>
+                  <div class="music-transport"><button type="button" id="music-previous" aria-label="上一首，界面演示"><svg class="icon"><use href="#i-skip-back"/></svg></button><button type="button" class="music-main-toggle" id="music-main-toggle" aria-label="暂停，界面演示"><svg class="icon"><use id="music-main-toggle-icon" href="#i-pause"/></svg></button><button type="button" id="music-next" aria-label="下一首，界面演示"><svg class="icon"><use href="#i-skip-forward"/></svg></button></div>
+                </section>
+
+                <div class="section-heading music-section-heading"><h3>我的歌单</h3><button type="button" class="music-text-button" data-music-open="playlists">全部</button></div>
+                <div class="music-playlist-grid">
+                  <button type="button" class="music-playlist" data-music-playlist="通勤流行" data-music-count="18" data-music-offset="0"><span class="music-cover tone-one"><svg aria-hidden="true"><use href="#i-cover-wave"/></svg></span><strong>通勤流行</strong><small>18 首</small></button>
+                  <button type="button" class="music-playlist" data-music-playlist="深夜电台" data-music-count="12" data-music-offset="1"><span class="music-cover tone-two"><svg aria-hidden="true"><use href="#i-cover-bars"/></svg></span><strong>深夜电台</strong><small>12 首</small></button>
+                  <button type="button" class="music-playlist" data-music-playlist="中文珍藏" data-music-count="26" data-music-offset="2"><span class="music-cover tone-three"><svg aria-hidden="true"><use href="#i-cover-lines"/></svg></span><strong>中文珍藏</strong><small>26 首</small></button>
+                </div>
+
+                <div class="section-heading music-section-heading music-recent-heading"><h3>最近播放</h3><button type="button" class="music-text-button" data-music-open="songs">全部歌曲</button></div>
+                <div class="music-song-list">
+                  <button type="button" class="music-song-row" data-music-track="如果可以" data-music-artist="韦礼安" data-music-duration="4:34"><span class="music-cover tone-two"><svg aria-hidden="true"><use href="#i-cover-bars"/></svg></span><span class="music-song-copy"><strong>如果可以</strong><small>韦礼安</small></span><span class="music-song-duration">4:34</span></button>
+                  <button type="button" class="music-song-row" data-music-track="小幸运" data-music-artist="田馥甄" data-music-duration="4:26"><span class="music-cover tone-three"><svg aria-hidden="true"><use href="#i-cover-lines"/></svg></span><span class="music-song-copy"><strong>小幸运</strong><small>田馥甄</small></span><span class="music-song-duration">4:26</span></button>
+                </div>
+                <p class="data-note music-data-note">流行歌曲与封面均为示例 · 不读取本地音乐，不播放真实音频</p>
+              </section>
+
+              <section id="music-panel-playlists" data-music-panel="playlists" role="tabpanel" aria-labelledby="music-tab-playlists" hidden>
+                <div class="section-heading music-section-heading"><h3>我的歌单</h3><small>6 个 · 示例</small></div>
+                <div class="music-playlist-grid music-playlist-grid-full">
+                  <button type="button" class="music-playlist" data-music-playlist="通勤流行" data-music-count="18" data-music-offset="0"><span class="music-cover tone-one"><svg aria-hidden="true"><use href="#i-cover-wave"/></svg></span><strong>通勤流行</strong><small>18 首</small></button>
+                  <button type="button" class="music-playlist" data-music-playlist="深夜电台" data-music-count="12" data-music-offset="1"><span class="music-cover tone-two"><svg aria-hidden="true"><use href="#i-cover-bars"/></svg></span><strong>深夜电台</strong><small>12 首</small></button>
+                  <button type="button" class="music-playlist" data-music-playlist="中文珍藏" data-music-count="26" data-music-offset="2"><span class="music-cover tone-three"><svg aria-hidden="true"><use href="#i-cover-lines"/></svg></span><strong>中文珍藏</strong><small>26 首</small></button>
+                  <button type="button" class="music-playlist" data-music-playlist="轻快心情" data-music-count="15" data-music-offset="3"><span class="music-cover tone-four"><svg aria-hidden="true"><use href="#i-cover-wave"/></svg></span><strong>轻快心情</strong><small>15 首</small></button>
+                  <button type="button" class="music-playlist" data-music-playlist="独自散步" data-music-count="9" data-music-offset="4"><span class="music-cover tone-five"><svg aria-hidden="true"><use href="#i-cover-bars"/></svg></span><strong>独自散步</strong><small>9 首</small></button>
+                  <button type="button" class="music-playlist" data-music-playlist="怀旧金曲" data-music-count="21" data-music-offset="5"><span class="music-cover tone-six"><svg aria-hidden="true"><use href="#i-cover-lines"/></svg></span><strong>怀旧金曲</strong><small>21 首</small></button>
+                </div>
+                <button type="button" class="secondary-button music-wide-action" id="music-new-playlist">＋ 新建歌单（界面演示）</button>
+              </section>
+
+              <section id="music-panel-songs" data-music-panel="songs" role="tabpanel" aria-labelledby="music-tab-songs" hidden>
+                <div class="section-heading music-section-heading"><h3>全部歌曲</h3><small id="music-song-count">6 首 · 示例</small></div>
+                <div class="music-song-list" id="music-song-list"></div>
+                <p class="music-search-empty" id="music-search-empty" hidden>没有匹配的示例歌曲，换个歌名或歌手试试。</p>
+              </section>
+
+              <section id="music-panel-history" data-music-panel="history" role="tabpanel" aria-labelledby="music-tab-history" hidden>
+                <div class="section-heading music-section-heading"><h3 id="music-history-title">每周回顾</h3><small>示例记录</small></div>
+                <div class="music-history-bar" id="music-history-bar">
+                  <div class="segmented music-history-periods" role="group" aria-label="回顾周期"><button type="button" data-music-history-period="day" aria-pressed="false">日</button><button type="button" class="selected" data-music-history-period="week" aria-pressed="true">周</button><button type="button" data-music-history-period="month" aria-pressed="false">月</button><button type="button" data-music-history-period="year" aria-pressed="false">年</button></div>
+                  <div class="music-history-nav">
+                    <button type="button" class="icon-button" id="music-history-prev" aria-label="上一期"><svg class="icon music-history-prev-icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+                    <button type="button" class="music-history-anchor" id="music-history-anchor" aria-expanded="false" aria-controls="music-history-picker"><span id="music-history-range-label">本周</span><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+                    <button type="button" class="icon-button" id="music-history-next" aria-label="下一期"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+                  </div>
+                  <button type="button" class="text-button music-history-today" id="music-history-today" hidden>回到本周</button>
+                  <div class="music-history-picker" id="music-history-picker" hidden>
+                    <div id="music-history-picker-grid"></div>
+                    <label class="stats-jump">精确跳到日期<input id="music-history-date-jump" type="date" min="1900-01-01"></label>
+                  </div>
+                </div>
+                <section class="music-history-section" aria-label="播放概览">
+                  <div class="statistics-overview music-history-overview">
+                    <div class="statistics-total"><span id="music-history-total-label">本周收听</span><div><strong id="music-history-minutes">0</strong><span> 分钟</span></div><p class="statistics-compare" id="music-history-compare" hidden></p></div>
+                    <div class="statistics-metrics"><div><strong id="music-history-plays">0</strong><span>播放次数</span></div><div><strong id="music-history-days">0</strong><span>收听天数</span></div><div><strong id="music-history-average">0</strong><span>活跃日均 / 分钟</span></div></div>
+                    <small class="statistics-source-note">内存示例收听记录 · 刷新后重置</small>
+                  </div>
+                </section>
+                <section class="music-history-section" aria-labelledby="music-history-trend-heading">
+                  <div class="section-heading music-section-heading"><h3 id="music-history-trend-heading">播放趋势</h3><small>按收听时长</small></div>
+                  <div class="chart-head"><h4 id="music-history-trend-title">每周播放时长</h4><p class="chart-readout" id="music-history-trend-readout" aria-hidden="true"></p></div>
+                  <div class="statistics-chart music-history-chart" id="music-history-trend" role="slider" tabindex="0" aria-label="播放时长趋势，点按或左右方向键查看" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"></div>
+                  <div class="statistics-axis" id="music-history-axis" aria-hidden="true"></div>
+                  <p class="data-note" id="music-history-trend-note"></p>
+                </section>
+                <section class="music-history-section" aria-labelledby="music-history-ranking-heading">
+                  <div class="section-heading music-section-heading"><h3 id="music-history-ranking-heading">常听歌曲排行</h3><small id="music-history-caption" aria-live="polite">按播放次数 · 前 10 首</small></div>
+                  <div class="music-song-list music-ranking-list" id="music-history-list"></div>
+                  <div class="music-history-empty" id="music-history-empty" hidden><strong>这个周期还没有示例记录</strong><p>可切换日期，或回到当前周期看看。</p></div>
+                  <div class="music-ranking-actions"><button type="button" class="secondary-button" id="music-history-more" hidden>查看更多</button><button type="button" class="text-button" id="music-history-collapse" hidden>收起排行</button></div>
+                </section>
+                <footer class="stats-footer"><details class="statistics-method"><summary>统计口径</summary><p>每条示例记录代表一次开始播放，时长按记录秒数汇总。日趋势按小时、周与月趋势按自然日、年趋势按月展示；活跃日均只计算有收听的自然日。歌曲先按播放次数排名，次数相同时比较累计时长。</p></details></footer>
+              </section>
             </div>
           </section>
           <section class="page" id="page-usage" aria-labelledby="usage-heading" hidden>
@@ -323,9 +434,15 @@
             <p class="job-assist-privacy">Android 运行时显示悬浮按钮并保持亮屏；触碰、离开所选招聘 App 或熄屏会暂停，可从悬浮按钮继续或停止。职位、简历名称、规则和模拟记录仅保存在当前页面内存，刷新后清空。</p>
           </section>
         </div>
+        <div id="music-mini" class="music-mini" hidden>
+          <span class="music-mini-progress" aria-hidden="true"></span>
+          <span class="music-cover tone-one"><svg aria-hidden="true"><use href="#i-cover-wave"/></svg></span>
+          <span class="music-mini-copy"><strong id="music-mini-title">晴天</strong><small id="music-mini-artist">周杰伦</small></span>
+          <button type="button" id="music-mini-toggle" aria-label="暂停，界面演示"><svg class="icon"><use id="music-mini-toggle-icon" href="#i-pause"/></svg></button>
+        </div>
         <div id="task-undo" role="region" aria-label="操作撤销" hidden><span id="task-undo-message" role="status"></span><button id="undo-task" type="button">撤销</button><button id="dismiss-task-undo" type="button" aria-label="关闭提示">关闭提示</button></div>
         <div id="job-run-bar" data-state="running" hidden><button type="button" id="job-run-bar-open"><span class="job-run-dot" aria-hidden="true"></span><span id="job-run-bar-text"></span></button><button type="button" id="job-run-bar-pause">暂停</button></div>
-        <nav class="bottom-nav" aria-label="主导航"><button data-page="focus" class="active" aria-current="page"><span><svg class="icon"><use href="#i-focus"/></svg></span>专注</button><button data-page="tasks"><span><svg class="icon"><use href="#i-tasks"/></svg></span>待办</button><button data-page="diary"><span><svg class="icon"><use href="#i-diary"/></svg></span>日记</button><button data-page="usage"><span><svg class="icon"><use href="#i-chart"/></svg></span>用时</button><button data-page="profile"><span><svg class="icon"><use href="#i-user"/></svg></span>我的</button></nav>
+        <nav class="bottom-nav" aria-label="主导航"><button data-page="focus" class="active" aria-current="page"><span><svg class="icon"><use href="#i-focus"/></svg></span>专注</button><button data-page="tasks"><span><svg class="icon"><use href="#i-tasks"/></svg></span>待办</button><button data-page="diary"><span><svg class="icon"><use href="#i-diary"/></svg></span>日记</button><button data-page="music"><span><svg class="icon"><use href="#i-music"/></svg></span>音乐</button><button data-page="usage"><span><svg class="icon"><use href="#i-chart"/></svg></span>用时</button><button data-page="profile"><span><svg class="icon"><use href="#i-user"/></svg></span>我的</button></nav>
         <div class="home-indicator" aria-hidden="true"></div>
       </div>
       <p class="preview-footnote">可切换页面、添加待办和体验计时<br>刷新恢复示例 · 不执行脚本 · 不读取设备数据</p>

@@ -4,10 +4,11 @@
   const { LIMITS, CATEGORIES, USAGE, USAGE_PERIODS, sampleUsageSegments, focusSpans, usageDaySummary, usagePeriodSummary, initialTasks, integerInRange, validateTask, taskSummary, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv,
     initialFocusItems, validateFocusItem, focusHourDistribution, initialProgressEntries, validateProgress,
-    latestProjectProgress, allTimeFocusSummary, allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods } = FocusModel;
+    latestProjectProgress, allTimeFocusSummary, allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,
+    MUSIC_TRACKS, initialMusicListens, musicListeningSummary, musicListeningTrend, compareMusicListening } = FocusModel;
   const UI = Object.freeze({ tickMs: 250, toastMs: 3400, ringRadius: 118, tickRadius: 134, initialGoalMinutes: 240, gaugeTicks: 20, goalTicks: 40, minutesPerHour: 60, finishRevealMs: 900,
     recordPageSize: 20, exportReleaseMs: 60000, weekDays: 7, minYear: 1900, maxYear: 2100,
-    heatLevels: 4, chartAxisLabels: 5, fullCircle: 360, jsonIndent: 2, pickerYears: 12, jumpOffset: 12 });
+    heatLevels: 4, chartAxisLabels: 5, fullCircle: 360, jsonIndent: 2, pickerYears: 12, jumpOffset: 12, musicRankPageSize: 10 });
   const STAT_PERIOD_NAMES = {
     day: { current: "今天", previous: "昨天", other: "这一天", before: "前一天" },
     week: { current: "本周", previous: "上周", other: "这一周", before: "前一周" },
@@ -21,7 +22,15 @@
   const DURATION_PRESETS = [15, 25, 45, 60];
   const DURATION_STEP = 5;
   const MODAL_VARIANTS = ["todo-guide-sheet", "focus-item-sheet", "usage-zoom-sheet", "asset-sheet"];
-  const PAGES = ["focus", "timer", "statistics", "tasks", "diary", "usage", "profile", "job-assist"];
+  const PAGES = ["focus", "timer", "statistics", "tasks", "diary", "music", "usage", "profile", "job-assist"];
+  const MUSIC_TABS = ["recommend", "playlists", "songs", "history"];
+  const MUSIC_HISTORY_PERIODS = ["day", "week", "month", "year"];
+  const MUSIC_PERIOD_NAMES = {
+    day: { title: "单日回顾", current: "回到今天" },
+    week: { title: "每周回顾", current: "回到本周" },
+    month: { title: "每月回顾", current: "回到本月" },
+    year: { title: "年度回顾", current: "回到今年" },
+  };
   const DIARY_UI = Object.freeze({ visiblePhotos: 3, photoTones: 3, nameLength: 16, pickCounts: [1, 3] });
   const DIARY_VIEWS = ["home", "trash", "drafts", "detail", "editor"];
   const MIC = Object.freeze({ prompt: "prompt", granted: "granted", denied: "denied" });
@@ -40,6 +49,9 @@
     jobOpportunities: [], nextJobOpportunityId: 1,
     autoApply: { settings: FocusModel.defaultAutoApplySettings(), records: [], preview: [], log: [], stopReason: null, calibrated: { boss: false, zhaopin: false }, resumePreview: null, resumeCalibrated: false, tab: "contact", run: null, nextResumeId: 1, nextPresetId: 1, stageFilter: "all", reviewDays: 7 },
     reminders: false, nextTaskId: 1, nextRecordId: 1, nextStepId: 1,
+    musicTab: "recommend", musicPlaying: true, musicSearch: "", musicTrack: { title: "晴天", artist: "周杰伦", duration: "4:29" },
+    musicPlaylist: null, musicHistoryPeriod: "week", musicHistoryAnchor: new Date(), musicHistoryPickerOpen: false, musicHistoryPickerCursor: null,
+    musicListens: initialMusicListens(), musicRankLimit: UI.musicRankPageSize, musicTrendBins: [], musicTrendSelection: null,
     openProjects: new Set(), progressEntries: [], progressDrafts: new Map(), nextProgressId: 1,
     pendingProgressPrompts: [], progressDialogRecord: null, progressReturnHome: false,
     diaryEntries: FocusModel.initialDiaryEntries(), diaryMonth: localDateKey(new Date()).slice(0, 7), diarySearch: "",
@@ -153,6 +165,470 @@
     $("phone-content").scrollTop = safePage === "tasks" && state.filter === "done" ? taskHistoryView().scrollTop : 0;
     if (updateHash && location.hash !== `#${safePage}`) location.hash = safePage;
     renderJobEntry();
+    renderMusic();
+  }
+
+  function buildMusicSongRow(track, subtitle = track.artist) {
+    const button = element("button", "music-song-row");
+    button.type = "button";
+    button.dataset.musicTrack = track.title;
+    button.dataset.musicArtist = track.artist;
+    button.dataset.musicDuration = track.duration;
+    const cover = element("span", `music-cover ${track.tone}`);
+    cover.append(icon(track.art));
+    const copy = element("span", "music-song-copy");
+    copy.append(element("strong", "", track.title), element("small", "", subtitle));
+    button.append(cover, copy, element("span", "music-song-duration", track.duration));
+    button.addEventListener("click", () => selectMusicTrack(button));
+    return button;
+  }
+
+  function selectMusicTrack(button) {
+    state.musicTrack = { title: button.dataset.musicTrack, artist: button.dataset.musicArtist, duration: button.dataset.musicDuration };
+    state.musicPlaying = true;
+    renderMusic();
+    toast(`已切换到《${state.musicTrack.title}》，仅展示界面状态，没有播放音频。`);
+  }
+
+  function musicDurationText(seconds) {
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `${minutes} 分钟`;
+    const rest = minutes % 60;
+    return `${Math.floor(minutes / 60)} 小时${rest ? ` ${rest} 分` : ""}`;
+  }
+
+  function musicHistoryRangeLabel() {
+    const period = state.musicHistoryPeriod;
+    const { start, end } = periodRange(period, state.musicHistoryAnchor);
+    const year = start.getFullYear();
+    if (period === "day") return `${year}年${start.getMonth() + 1}月${start.getDate()}日`;
+    if (period === "month") return `${year}年${start.getMonth() + 1}月`;
+    if (period === "year") return `${year}年`;
+    const last = new Date(end);
+    last.setDate(last.getDate() - 1);
+    const startLabel = `${year}年${start.getMonth() + 1}月${start.getDate()}日`;
+    const endLabel = `${last.getFullYear() === year ? "" : `${last.getFullYear()}年`}${last.getMonth() + 1}月${last.getDate()}日`;
+    return `${startLabel}–${endLabel}`;
+  }
+
+  function isCurrentMusicHistoryPeriod(now = new Date()) {
+    return periodRange(state.musicHistoryPeriod, state.musicHistoryAnchor).start.getTime()
+      === periodRange(state.musicHistoryPeriod, now).start.getTime();
+  }
+
+  function resetMusicHistoryView() {
+    state.musicRankLimit = UI.musicRankPageSize;
+    state.musicTrendSelection = null;
+  }
+
+  function setMusicHistoryAnchor(date) {
+    if (!(date instanceof Date) || !Number.isFinite(date.getTime())) return;
+    const selectedStart = periodRange(state.musicHistoryPeriod, date).start;
+    if (selectedStart > periodRange(state.musicHistoryPeriod, new Date()).start) {
+      toast("不能查看未来周期，请选择今天或更早的日期。");
+      renderMusicHistory();
+      return;
+    }
+    state.musicHistoryAnchor = date;
+    state.musicHistoryPickerOpen = false;
+    resetMusicHistoryView();
+    renderMusicHistory();
+    $("music-history-anchor").focus({ preventScroll: true });
+  }
+
+  function musicHistoryDateFromInput(period, value) {
+    if (period === "year") {
+      if (!/^\d{4}$/.test(value)) return null;
+      const year = Number(value);
+      return year >= UI.minYear && year <= UI.maxYear ? new Date(year, 0, 1, 12) : null;
+    }
+    const match = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(value);
+    if (!match || Number(match[1]) < UI.minYear || Number(match[1]) > UI.maxYear) return null;
+    const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3] || 1), 12);
+    if (date.getFullYear() !== Number(match[1]) || date.getMonth() !== Number(match[2]) - 1
+      || (match[3] && date.getDate() !== Number(match[3]))) return null;
+    return date;
+  }
+
+  function buildMusicRankRow(track, index) {
+    const button = buildMusicSongRow(track);
+    button.classList.add("music-rank-row");
+    button.dataset.musicRank = String(index + 1);
+    const rank = element("span", "music-rank-number", String(index + 1));
+    if (index === 0) rank.classList.add("first");
+    const stats = element("span", "music-rank-stats");
+    stats.append(element("strong", "", `${track.plays} 次`), element("small", "", musicDurationText(track.seconds)));
+    button.querySelector(".music-song-duration").replaceWith(stats);
+    button.prepend(rank);
+    button.setAttribute("aria-label", `第 ${index + 1} 名，${track.title}，${track.artist}，播放 ${track.plays} 次，累计 ${musicDurationText(track.seconds)}`);
+    return button;
+  }
+
+  function renderMusicOverview(summary, currentPeriod) {
+    const period = state.musicHistoryPeriod;
+    const labels = currentPeriod
+      ? { day: "今天收听", week: "本周收听", month: "本月收听", year: "今年收听" }
+      : { day: "当日收听", week: "该周收听", month: "该月收听", year: "该年收听" };
+    $("music-history-total-label").textContent = labels[period];
+    $("music-history-minutes").textContent = String(Math.round(summary.seconds / 60));
+    $("music-history-plays").textContent = String(summary.plays);
+    $("music-history-days").textContent = String(summary.activeDays);
+    $("music-history-average").textContent = String(Math.round(summary.averageSeconds / 60));
+    const comparison = compareMusicListening(state.musicListens, period, state.musicHistoryAnchor);
+    const names = STAT_PERIOD_NAMES[period];
+    const name = currentPeriod ? names.previous : names.before;
+    const compare = $("music-history-compare");
+    compare.hidden = !comparison.current && !comparison.previous;
+    compare.textContent = !comparison.previous ? `${name}没有记录`
+      : comparison.difference === 0 ? `与${name}持平`
+        : `比${name}${comparison.difference > 0 ? "多" : "少"} ${musicDurationText(Math.abs(comparison.difference))}`;
+    compare.dataset.trend = !comparison.previous || comparison.difference === 0 ? "flat" : comparison.difference > 0 ? "up" : "down";
+  }
+
+  function musicTrendBinLabel(bin, index) {
+    const period = state.musicHistoryPeriod;
+    if (period === "day") return hourLabel(index);
+    if (period === "year") return `${Number(bin.label)}月`;
+    if (period === "month") return `${Number(bin.label)}日`;
+    const [, month, day] = bin.key.split("-").map(Number);
+    return `${month}月${day}日`;
+  }
+
+  function renderMusicTrendSelection() {
+    const bins = state.musicTrendBins;
+    const chart = $("music-history-trend");
+    const selected = state.musicTrendSelection;
+    const peak = Math.max(0, ...bins.map(bin => bin.seconds));
+    const index = selected ?? (peak ? bins.findIndex(bin => bin.seconds === peak) : null);
+    const bin = bins[index];
+    const label = bin ? musicTrendBinLabel(bin, index) : "";
+    const text = !bin ? "这个周期还没有播放记录"
+      : `${selected === null ? "最多 " : ""}${label} · ${musicDurationText(bin.seconds)}`;
+    $("music-history-trend-readout").textContent = text;
+    chart.classList.toggle("has-selection", selected !== null);
+    chart.querySelectorAll(".trend-bar").forEach((bar, barIndex) => bar.classList.toggle("selected", barIndex === selected));
+    chart.setAttribute("aria-valuemax", String(Math.max(0, bins.length - 1)));
+    chart.setAttribute("aria-valuenow", String(index ?? 0));
+    chart.setAttribute("aria-valuetext", text);
+  }
+
+  function bindMusicTrendChart() {
+    const chart = $("music-history-trend");
+    const count = () => state.musicTrendBins.length;
+    const pick = event => {
+      const box = chart.getBoundingClientRect();
+      if (!box.width || !count()) return null;
+      const ratio = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
+      return Math.min(count() - 1, Math.floor(ratio * count()));
+    };
+    const choose = index => {
+      if (index === null || index < 0) return;
+      state.musicTrendSelection = index;
+      renderMusicTrendSelection();
+    };
+    chart.addEventListener("pointerdown", event => {
+      if (!count()) return;
+      chart.setPointerCapture(event.pointerId);
+      choose(pick(event));
+    });
+    chart.addEventListener("pointermove", event => {
+      if (chart.hasPointerCapture(event.pointerId) || event.pointerType === "mouse") choose(pick(event));
+    });
+    chart.addEventListener("keydown", event => {
+      const total = count();
+      if (!total) return;
+      const peak = Math.max(0, ...state.musicTrendBins.map(bin => bin.seconds));
+      const current = state.musicTrendSelection ?? (peak ? state.musicTrendBins.findIndex(bin => bin.seconds === peak) : 0);
+      const next = { ArrowLeft: current - 1, ArrowDown: current - 1, ArrowRight: current + 1, ArrowUp: current + 1, Home: 0, End: total - 1 }[event.key];
+      if (next === undefined) return;
+      event.preventDefault();
+      choose(Math.max(0, Math.min(total - 1, next)));
+    });
+  }
+
+  function renderMusicTrend() {
+    const trend = musicListeningTrend(state.musicListens, state.musicHistoryPeriod, state.musicHistoryAnchor);
+    state.musicTrendBins = trend;
+    const peak = Math.max(0, ...trend.map(bin => bin.seconds));
+    const total = trend.reduce((sum, bin) => sum + bin.seconds, 0);
+    const chart = $("music-history-trend");
+    chart.classList.toggle("hour-distribution", trend.length > UI.weekDays);
+    chart.dataset.peak = peak ? musicDurationText(peak) : "";
+    chart.replaceChildren(...trend.map(bin => {
+      const column = element("div", "trend-column");
+      const bar = element("div", `trend-bar${bin.seconds === 0 ? " empty" : bin.seconds === peak ? " peak" : ""}`);
+      bar.style.height = `${peak ? bin.seconds / peak * 100 : 0}%`;
+      column.append(bar);
+      return column;
+    }));
+    const labels = trend.length <= UI.weekDays ? trend : Array.from({ length: UI.chartAxisLabels }, (_, index) => trend[Math.round(index * (trend.length - 1) / (UI.chartAxisLabels - 1))]);
+    $("music-history-axis").replaceChildren(...labels.map(bin => element("span", "", bin.label)));
+    $("music-history-trend-title").textContent = { day: "逐小时播放时长", week: "每日播放时长", month: "每日播放时长", year: "每月播放时长" }[state.musicHistoryPeriod];
+    $("music-history-trend-note").textContent = total ? "按开始播放时刻汇总；点按、滑动或用方向键查看。" : "这个周期还没有示例播放记录。";
+    renderMusicTrendSelection();
+  }
+
+  function renderMusicRanking(summary) {
+    const total = summary.ranking.length;
+    const count = Math.min(state.musicRankLimit, total);
+    $("music-history-caption").textContent = total ? `按播放次数 · 已显示 ${count} / ${total} 首` : "按播放次数 · 所选周期";
+    $("music-history-list").replaceChildren(...summary.ranking.slice(0, count).map(buildMusicRankRow));
+    $("music-history-empty").hidden = total > 0;
+    $("music-history-more").hidden = !total || count >= total;
+    $("music-history-more").textContent = `查看更多（还有 ${total - count} 首）`;
+    $("music-history-collapse").hidden = count <= UI.musicRankPageSize;
+    $("music-history-more").parentElement.hidden = $("music-history-more").hidden && $("music-history-collapse").hidden;
+  }
+
+  function dailyMusicSeconds() {
+    const days = new Map();
+    for (const record of state.musicListens) {
+      const playedAt = new Date(record.playedAt);
+      const track = MUSIC_TRACKS.find(item => item.id === record.trackId);
+      if (!Number.isFinite(playedAt.getTime()) || !track) continue;
+      const seconds = Number.isFinite(record.seconds) && record.seconds >= 0 ? record.seconds : track.seconds;
+      const key = localDateKey(playedAt);
+      days.set(key, (days.get(key) || 0) + seconds);
+    }
+    return days;
+  }
+
+  function toggleMusicHistoryPicker(open = !state.musicHistoryPickerOpen) {
+    state.musicHistoryPickerOpen = open;
+    if (open) {
+      const anchor = state.musicHistoryAnchor;
+      const lastYear = Math.max(anchor.getFullYear(), Math.min(new Date().getFullYear(), anchor.getFullYear() + UI.pickerYears - 1));
+      state.musicHistoryPickerCursor = state.musicHistoryPeriod === "month" ? new Date(anchor.getFullYear(), 0, 1)
+        : state.musicHistoryPeriod === "year" ? new Date(Math.min(UI.maxYear, lastYear), 0, 1)
+          : new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+    }
+    renderMusicHistory();
+    if (open) $("music-history-picker-grid").querySelector('[aria-pressed="true"], button')?.focus({ preventScroll: true });
+  }
+
+  function renderMusicHistoryPicker() {
+    const period = state.musicHistoryPeriod;
+    const cursor = state.musicHistoryPickerCursor;
+    const days = dailyMusicSeconds();
+    const head = element("div", "picker-head");
+    const step = period === "year" ? UI.pickerYears : 1;
+    const shift = direction => {
+      const next = new Date(cursor);
+      if (period === "day" || period === "week") next.setMonth(next.getMonth() + direction);
+      else next.setFullYear(next.getFullYear() + direction * step);
+      if (next.getFullYear() < UI.minYear || next.getFullYear() > UI.maxYear) return toast("日期范围为 1900–2100 年。");
+      state.musicHistoryPickerCursor = next;
+      renderMusicHistoryPicker();
+    };
+    const previous = element("button", "icon-button back-button");
+    previous.type = "button";
+    previous.setAttribute("aria-label", period === "year" ? "更早的年份" : period === "month" ? "上一年" : "上一月");
+    previous.append(icon("arrow"));
+    previous.addEventListener("click", () => shift(-1));
+    const next = element("button", "icon-button");
+    next.type = "button";
+    next.setAttribute("aria-label", period === "year" ? "更晚的年份" : period === "month" ? "下一年" : "下一月");
+    next.append(icon("arrow"));
+    next.addEventListener("click", () => shift(1));
+    const firstYear = cursor.getFullYear() - UI.pickerYears + 1;
+    head.append(previous, element("strong", "", period === "year" ? `${Math.max(UI.minYear, firstYear)}–${cursor.getFullYear()} 年`
+      : period === "month" ? `${cursor.getFullYear()} 年` : `${cursor.getFullYear()} 年 ${cursor.getMonth() + 1} 月`), next);
+    const body = element("div", `picker-body picker-body--${period}`);
+    const isFuture = date => periodRange(period, date).start > periodRange(period, new Date()).start;
+    if (period === "day" || period === "week") {
+      const weekdays = element("div", "calendar-weekdays");
+      weekdays.setAttribute("aria-hidden", "true");
+      weekdays.append(...["一", "二", "三", "四", "五", "六", "日"].map(name => element("span", "", name)));
+      const first = periodRange("week", cursor).start;
+      const monthEnd = periodRange("month", cursor).end;
+      const weeks = [];
+      for (const date = new Date(first); date < monthEnd; date.setDate(date.getDate() + UI.weekDays)) weeks.push(new Date(date));
+      const cells = weeks.flatMap(week => Array.from({ length: UI.weekDays }, (_, offset) => new Date(week.getFullYear(), week.getMonth(), week.getDate() + offset)));
+      const peak = Math.max(0, ...cells.map(date => days.get(localDateKey(date)) || 0));
+      const cell = (date, tag) => {
+        const key = localDateKey(date);
+        const seconds = days.get(key) || 0;
+        const node = tag === "button"
+          ? pickerButton("picker-day", `${key}，收听 ${musicDurationText(seconds)}`, key === localDateKey(state.musicHistoryAnchor), () => setMusicHistoryAnchor(date))
+          : element("span", "picker-day");
+        node.append(document.createTextNode(String(date.getDate())));
+        node.dataset.date = key;
+        node.dataset.level = heatLevel(seconds, peak);
+        node.classList.toggle("outside", date.getMonth() !== cursor.getMonth());
+        node.classList.toggle("today", key === localDateKey(new Date()));
+        if (tag === "button") node.disabled = isFuture(date);
+        return node;
+      };
+      body.append(weekdays);
+      if (period === "day") {
+        const grid = element("div", "picker-grid");
+        grid.append(...cells.map(date => cell(date, "button")));
+        body.append(grid);
+      } else {
+        const selectedWeek = localDateKey(periodRange("week", state.musicHistoryAnchor).start);
+        body.append(...weeks.map(week => {
+          const end = new Date(week.getFullYear(), week.getMonth(), week.getDate() + UI.weekDays - 1);
+          const seconds = Array.from({ length: UI.weekDays }, (_, offset) => days.get(localDateKey(new Date(week.getFullYear(), week.getMonth(), week.getDate() + offset))) || 0).reduce((sum, value) => sum + value, 0);
+          const row = pickerButton("picker-week", `${localDateKey(week)} 至 ${localDateKey(end)}，收听 ${musicDurationText(seconds)}`, localDateKey(week) === selectedWeek, () => setMusicHistoryAnchor(week));
+          row.dataset.weekStart = localDateKey(week);
+          row.disabled = isFuture(week);
+          row.append(...Array.from({ length: UI.weekDays }, (_, offset) => cell(new Date(week.getFullYear(), week.getMonth(), week.getDate() + offset), "span")));
+          return row;
+        }));
+      }
+      const legend = element("div", "heat-legend");
+      const scale = element("span", "heat-scale");
+      scale.append(element("span", "", "少"));
+      for (let level = 0; level <= UI.heatLevels; level += 1) scale.append(element("i"));
+      [...scale.querySelectorAll("i")].forEach((mark, level) => { mark.dataset.level = String(level); });
+      scale.append(element("span", "", "多"));
+      legend.append(element("span", "", "颜色表示收听时长"), scale);
+      body.append(legend);
+    } else if (period === "month") {
+      const totals = Array.from({ length: 12 }, (_, month) => [...days].filter(([key]) => key.startsWith(`${cursor.getFullYear()}-${String(month + 1).padStart(2, "0")}`)).reduce((sum, [, value]) => sum + value, 0));
+      const peak = Math.max(0, ...totals);
+      body.append(...totals.map((seconds, month) => {
+        const date = new Date(cursor.getFullYear(), month, 1);
+        const button = pickerButton("picker-month", `${cursor.getFullYear()} 年 ${month + 1} 月，收听 ${musicDurationText(seconds)}`, localDateKey(date) === localDateKey(periodRange("month", state.musicHistoryAnchor).start), () => setMusicHistoryAnchor(date));
+        button.dataset.month = localDateKey(date).slice(0, 7);
+        button.dataset.level = heatLevel(seconds, peak);
+        button.disabled = isFuture(date);
+        button.append(element("strong", "", `${month + 1}月`), element("small", "", seconds ? musicDurationText(seconds) : "—"));
+        return button;
+      }));
+    } else {
+      const years = Array.from({ length: UI.pickerYears }, (_, index) => firstYear + index).filter(year => year >= UI.minYear && year <= UI.maxYear);
+      const totals = years.map(year => [...days].filter(([key]) => key.startsWith(`${year}-`)).reduce((sum, [, value]) => sum + value, 0));
+      const peak = Math.max(0, ...totals);
+      body.append(...years.map((year, index) => {
+        const date = new Date(year, 0, 1);
+        const button = pickerButton("picker-month", `${year} 年，收听 ${musicDurationText(totals[index])}`, year === state.musicHistoryAnchor.getFullYear(), () => setMusicHistoryAnchor(date));
+        button.dataset.year = String(year);
+        button.dataset.level = heatLevel(totals[index], peak);
+        button.disabled = isFuture(date);
+        button.append(element("strong", "", String(year)), element("small", "", totals[index] ? musicDurationText(totals[index]) : "—"));
+        return button;
+      }));
+    }
+    $("music-history-picker-grid").replaceChildren(head, body);
+  }
+
+  function renderMusicHistory() {
+    const period = state.musicHistoryPeriod;
+    const now = new Date();
+    const current = isCurrentMusicHistoryPeriod(now);
+    const summary = musicListeningSummary(state.musicListens, period, state.musicHistoryAnchor);
+    document.querySelectorAll("[data-music-history-period]").forEach(button => {
+      const selected = button.dataset.musicHistoryPeriod === period;
+      button.classList.toggle("selected", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+    $("music-history-title").textContent = MUSIC_PERIOD_NAMES[period].title;
+    $("music-history-range-label").textContent = musicHistoryRangeLabel();
+    $("music-history-anchor").setAttribute("aria-label", `选择回顾日期，当前 ${musicHistoryRangeLabel()}`);
+    $("music-history-anchor").setAttribute("aria-expanded", String(state.musicHistoryPickerOpen));
+    $("music-history-picker").hidden = !state.musicHistoryPickerOpen;
+    $("music-history-next").disabled = current;
+    $("music-history-today").hidden = current;
+    $("music-history-today").textContent = MUSIC_PERIOD_NAMES[period].current;
+    $("music-history-date-jump").value = localDateKey(state.musicHistoryAnchor);
+    $("music-history-date-jump").max = localDateKey(now);
+    if (state.musicHistoryPickerOpen) renderMusicHistoryPicker();
+    renderMusicOverview(summary, current);
+    renderMusicTrend();
+    renderMusicRanking(summary);
+  }
+
+  function renderMusicPlaylist() {
+    if (!state.musicPlaylist) return;
+    const { name, count, offset } = state.musicPlaylist;
+    const firstTrack = MUSIC_TRACKS[offset % MUSIC_TRACKS.length];
+    $("music-playlist-title").textContent = name;
+    $("music-playlist-count").textContent = `${count} 首 · 示例歌单`;
+    $("music-detail-cover").className = `music-cover ${firstTrack.tone}`;
+    $("music-detail-cover").querySelector("use").setAttribute("href", `#i-${firstTrack.art}`);
+    const tracks = Array.from({ length: 4 }, (_, index) => MUSIC_TRACKS[(offset + index) % MUSIC_TRACKS.length]);
+    $("music-playlist-track-list").replaceChildren(...tracks.map(track => buildMusicSongRow(track)));
+  }
+
+  function openMusicPlaylist(button) {
+    state.musicPlaylist = { name: button.dataset.musicPlaylist, count: Number(button.dataset.musicCount), offset: Number(button.dataset.musicOffset) };
+    renderMusic();
+    $("phone-content").scrollTop = 0;
+    $("music-playlist-back").focus({ preventScroll: true });
+  }
+
+  function closeMusicPlaylist() {
+    state.musicPlaylist = null;
+    renderMusic();
+    $("phone-content").scrollTop = 0;
+    $(`music-tab-${state.musicTab}`).focus({ preventScroll: true });
+  }
+
+  function renderMusic() {
+    const detailOpen = Boolean(state.musicPlaylist);
+    $("music-mini").hidden = $("page-music").hidden;
+    $("music-mini").dataset.playing = String(state.musicPlaying);
+    $("music-main-header").hidden = detailOpen;
+    $("music-main-header").classList.toggle("history-mode", state.musicTab === "history");
+    $("music-tab-content").hidden = detailOpen;
+    $("music-playlist-detail").hidden = !detailOpen;
+    if (detailOpen) renderMusicPlaylist();
+    renderMusicHistory();
+    document.querySelectorAll("[data-music-tab]").forEach(tab => {
+      const selected = tab.dataset.musicTab === state.musicTab;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    });
+    document.querySelectorAll("[data-music-panel]").forEach(panel => { panel.hidden = panel.dataset.musicPanel !== state.musicTab; });
+    const action = state.musicPlaying ? "暂停" : "播放";
+    const iconHref = state.musicPlaying ? "#i-pause" : "#i-play";
+    ["music-main-toggle", "music-mini-toggle"].forEach(id => $(id).setAttribute("aria-label", `${action}，界面演示`));
+    $("music-main-toggle-icon").setAttribute("href", iconHref);
+    $("music-mini-toggle-icon").setAttribute("href", iconHref);
+    $("music-playing-label").textContent = state.musicPlaying ? "正在播放" : "已暂停";
+    $("music-track-title").textContent = state.musicTrack.title;
+    $("music-track-artist").textContent = `${state.musicTrack.artist} · ${state.musicTrack.duration}`;
+    $("music-mini-title").textContent = state.musicTrack.title;
+    $("music-mini-artist").textContent = state.musicTrack.artist;
+    document.querySelectorAll("[data-music-track]").forEach(button => {
+      button.classList.toggle("current", button.dataset.musicTrack === state.musicTrack.title && button.dataset.musicArtist === state.musicTrack.artist);
+    });
+  }
+
+  function chooseMusicTab(tab, focus = false) {
+    if (!MUSIC_TABS.includes(tab)) return;
+    state.musicPlaylist = null;
+    state.musicTab = tab;
+    renderMusic();
+    if (focus) $(`music-tab-${tab}`).focus({ preventScroll: true });
+  }
+
+  function renderMusicLibrary() {
+    $("music-song-list").replaceChildren(...MUSIC_TRACKS.map(track => buildMusicSongRow(track)));
+    filterMusicSongs();
+  }
+
+  function filterMusicSongs() {
+    const query = state.musicSearch.trim().toLocaleLowerCase();
+    let count = 0;
+    $("music-song-list").querySelectorAll("[data-music-track]").forEach(button => {
+      const matches = !query || `${button.dataset.musicTrack} ${button.dataset.musicArtist}`.toLocaleLowerCase().includes(query);
+      button.hidden = !matches;
+      if (matches) count += 1;
+    });
+    $("music-song-count").textContent = query ? `${count} 首匹配` : `${MUSIC_TRACKS.length} 首 · 示例`;
+    $("music-search-empty").hidden = count > 0;
+  }
+
+  function toggleMusicPlayback() {
+    state.musicPlaying = !state.musicPlaying;
+    renderMusic();
+    toast(state.musicPlaying ? "已切换为播放状态，仅作界面演示，没有播放音频。" : "已暂停界面演示。");
+  }
+
+  function musicUiOnly(label) {
+    toast(`${label}将在网页 UI 确认后接入，本轮仅展示界面。`);
   }
 
   function currentFocusItem() {
@@ -4471,6 +4947,88 @@
     if (button.dataset.page === "diary" && !$("page-diary").hidden) reselectDiaryTab();
     else navigate(button.dataset.page);
   }));
+  document.querySelectorAll("[data-music-tab]").forEach(tab => {
+    tab.addEventListener("click", () => chooseMusicTab(tab.dataset.musicTab));
+    tab.addEventListener("keydown", event => {
+      const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+      if (!step) return;
+      event.preventDefault();
+      const index = MUSIC_TABS.indexOf(tab.dataset.musicTab);
+      chooseMusicTab(MUSIC_TABS[(index + step + MUSIC_TABS.length) % MUSIC_TABS.length], true);
+    });
+  });
+  document.querySelectorAll("[data-music-open]").forEach(button => button.addEventListener("click", () => chooseMusicTab(button.dataset.musicOpen)));
+  document.querySelectorAll("[data-music-playlist]").forEach(button => button.addEventListener("click", () => openMusicPlaylist(button)));
+  document.querySelectorAll("[data-music-history-period]").forEach(button => button.addEventListener("click", () => {
+    if (!MUSIC_HISTORY_PERIODS.includes(button.dataset.musicHistoryPeriod)) return;
+    state.musicHistoryPeriod = button.dataset.musicHistoryPeriod;
+    state.musicHistoryPickerOpen = false;
+    resetMusicHistoryView();
+    renderMusicHistory();
+  }));
+  $("music-history-prev").addEventListener("click", () => {
+    state.musicHistoryAnchor = shiftPeriodAnchor(state.musicHistoryPeriod, state.musicHistoryAnchor, -1);
+    state.musicHistoryPickerOpen = false;
+    resetMusicHistoryView();
+    renderMusicHistory();
+  });
+  $("music-history-next").addEventListener("click", () => {
+    if (isCurrentMusicHistoryPeriod()) return;
+    state.musicHistoryAnchor = shiftPeriodAnchor(state.musicHistoryPeriod, state.musicHistoryAnchor, 1);
+    state.musicHistoryPickerOpen = false;
+    resetMusicHistoryView();
+    renderMusicHistory();
+  });
+  $("music-history-today").addEventListener("click", () => setMusicHistoryAnchor(new Date()));
+  $("music-history-anchor").addEventListener("click", () => toggleMusicHistoryPicker());
+  $("music-history-date-jump").addEventListener("change", event => {
+    if (!event.target.value) return;
+    const date = musicHistoryDateFromInput("day", event.target.value);
+    if (!date) {
+      toast("请输入有效日期。");
+      renderMusicHistory();
+      return;
+    }
+    setMusicHistoryAnchor(date);
+  });
+  $("music-history-picker").addEventListener("keydown", event => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    toggleMusicHistoryPicker(false);
+    $("music-history-anchor").focus({ preventScroll: true });
+  });
+  bindMusicTrendChart();
+  $("music-history-more").addEventListener("click", () => {
+    state.musicRankLimit += UI.musicRankPageSize;
+    renderMusicHistory();
+    if ($("music-history-more").hidden) $("music-history-collapse").focus({ preventScroll: true });
+  });
+  $("music-history-collapse").addEventListener("click", () => {
+    state.musicRankLimit = UI.musicRankPageSize;
+    renderMusicHistory();
+    $("music-history-more").focus({ preventScroll: true });
+  });
+  document.querySelectorAll("[data-music-track]").forEach(button => button.addEventListener("click", () => selectMusicTrack(button)));
+  $("music-playlist-back").addEventListener("click", closeMusicPlaylist);
+  $("music-play-all").addEventListener("click", () => musicUiOnly("播放全部"));
+  $("music-search").addEventListener("input", event => {
+    state.musicSearch = event.target.value;
+    if (state.musicSearch.trim()) state.musicTab = "songs";
+    filterMusicSongs();
+    renderMusic();
+  });
+  $("music-history").addEventListener("click", () => {
+    chooseMusicTab("history");
+    $("phone-content").scrollTop = 0;
+    toast("已打开收听回顾，可切换日、周、月、年。");
+  });
+  $("music-main-toggle").addEventListener("click", toggleMusicPlayback);
+  $("music-mini-toggle").addEventListener("click", toggleMusicPlayback);
+  $("music-previous").addEventListener("click", () => musicUiOnly("上一首"));
+  $("music-next").addEventListener("click", () => musicUiOnly("下一首"));
+  $("music-add").addEventListener("click", () => musicUiOnly("添加歌曲"));
+  $("music-new-playlist").addEventListener("click", () => musicUiOnly("新建歌单"));
+  $("music-more").addEventListener("click", () => musicUiOnly("歌曲更多操作"));
   window.addEventListener("hashchange", () => navigate(location.hash.slice(1), false));
   document.querySelectorAll("[data-mode]").forEach(button => button.addEventListener("click", () => {
     if (button.dataset.mode === timer.mode) return;
@@ -4787,6 +5345,7 @@
     $("toast").classList.remove("visible");
     $("toast").textContent = "";
   });
+  renderMusicLibrary();
   renderTasks();
   renderUsage();
   renderProfile();

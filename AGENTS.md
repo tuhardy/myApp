@@ -19,6 +19,7 @@
 | 专注首页、计时页、项目编辑、专注记录与进度 | `rules/focus.md` |
 | 待办（发酵、小步、已完成、搜索、编辑面板、左滑删除） | `rules/todo.md` |
 | 专注统计页与导出 | `rules/statistics.md` |
+| 声音馆 / 音乐（浏览器 + Android） | `rules/music.md` |
 | 用时页（浏览器 + Android） | `rules/usage.md` |
 | 日记（浏览器 + Android） | `rules/diary.md` |
 | 我的页面（资产快照、心愿、生活概览） | `rules/profile.md` |

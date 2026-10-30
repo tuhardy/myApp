@@ -1591,6 +1591,127 @@
     return { preview, records: added, stopReason: stopReason ?? (dryRun ? `发简历试运行完成：识别 ${conversations.length} 个会话，其中 ${sending} 个会发简历；未点击任何按钮` : "没有更多待发简历的新回复，已停止") };
   }
 
+  const MUSIC_TRACKS = Object.freeze([
+    { id: "sunny", title: "晴天", artist: "周杰伦", duration: "4:29", seconds: 269, tone: "tone-one", art: "cover-wave" },
+    { id: "if", title: "如果可以", artist: "韦礼安", duration: "4:34", seconds: 274, tone: "tone-two", art: "cover-bars" },
+    { id: "lucky", title: "小幸运", artist: "田馥甄", duration: "4:26", seconds: 266, tone: "tone-three", art: "cover-lines" },
+    { id: "balloon", title: "告白气球", artist: "周杰伦", duration: "3:35", seconds: 215, tone: "tone-four", art: "cover-wave" },
+    { id: "special", title: "特别的人", artist: "方大同", duration: "4:19", seconds: 259, tone: "tone-five", art: "cover-bars" },
+    { id: "letting-go", title: "Letting Go", artist: "蔡健雅", duration: "4:23", seconds: 263, tone: "tone-six", art: "cover-lines" },
+    { id: "wind", title: "起风了", artist: "买辣椒也用券", duration: "5:25", seconds: 325, tone: "tone-one", art: "cover-bars" },
+    { id: "actor", title: "演员", artist: "薛之谦", duration: "4:21", seconds: 261, tone: "tone-two", art: "cover-lines" },
+    { id: "ordinary-road", title: "平凡之路", artist: "朴树", duration: "5:02", seconds: 302, tone: "tone-three", art: "cover-wave" },
+    { id: "later", title: "后来", artist: "刘若英", duration: "5:41", seconds: 341, tone: "tone-four", art: "cover-bars" },
+    { id: "light-years", title: "光年之外", artist: "G.E.M.邓紫棋", duration: "3:55", seconds: 235, tone: "tone-five", art: "cover-lines" },
+    { id: "mercury", title: "水星记", artist: "郭顶", duration: "5:25", seconds: 325, tone: "tone-six", art: "cover-wave" },
+    { id: "young", title: "年少有为", artist: "李荣浩", duration: "4:39", seconds: 279, tone: "tone-one", art: "cover-lines" },
+    { id: "boundless", title: "海阔天空", artist: "Beyond", duration: "5:24", seconds: 324, tone: "tone-two", art: "cover-wave" },
+    { id: "red-heels", title: "红色高跟鞋", artist: "蔡健雅", duration: "3:26", seconds: 206, tone: "tone-three", art: "cover-bars" },
+    { id: "so-many", title: "这世界那么多人", artist: "莫文蔚", duration: "4:45", seconds: 285, tone: "tone-four", art: "cover-lines" },
+    { id: "rice", title: "稻香", artist: "周杰伦", duration: "3:43", seconds: 223, tone: "tone-five", art: "cover-wave" },
+    { id: "last-page", title: "最后一页", artist: "江语晨", duration: "4:05", seconds: 245, tone: "tone-six", art: "cover-bars" },
+    { id: "annual-ring", title: "年轮", artist: "张碧晨", duration: "4:33", seconds: 273, tone: "tone-one", art: "cover-wave" },
+    { id: "suspended", title: "悬溺", artist: "葛东琪", duration: "3:18", seconds: 198, tone: "tone-two", art: "cover-lines" },
+    { id: "plum", title: "乌梅子酱", artist: "李荣浩", duration: "4:14", seconds: 254, tone: "tone-three", art: "cover-bars" },
+    { id: "missed-lover", title: "爱人错过", artist: "告五人", duration: "4:52", seconds: 292, tone: "tone-four", art: "cover-wave" },
+    { id: "lonely-warrior", title: "孤勇者", artist: "陈奕迅", duration: "4:16", seconds: 256, tone: "tone-five", art: "cover-lines" },
+    { id: "like-fish", title: "像鱼", artist: "王贰浪", duration: "4:45", seconds: 285, tone: "tone-six", art: "cover-bars" },
+  ].map(track => Object.freeze(track)));
+
+  /** 流行歌示例收听事件：汇总与排行按 playedAt 过滤，不把示例描述为本机记录。 */
+  function initialMusicListens(now = new Date()) {
+    requireDate(now);
+    const groups = [
+      [0, [0, 0, 1, 2, 0, 6, 7, 8, 9, 10]], [1, [4, 1, 0, 11, 12, 13, 14, 15]],
+      [2, [3, 2, 1, 16, 17, 18, 19]], [4, [0, 5, 0, 20, 21, 22, 23]],
+      [8, [2, 3, 6, 9, 12, 15, 18, 21]], [16, [1, 4, 7, 10, 13, 16, 19, 22]],
+      [32, [5, 8, 11, 14, 17, 20, 23]], [65, [0, 3, 4, 6, 9, 12]],
+      [120, [1, 2, 5, 7, 10, 13]], [240, [4, 0, 14, 17, 20, 23]], [370, [5, 3, 8, 11]],
+    ];
+    return groups.flatMap(([ago, trackIndexes], groupIndex) => trackIndexes.map((trackIndex, index) => {
+      const track = MUSIC_TRACKS[trackIndex];
+      const playedAt = new Date(now);
+      if (ago === 0) {
+        const dayStart = periodRange("day", now).start;
+        const interval = Math.min(37 * 60000, Math.max(0, Math.floor((now - dayStart) / (trackIndexes.length + 1))));
+        playedAt.setTime(now.getTime() - (trackIndexes.length - index) * interval);
+      } else {
+        playedAt.setDate(now.getDate() - ago);
+        playedAt.setHours(20 + index % 3, (groupIndex * 7 + index * 11) % 60, 0, 0);
+      }
+      return { id: `music-sample-${ago}-${index}`, trackId: track.id, playedAt: playedAt.toISOString(), seconds: track.seconds };
+    }));
+  }
+
+  function musicListenInRange(record, start, end) {
+    const playedAt = new Date(record?.playedAt);
+    if (!Number.isFinite(playedAt.getTime()) || playedAt < start || playedAt >= end) return null;
+    const track = MUSIC_TRACKS.find(item => item.id === record.trackId);
+    if (!track) return null;
+    const seconds = Number.isFinite(record.seconds) && record.seconds >= 0 ? record.seconds : track.seconds;
+    return { playedAt, track, seconds };
+  }
+
+  /** 按周期聚合歌曲；名次先看播放次数，再看累计秒数，日均只计有收听的自然日。 */
+  function musicListeningSummary(records, period, anchor) {
+    const { start, end } = periodRange(period, anchor);
+    const byTrack = new Map();
+    const days = new Set();
+    let plays = 0;
+    let seconds = 0;
+    for (const record of Array.isArray(records) ? records : []) {
+      const listen = musicListenInRange(record, start, end);
+      if (!listen) continue;
+      const { playedAt, track, seconds: listenedSeconds } = listen;
+      const current = byTrack.get(track.id) ?? { ...track, plays: 0, seconds: 0, lastPlayedAt: record.playedAt };
+      current.plays += 1;
+      current.seconds += listenedSeconds;
+      if (playedAt > new Date(current.lastPlayedAt)) current.lastPlayedAt = record.playedAt;
+      byTrack.set(track.id, current);
+      days.add(localDateKey(playedAt));
+      plays += 1;
+      seconds += listenedSeconds;
+    }
+    const ranking = [...byTrack.values()].sort((left, right) => right.plays - left.plays || right.seconds - left.seconds
+      || left.title.localeCompare(right.title, "zh-CN") || left.artist.localeCompare(right.artist, "zh-CN"));
+    return { plays, seconds, activeDays: days.size, averageSeconds: days.size ? Math.round(seconds / days.size) : 0, ranking };
+  }
+
+  /** 日按小时、周与月按自然日、年按月补零；每条记录归入开始播放的时间桶。 */
+  function musicListeningTrend(records, period, anchor) {
+    const { start, end } = periodRange(period, anchor);
+    const bins = [];
+    if (period === "day") {
+      for (let hour = 0; hour < HOURS_PER_DAY; hour += 1) {
+        const key = padDatePart(hour);
+        bins.push({ key, label: `${key}:00`, seconds: 0 });
+      }
+    } else if (period === "year") {
+      for (let month = 0; month < MONTHS_PER_YEAR; month += 1) {
+        const date = new Date(start);
+        date.setMonth(month);
+        bins.push({ key: trendKey(date, period), label: padDatePart(month + 1), seconds: 0 });
+      }
+    } else {
+      for (const date = new Date(start); date < end; date.setDate(date.getDate() + 1)) {
+        const key = localDateKey(date);
+        bins.push({ key, label: period === "week" ? key.slice(5) : padDatePart(date.getDate()), seconds: 0 });
+      }
+    }
+    const byKey = new Map(bins.map(bin => [bin.key, bin]));
+    for (const record of Array.isArray(records) ? records : []) {
+      const listen = musicListenInRange(record, start, end);
+      if (listen) byKey.get(trendKey(listen.playedAt, period)).seconds += listen.seconds;
+    }
+    return bins;
+  }
+
+  function compareMusicListening(records, period, anchor) {
+    const current = musicListeningSummary(records, period, anchor).seconds;
+    const previous = musicListeningSummary(records, period, shiftPeriodAnchor(period, anchor, -1)).seconds;
+    return { current, previous, difference: current - previous };
+  }
+
   /** 「我的」入口卡与全局状态条共用：task 为 null / "contact" / "resume"，只汇总已有计数，不新增口径。contacted 是所选平台的今日联系数。 */
   function autoApplyEntry({ task = null, paused = false, stopReason = null, contacted = 0, resumes = 0, awaiting = 0, limit, platform = "boss" }) {
     const state = task ? (paused ? "paused" : "running") : stopReason ? "stopped" : "idle";
@@ -1641,6 +1762,7 @@
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
     validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary,
     allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,
+    MUSIC_TRACKS, initialMusicListens, musicListeningSummary, musicListeningTrend, compareMusicListening,
     completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks,
     DIARY_LIMITS, initialDiaryEntries, diaryEntryDate, parseDiaryDateQuery, validateDiaryEntry, selectDiaryEntries, trashedDiaryEntries, listDiaryDrafts, moveDiaryToTrash, restoreDiaryEntry,
     diaryStreak, JOB_ASSIST_LIMITS, JOB_ASSIST_STATUS, validateJobOpportunity,

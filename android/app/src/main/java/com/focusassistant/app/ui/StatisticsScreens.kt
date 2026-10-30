@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
@@ -26,6 +27,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -329,6 +335,20 @@ internal fun ScrubBars(values: List<Long>, labelFor: (Int) -> String, defaultPre
         Text(if (peak > 0) valueLabel(peak) else "", fontSize = 11.sp, color = Muted, modifier = Modifier.align(Alignment.End))
         Canvas(Modifier.fillMaxWidth().height(chartHeight)
             .pointerInput(values) { scrubIndex(values.size) { selected = it } }
+            .onKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown || values.isEmpty()) return@onKeyEvent false
+                val current = index ?: 0
+                val next = when (event.key) {
+                    Key.DirectionLeft, Key.DirectionDown -> (current - 1).coerceAtLeast(0)
+                    Key.DirectionRight, Key.DirectionUp -> (current + 1).coerceAtMost(values.lastIndex)
+                    Key.MoveHome -> 0
+                    Key.MoveEnd -> values.lastIndex
+                    else -> return@onKeyEvent false
+                }
+                selected = next
+                true
+            }
+            .focusable()
             .semantics {
                 contentDescription = title
                 stateDescription = readout
