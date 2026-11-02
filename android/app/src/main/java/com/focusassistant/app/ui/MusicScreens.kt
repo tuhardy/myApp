@@ -1,8 +1,11 @@
 package com.focusassistant.app.ui
 
 import android.app.DatePickerDialog
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -25,6 +28,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
@@ -40,7 +45,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import com.focusassistant.app.data.MusicFiles
 import com.focusassistant.app.domain.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.ZoneId
@@ -116,7 +125,8 @@ internal fun MusicScreen(
     playlists: List<MusicPlaylist>,
     state: MusicUiState,
     today: LocalDate,
-    onMessage: (String) -> Unit = {}
+    onMessage: (String) -> Unit = {},
+    onAdd: () -> Unit = {}
 ) {
     val current = tracks.find { it.id == state.selectedTrackId }
     val playlist = playlists.find { it.id == state.playlistId }
@@ -128,7 +138,7 @@ internal fun MusicScreen(
                 onMessage("已切换到《${track.title}》，仅展示界面状态，没有播放音频。")
             })
         } else {
-            MusicHeader(state, onMessage)
+            MusicHeader(state, onAdd)
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(start = 23.dp, end = 23.dp, bottom = 20.dp)) {
                 when (state.tab) {
                     MusicTab.RECOMMEND -> item(key = "recommend") {
@@ -151,7 +161,7 @@ internal fun MusicScreen(
                         val filtered = tracks.filter { query.isEmpty() || "${it.title} ${it.artist}".contains(query, ignoreCase = true) }
                         MusicSectionHeading("全部歌曲", if (query.isEmpty()) "${tracks.size} 首" else "${filtered.size} 首匹配")
                         if (filtered.isEmpty()) EmptyCard(if (tracks.isEmpty()) "还没有本机歌曲" else "没有匹配的歌曲",
-                            if (tracks.isEmpty()) "当前未接入本地音频导入，不会显示浏览器示例歌曲。" else "换个歌名或歌手试试。")
+                            if (tracks.isEmpty()) "选择右上角「＋」，从 B 站缓存主目录导入本机音频。" else "换个歌名或歌手试试。")
                         else Column { filtered.forEachIndexed { index, track ->
                             SongRow(track, current?.id == track.id, showDivider = index < filtered.lastIndex,
                                 onClick = { selectTrack(track, state, onMessage) })
@@ -162,7 +172,7 @@ internal fun MusicScreen(
                     }
                 }
                 if (state.tab != MusicTab.HISTORY) item(key = "data-note") {
-                    Text("只展示本机真实曲库与记录 · 当前未接入音频导入、真实播放或设备音乐读取",
+                    Text("只展示本机真实曲库与记录 · 已接入 B 站音频导入，真实播放与设备音乐读取尚未接入",
                         color = MusicMuted, fontSize = 12.sp, lineHeight = 22.sp, textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth().padding(top = 16.dp))
                 }
@@ -176,7 +186,7 @@ internal fun MusicScreen(
 }
 
 @Composable
-private fun MusicHeader(state: MusicUiState, onMessage: (String) -> Unit) {
+private fun MusicHeader(state: MusicUiState, onAdd: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(start = 23.dp, end = 23.dp, top = 22.dp)) {
         Row(Modifier.fillMaxWidth().padding(bottom = 13.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -188,9 +198,9 @@ private fun MusicHeader(state: MusicUiState, onMessage: (String) -> Unit) {
                 Modifier.padding(end = 7.dp).size(44.dp).border(1.dp, Line, RoundedCornerShape(10.dp))) {
                 Icon(Icons.Outlined.BarChart, "查看收听回顾", Modifier.size(18.dp), tint = Ink)
             }
-            IconButton(onClick = { onMessage("添加歌曲将在确认本地音频导入方案后接入；当前不会读取或复制文件。") },
+            IconButton(onClick = onAdd,
                 Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)).background(Ink)) {
-                Icon(Icons.Outlined.Add, "添加歌曲，界面演示", Modifier.size(18.dp), tint = Color.White)
+                Icon(Icons.Outlined.Add, "导入 B 站音频", Modifier.size(18.dp), tint = Color.White)
             }
         }
         BasicTextField(state.query, { state.query = it },
@@ -208,6 +218,85 @@ private fun MusicHeader(state: MusicUiState, onMessage: (String) -> Unit) {
             })
         MusicTabs(state)
     }
+}
+
+private class MusicImportDraft(candidate: MusicImportCandidate) {
+    val sourceId = candidate.sourceId
+    val directoryName = candidate.directoryName
+    val durationSeconds = candidate.durationSeconds
+    val fileBytes = candidate.fileBytes
+    val hasCover = candidate.hasCover
+    val error = candidate.error
+    var selected by mutableStateOf(error.isEmpty())
+    var title by mutableStateOf(candidate.title)
+    var artist by mutableStateOf(candidate.artist)
+}
+
+@Composable
+internal fun MusicImportDialog(candidates: List<MusicImportCandidate>, busy: Boolean,
+    onDismiss: () -> Unit, onConfirm: (List<MusicImportRequest>) -> Unit) {
+    val drafts = remember(candidates) { candidates.map(::MusicImportDraft) }
+    val selected = drafts.filter { it.selected && it.error.isEmpty() }
+    Dialog(onDismissRequest = { if (!busy) onDismiss() }) {
+        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), color = Color.White) {
+            Column(Modifier.padding(20.dp)) {
+                Text("导入 B 站音频", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+                Text("只复制 audio.m4s 和本地 cover.jpg；不会读取视频、弹幕或远程资源。",
+                    color = MusicMuted, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 6.dp, bottom = 14.dp))
+                LazyColumn(Modifier.heightIn(max = 430.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(drafts.size, key = { drafts[it].sourceId }) { index ->
+                        val draft = drafts[index]
+                        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(11.dp)).background(MusicSurface).padding(11.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(draft.selected, { draft.selected = it }, enabled = !busy && draft.error.isEmpty())
+                                Column(Modifier.weight(1f)) {
+                                    Text("目录 ${draft.directoryName} · ${clockText(draft.durationSeconds)}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    Text("${musicFileSize(draft.fileBytes)}${if (draft.hasCover) " · 含本地封面" else ""}",
+                                        color = MusicMuted, fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp))
+                                }
+                            }
+                            if (draft.error.isNotEmpty()) Text(draft.error, color = AccentDark, fontSize = 11.sp,
+                                modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+                            else {
+                                MusicImportField("歌名", draft.title, !busy) { draft.title = it }
+                                MusicImportField("歌手", draft.artist, !busy, "未知歌手") { draft.artist = it }
+                            }
+                        }
+                    }
+                }
+                Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onDismiss, enabled = !busy) { Text("取消") }
+                    Spacer(Modifier.width(6.dp))
+                    Button(onClick = { onConfirm(selected.map { MusicImportRequest(it.sourceId, it.title, it.artist) }) },
+                        enabled = !busy && selected.isNotEmpty(), shape = RoundedCornerShape(9.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Color.White)) {
+                        Text(if (busy) "正在导入…" else "导入 ${selected.size} 首")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MusicImportField(label: String, value: String, enabled: Boolean, placeholder: String = "", onChange: (String) -> Unit) {
+    Text(label, color = MusicMuted, fontSize = 10.sp, modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 4.dp))
+    BasicTextField(value, onChange, Modifier.padding(horizontal = 12.dp).fillMaxWidth().height(40.dp)
+        .background(Color.White, RoundedCornerShape(7.dp)).border(1.dp, MusicLine, RoundedCornerShape(7.dp)).padding(horizontal = 10.dp),
+        enabled = enabled, singleLine = true, textStyle = TextStyle(color = Ink, fontSize = 12.sp), cursorBrush = SolidColor(Accent),
+        decorationBox = { inner ->
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                if (value.isEmpty() && placeholder.isNotEmpty()) Text(placeholder, color = MusicMuted, fontSize = 12.sp)
+                inner()
+            }
+        })
+}
+
+private fun musicFileSize(bytes: Long): String = when {
+    bytes >= 1024 * 1024 -> "${"%.1f".format(bytes / 1024.0 / 1024.0)} MB"
+    bytes > 0 -> "${(bytes + 1023) / 1024} KB"
+    else -> "大小未知"
 }
 
 @Composable
@@ -414,7 +503,7 @@ private fun SongRow(track: MusicTrack, selected: Boolean, rank: Int? = null, sta
                     fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.width(20.dp))
                 Spacer(Modifier.width(9.dp))
             }
-            CoverArt(track.id, Modifier.size(40.dp), radius = 6.dp)
+            TrackCoverArt(track, Modifier.size(40.dp), radius = 6.dp)
             Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                 Text(track.title, color = if (selected) AccentDark else Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -428,6 +517,25 @@ private fun SongRow(track: MusicTrack, selected: Boolean, rank: Int? = null, sta
         }
         if (showDivider) HorizontalDivider(color = MusicSongLine)
     }
+}
+
+@Composable
+private fun TrackCoverArt(track: MusicTrack, modifier: Modifier = Modifier, radius: Dp = 7.dp) {
+    val context = LocalContext.current
+    val bitmap by produceState<Bitmap?>(null, track.id, track.coverFile) {
+        value = withContext(Dispatchers.IO) {
+            val file = MusicFiles.cover(context.applicationContext, track) ?: return@withContext null
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.path, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= 256 && bounds.outHeight / (sample * 2) >= 256) sample *= 2
+            BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+        }
+    }
+    bitmap?.let {
+        Image(it.asImageBitmap(), null, modifier.clip(RoundedCornerShape(radius)), contentScale = ContentScale.Crop)
+    } ?: CoverArt(track.id, modifier, radius)
 }
 
 @Composable
@@ -464,7 +572,7 @@ private fun MiniPlayer(track: MusicTrack, playing: Boolean, onToggle: () -> Unit
         Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MusicSurface)) {
             Row(Modifier.fillMaxWidth().heightIn(min = 62.dp).padding(start = 10.dp, end = 8.dp, top = 3.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                CoverArt(track.id, Modifier.size(36.dp), radius = 6.dp)
+                TrackCoverArt(track, Modifier.size(36.dp), radius = 6.dp)
                 Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                     Text(track.title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(track.artist, color = MusicMuted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)

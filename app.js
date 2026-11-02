@@ -5,7 +5,7 @@
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv,
     initialFocusItems, validateFocusItem, focusHourDistribution, initialProgressEntries, validateProgress,
     latestProjectProgress, allTimeFocusSummary, allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,
-    MUSIC_TRACKS, initialMusicListens, musicListeningSummary, musicListeningTrend, compareMusicListening } = FocusModel;
+    MUSIC_TRACKS, parseBilibiliMusicEntry, bilibiliMusicCandidateTitle, initialMusicListens, musicListeningSummary, musicListeningTrend, compareMusicListening } = FocusModel;
   const UI = Object.freeze({ tickMs: 250, toastMs: 3400, ringRadius: 118, tickRadius: 134, initialGoalMinutes: 240, gaugeTicks: 20, goalTicks: 40, minutesPerHour: 60, finishRevealMs: 900,
     recordPageSize: 20, exportReleaseMs: 60000, weekDays: 7, minYear: 1900, maxYear: 2100,
     heatLevels: 4, chartAxisLabels: 5, fullCircle: 360, jsonIndent: 2, pickerYears: 12, jumpOffset: 12, musicRankPageSize: 10 });
@@ -49,7 +49,8 @@
     jobOpportunities: [], nextJobOpportunityId: 1,
     autoApply: { settings: FocusModel.defaultAutoApplySettings(), records: [], preview: [], log: [], stopReason: null, calibrated: { boss: false, zhaopin: false }, resumePreview: null, resumeCalibrated: false, tab: "contact", run: null, nextResumeId: 1, nextPresetId: 1, stageFilter: "all", reviewDays: 7 },
     reminders: false, nextTaskId: 1, nextRecordId: 1, nextStepId: 1,
-    musicTab: "recommend", musicPlaying: true, musicSearch: "", musicTrack: { title: "晴天", artist: "周杰伦", duration: "4:29" },
+    musicTab: "recommend", musicPlaying: true, musicSearch: "", musicTrack: { id: "sunny", title: "晴天", artist: "周杰伦", duration: "4:29" },
+    musicImportedTracks: [], musicImportDraft: null, nextMusicTrackId: 1,
     musicPlaylist: null, musicHistoryPeriod: "week", musicHistoryAnchor: new Date(), musicHistoryPickerOpen: false, musicHistoryPickerCursor: null,
     musicListens: initialMusicListens(), musicRankLimit: UI.musicRankPageSize, musicTrendBins: [], musicTrendSelection: null,
     openProjects: new Set(), progressEntries: [], progressDrafts: new Map(), nextProgressId: 1,
@@ -172,10 +173,16 @@
     const button = element("button", "music-song-row");
     button.type = "button";
     button.dataset.musicTrack = track.title;
+    button.dataset.musicTrackId = track.id;
     button.dataset.musicArtist = track.artist;
     button.dataset.musicDuration = track.duration;
     const cover = element("span", `music-cover ${track.tone}`);
-    cover.append(icon(track.art));
+    if (track.coverUrl) {
+      const image = document.createElement("img");
+      image.src = track.coverUrl;
+      image.alt = "";
+      cover.append(image);
+    } else cover.append(icon(track.art));
     const copy = element("span", "music-song-copy");
     copy.append(element("strong", "", track.title), element("small", "", subtitle));
     button.append(cover, copy, element("span", "music-song-duration", track.duration));
@@ -184,7 +191,7 @@
   }
 
   function selectMusicTrack(button) {
-    state.musicTrack = { title: button.dataset.musicTrack, artist: button.dataset.musicArtist, duration: button.dataset.musicDuration };
+    state.musicTrack = { id: button.dataset.musicTrackId, title: button.dataset.musicTrack, artist: button.dataset.musicArtist, duration: button.dataset.musicDuration };
     state.musicPlaying = true;
     renderMusic();
     toast(`已切换到《${state.musicTrack.title}》，仅展示界面状态，没有播放音频。`);
@@ -592,7 +599,9 @@
     $("music-mini-title").textContent = state.musicTrack.title;
     $("music-mini-artist").textContent = state.musicTrack.artist;
     document.querySelectorAll("[data-music-track]").forEach(button => {
-      button.classList.toggle("current", button.dataset.musicTrack === state.musicTrack.title && button.dataset.musicArtist === state.musicTrack.artist);
+      button.classList.toggle("current", state.musicTrack.id
+        ? button.dataset.musicTrackId === state.musicTrack.id
+        : button.dataset.musicTrack === state.musicTrack.title && button.dataset.musicArtist === state.musicTrack.artist);
     });
   }
 
@@ -604,8 +613,10 @@
     if (focus) $(`music-tab-${tab}`).focus({ preventScroll: true });
   }
 
+  function musicLibraryTracks() { return [...state.musicImportedTracks, ...MUSIC_TRACKS]; }
+
   function renderMusicLibrary() {
-    $("music-song-list").replaceChildren(...MUSIC_TRACKS.map(track => buildMusicSongRow(track)));
+    $("music-song-list").replaceChildren(...musicLibraryTracks().map(track => buildMusicSongRow(track)));
     filterMusicSongs();
   }
 
@@ -617,7 +628,10 @@
       button.hidden = !matches;
       if (matches) count += 1;
     });
-    $("music-song-count").textContent = query ? `${count} 首匹配` : `${MUSIC_TRACKS.length} 首 · 示例`;
+    const total = musicLibraryTracks().length;
+    const imported = state.musicImportedTracks.length;
+    $("music-song-count").textContent = query ? `${count} 首匹配`
+      : imported ? `${total} 首 · ${imported} 首导入 + ${MUSIC_TRACKS.length} 首示例` : `${MUSIC_TRACKS.length} 首 · 示例`;
     $("music-search-empty").hidden = count > 0;
   }
 
@@ -629,6 +643,176 @@
 
   function musicUiOnly(label) {
     toast(`${label}将在网页 UI 确认后接入，本轮仅展示界面。`);
+  }
+
+  function musicClockText(seconds) {
+    const safe = Math.max(0, Math.round(Number(seconds) || 0));
+    return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, "0")}`;
+  }
+
+  function musicImportFileSize(bytes) {
+    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return bytes > 0 ? `${Math.ceil(bytes / 1024)} KB` : "大小未知";
+  }
+
+  function probeMusicFile(file) {
+    return new Promise((resolve, reject) => {
+      const audio = document.createElement("audio");
+      const url = URL.createObjectURL(file);
+      let settled = false;
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        audio.removeAttribute("src");
+        audio.load();
+        URL.revokeObjectURL(url);
+        callback(value);
+      };
+      const timeout = setTimeout(() => finish(reject, new Error("读取音频信息超时")), 12000);
+      audio.preload = "metadata";
+      audio.addEventListener("loadedmetadata", () => finish(resolve, Number.isFinite(audio.duration) ? Math.round(audio.duration) : 0), { once: true });
+      audio.addEventListener("error", () => finish(reject, new Error("浏览器暂时无法识别这段音频")), { once: true });
+      audio.src = url;
+      audio.load();
+    });
+  }
+
+  async function prepareMusicImport(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const entries = files.map(file => ({ file, path: file.webkitRelativePath || file.name }));
+    const rootName = entries[0].path.split("/")[0];
+    if (!rootName || entries.some(item => item.path.split("/")[0] !== rootName)) throw new Error("请只选择一个 B 站视频缓存主目录。");
+    const directories = [...new Set(entries.map(item => item.path.split("/")).filter(parts => parts.length >= 3).map(parts => parts[1]))].sort();
+    const audioEntries = entries.filter(item => {
+      const parts = item.path.split("/");
+      return parts.length === 3 && parts[2] === "audio.m4s";
+    }).sort((left, right) => left.path.localeCompare(right.path, "zh-CN"));
+    if (!audioEntries.length) throw new Error("所选目录的直接子文件夹中没有 audio.m4s。");
+    const entryFile = entries.find(item => item.path === `${rootName}/entry.json`)?.file;
+    const entryText = entryFile ? await entryFile.text().catch(() => null) : null;
+    const metadata = parseBilibiliMusicEntry(entryText, rootName);
+    const coverFile = entries.find(item => item.path === `${rootName}/cover.jpg`)?.file || null;
+    const candidates = [];
+    for (const item of audioEntries) {
+      const directoryName = item.path.split("/")[1];
+      let seconds = 0;
+      let error = !metadata.completed ? "缓存尚未下载完成" : item.file.size <= 0 ? "音频文件为空" : "";
+      if (!error) {
+        try { seconds = await probeMusicFile(item.file); }
+        catch { error = "浏览器暂时无法识别这段音频"; }
+      }
+      seconds = seconds || metadata.referenceSeconds;
+      if (!error && seconds <= 0) error = "无法读取音频时长";
+      candidates.push({ sourceId: directoryName, directoryName,
+        title: bilibiliMusicCandidateTitle(metadata, directoryName, directories.length), artist: metadata.artist,
+        durationSeconds: seconds, fileBytes: item.file.size, hasCover: Boolean(coverFile), error,
+        selected: !error, audioFile: item.file });
+    }
+    state.musicImportDraft = { coverFile, candidates };
+    showMusicImportDialog();
+  }
+
+  function showMusicImportDialog() {
+    const draft = state.musicImportDraft;
+    if (!draft) return;
+    const content = element("div", "music-import-dialog");
+    content.append(element("p", "modal-copy", "只导入 audio.m4s 和本地 cover.jpg；不会读取视频、弹幕或远程资源。导入内容仅驻留内存，刷新后清空。"));
+    const list = element("div", "music-import-list");
+    const actions = element("div", "modal-actions");
+    const cancel = element("button", "secondary-button", "取消");
+    const confirm = element("button", "primary-button");
+    const selected = () => draft.candidates.filter(item => item.selected && !item.error);
+    const update = () => {
+      confirm.disabled = !selected().length;
+      confirm.textContent = `导入 ${selected().length} 首`;
+    };
+    draft.candidates.forEach(candidate => {
+      const card = element("section", "music-import-item");
+      const heading = element("label", "music-import-check");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = candidate.selected;
+      checkbox.disabled = Boolean(candidate.error);
+      checkbox.addEventListener("change", () => { candidate.selected = checkbox.checked; update(); });
+      const summary = element("span", "");
+      summary.append(element("strong", "", `目录 ${candidate.directoryName} · ${musicClockText(candidate.durationSeconds)}`),
+        element("small", "", `${musicImportFileSize(candidate.fileBytes)}${candidate.hasCover ? " · 含本地封面" : ""}`));
+      heading.append(checkbox, summary);
+      card.append(heading);
+      if (candidate.error) card.append(element("p", "music-import-error", candidate.error));
+      else {
+        const title = element("label", "field", "歌名");
+        const titleInput = document.createElement("input");
+        titleInput.value = candidate.title;
+        titleInput.maxLength = 80;
+        titleInput.addEventListener("input", () => { candidate.title = titleInput.value; });
+        title.append(titleInput);
+        const artist = element("label", "field", "歌手");
+        const artistInput = document.createElement("input");
+        artistInput.value = candidate.artist;
+        artistInput.maxLength = 80;
+        artistInput.placeholder = "未知歌手";
+        artistInput.addEventListener("input", () => { candidate.artist = artistInput.value; });
+        artist.append(artistInput);
+        card.append(title, artist);
+      }
+      list.append(card);
+    });
+    cancel.addEventListener("click", () => { state.musicImportDraft = null; closeModal(); });
+    confirm.addEventListener("click", async () => {
+      confirm.disabled = true;
+      cancel.disabled = true;
+      confirm.textContent = "正在导入…";
+      try {
+        const result = await importMusicCandidates(selected(), draft.coverFile);
+        state.musicImportDraft = null;
+        closeModal();
+        renderMusicLibrary();
+        chooseMusicTab("songs");
+        let message = `已导入 ${result.imported} 首到内存曲库`;
+        if (result.duplicates) message += `，跳过 ${result.duplicates} 首重复音频`;
+        if (result.failures.length) message += `；${result.failures[0]}`;
+        toast(`${message}。刷新清空，真实播放尚未接入。`);
+      } catch (error) {
+        toast(error.message || "导入未完成，请重试。");
+        cancel.disabled = false;
+        update();
+      }
+    });
+    actions.append(cancel, confirm);
+    content.append(list, actions);
+    update();
+    showModal("导入 B 站音频", content);
+  }
+
+  async function musicFileHash(file) {
+    if (!window.crypto?.subtle) throw new Error("当前浏览器无法校验音频内容，未导入文件。");
+    const digest = await window.crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function importMusicCandidates(candidates, coverFile) {
+    const result = { imported: 0, duplicates: 0, failures: [] };
+    for (const candidate of candidates) {
+      const title = candidate.title.trim();
+      const artist = candidate.artist.trim() || "未知歌手";
+      if (!title || title.length > 80) { result.failures.push(`${candidate.directoryName}：歌名须为 1–80 个字符`); continue; }
+      if (artist.length > 80) { result.failures.push(`${candidate.directoryName}：歌手不可超过 80 个字符`); continue; }
+      try {
+        const contentHash = await musicFileHash(candidate.audioFile);
+        if (state.musicImportedTracks.some(track => track.contentHash === contentHash)) { result.duplicates += 1; continue; }
+        const id = `music-import-${Date.now()}-${state.nextMusicTrackId++}`;
+        state.musicImportedTracks.push({ id, title, artist, seconds: candidate.durationSeconds,
+          duration: musicClockText(candidate.durationSeconds), tone: `tone-${["one", "two", "three", "four", "five", "six"][result.imported % 6]}`,
+          art: "cover-wave", coverUrl: coverFile ? URL.createObjectURL(coverFile) : "", contentHash, sourceFile: candidate.audioFile });
+        result.imported += 1;
+      } catch (error) {
+        result.failures.push(`${candidate.directoryName}：${error.message || "导入失败"}`);
+      }
+    }
+    return result;
   }
 
   function currentFocusItem() {
@@ -5028,7 +5212,15 @@
   $("music-mini-toggle").addEventListener("click", toggleMusicPlayback);
   $("music-previous").addEventListener("click", () => musicUiOnly("上一首"));
   $("music-next").addEventListener("click", () => musicUiOnly("下一首"));
-  $("music-add").addEventListener("click", () => musicUiOnly("添加歌曲"));
+  $("music-add").addEventListener("click", () => {
+    $("music-directory-input").value = "";
+    $("music-directory-input").click();
+  });
+  $("music-directory-input").addEventListener("change", async event => {
+    try { await prepareMusicImport(event.target.files); }
+    catch (error) { toast(error.message || "无法读取所选目录。"); }
+    finally { event.target.value = ""; }
+  });
   $("music-new-playlist").addEventListener("click", () => musicUiOnly("新建歌单"));
   $("music-more").addEventListener("click", () => musicUiOnly("歌曲更多操作"));
   window.addEventListener("hashchange", () => navigate(location.hash.slice(1), false));

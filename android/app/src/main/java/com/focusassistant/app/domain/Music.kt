@@ -4,10 +4,45 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import org.json.JSONObject
 
 /** 曲库与收听事件只描述真实数据；Android 不提供浏览器里的示例歌曲和示例记录。 */
-data class MusicTrack(val id: String, val title: String, val artist: String, val durationSeconds: Long)
+data class MusicTrack(
+    val id: String, val title: String, val artist: String, val durationSeconds: Long,
+    val audioFile: String = "", val coverFile: String = "", val contentHash: String = "",
+    val fileBytes: Long = 0, val importedAt: Long = 0, val sourceBvid: String = "", val sourceCid: Long = 0
+)
 data class MusicListen(val id: String, val trackId: String, val playedAt: Long, val seconds: Long? = null)
+data class BilibiliMusicEntry(
+    val title: String, val artist: String, val referenceSeconds: Long, val completed: Boolean,
+    val bvid: String = "", val cid: Long = 0
+)
+data class MusicImportCandidate(
+    val sourceId: String, val directoryName: String, val title: String, val artist: String,
+    val durationSeconds: Long, val fileBytes: Long, val hasCover: Boolean, val error: String = ""
+)
+data class MusicImportRequest(val sourceId: String, val title: String, val artist: String)
+data class MusicImportResult(val imported: Int, val duplicates: Int, val failures: List<String>)
+
+object BilibiliMusicImport {
+    /** 只解析本地 entry.json；缺文件或损坏时使用目录名，不请求远程封面或元数据。 */
+    fun parseEntry(text: String?, rootName: String): BilibiliMusicEntry {
+        val fallbackTitle = rootName.trim().ifBlank { "未命名音频" }
+        val root = text?.takeIf { it.isNotBlank() }?.let { runCatching { JSONObject(it) }.getOrNull() } ?: JSONObject()
+        val page = root.optJSONObject("page_data") ?: JSONObject()
+        val title = page.optString("part").trim().ifBlank { root.optString("title").trim() }.ifBlank { fallbackTitle }
+        val milliseconds = root.optLong("total_time_milli")
+        val seconds = if (milliseconds > 0) milliseconds / 1000 + if (milliseconds % 1000 >= 500) 1 else 0 else 0
+        val cid = page.optLong("cid").takeIf { it > 0 } ?: 0
+        return BilibiliMusicEntry(title, root.optString("owner_name").trim(), seconds,
+            root.optBoolean("is_completed", true), root.optString("bvid").trim(), cid)
+    }
+
+    fun candidateTitle(metadata: BilibiliMusicEntry, directoryName: String, directoryCount: Int): String {
+        val base = metadata.title.trim().ifBlank { "未命名音频" }
+        return if (directoryCount > 1) "$base（${directoryName.trim().ifBlank { "未命名目录" }}）" else base
+    }
+}
 data class MusicRankedTrack(val track: MusicTrack, val plays: Int, val seconds: Long, val lastPlayedAt: Long)
 data class MusicSummary(
     val plays: Int,

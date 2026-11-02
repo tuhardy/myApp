@@ -1313,6 +1313,7 @@ button.diary-photo:hover { filter: brightness(.96); }
 .music-playlist:hover .music-cover { outline: 2px solid var(--accent-dark); outline-offset: 2px; }
 .music-cover { display: grid; place-items: center; flex: none; width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 7px; background: #e4e6e6; color: #777e81; }
 .music-cover svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.4; }
+.music-cover img { width: 100%; height: 100%; object-fit: cover; }
 .music-cover.tone-two { background: #35393b; color: #d8dcdd; }
 .music-cover.tone-three { background: #d7dadb; color: #666d70; }
 .music-cover.tone-four { background: #ececea; color: #85898a; }
@@ -1335,6 +1336,16 @@ button.diary-photo:hover { filter: brightness(.96); }
 .music-data-note { margin: 16px 0 0; text-align: center; }
 .music-wide-action { width: 100%; margin-top: 24px; border-radius: 9px; }
 .music-search-empty { margin: 0; padding: 34px 12px; color: #686e72; font-size: 13px; text-align: center; }
+.music-import-list { display: grid; gap: 10px; max-height: 55vh; margin-top: 14px; overflow-y: auto; }
+.music-import-item { padding: 11px; border-radius: 11px; background: #f2f3f3; }
+.music-import-check { display: flex; align-items: center; gap: 9px; min-height: var(--touch-target); }
+.music-import-check input { width: 20px; height: 20px; accent-color: var(--accent); }
+.music-import-check span { display: flex; flex-direction: column; gap: 3px; }
+.music-import-check strong { font-size: 12px; }
+.music-import-check small { color: #686e72; font-size: 10px; }
+.music-import-item .field { margin: 8px 0 0 12px; }
+.music-import-item .field input { min-height: 40px; margin-top: 4px; padding: 8px 10px; border-radius: 7px; font-size: 12px; }
+.music-import-error { margin: 4px 0 0 12px; color: var(--accent-dark); font-size: 11px; }
 .music-history-periods { margin: 0 0 12px; }
 .music-header.history-mode { position: relative; }
 .music-history-bar { position: sticky; top: 0; z-index: 6; margin: 0 -23px; padding: 8px 23px 10px; border-bottom: 1px solid #dde0e1; background: var(--white); }

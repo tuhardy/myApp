@@ -42,6 +42,8 @@ internal data class JobOpportunityRow(@PrimaryKey val id: String, val payload: S
 internal data class AutoApplyRecordRow(@PrimaryKey val id: String, val payload: String, val position: Int)
 @Entity(tableName = "auto_apply_settings")
 internal data class AutoApplySettingsRow(@PrimaryKey val id: Int = 1, val payload: String)
+@Entity(tableName = "music_tracks")
+internal data class MusicTrackRow(@PrimaryKey val id: String, val payload: String, val position: Int)
 
 @Dao
 internal interface FocusDao {
@@ -89,9 +91,12 @@ internal interface FocusDao {
     @Query("DELETE FROM auto_apply_records WHERE id IN (:ids)") suspend fun removeAutoApplyRecords(ids: List<String>)
     @Query("SELECT * FROM auto_apply_settings WHERE id = 1") suspend fun autoApplySettings(): AutoApplySettingsRow?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putAutoApplySettings(row: AutoApplySettingsRow)
+    @Query("SELECT * FROM music_tracks ORDER BY position") suspend fun musicTracks(): List<MusicTrackRow>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putMusicTracks(rows: List<MusicTrackRow>)
+    @Query("DELETE FROM music_tracks WHERE id IN (:ids)") suspend fun removeMusicTracks(ids: List<String>)
 }
 
-@Database(entities = [ProjectRow::class, TodoRow::class, SessionRow::class, ProgressRow::class, SettingsRow::class, TimerRow::class, RevisionRow::class, DiaryRow::class, DiaryDraftRow::class, AssetAccountRow::class, AssetSnapshotRow::class, WishRow::class, JobOpportunityRow::class, AutoApplyRecordRow::class, AutoApplySettingsRow::class], version = 6, exportSchema = false)
+@Database(entities = [ProjectRow::class, TodoRow::class, SessionRow::class, ProgressRow::class, SettingsRow::class, TimerRow::class, RevisionRow::class, DiaryRow::class, DiaryDraftRow::class, AssetAccountRow::class, AssetSnapshotRow::class, WishRow::class, JobOpportunityRow::class, AutoApplyRecordRow::class, AutoApplySettingsRow::class, MusicTrackRow::class], version = 7, exportSchema = false)
 internal abstract class FocusDatabase : RoomDatabase() {
     abstract fun dao(): FocusDao
 
@@ -127,6 +132,12 @@ internal abstract class FocusDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `auto_apply_records` (`id` TEXT NOT NULL, `payload` TEXT NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`id`))")
                 db.execSQL("CREATE TABLE IF NOT EXISTS `auto_apply_settings` (`id` INTEGER NOT NULL, `payload` TEXT NOT NULL, PRIMARY KEY(`id`))")
+            }
+        }
+        /** v6 → v7 只新增本机音乐曲库，音频本体另存应用私有目录。 */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `music_tracks` (`id` TEXT NOT NULL, `payload` TEXT NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`id`))")
             }
         }
     }

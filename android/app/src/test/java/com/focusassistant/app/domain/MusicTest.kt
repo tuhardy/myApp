@@ -112,4 +112,21 @@ class MusicTest {
         assertEquals(MusicSummary(0, 0, 0, 0, emptyList()), summary)
         assertTrue(MusicListening.trend(emptyList(), tracks, Period.DAY, LocalDate.parse("2026-10-30"), utc).all { it.seconds == 0L })
     }
+
+    @Test fun bilibiliEntryUsesPartOwnerAndLocalFallbacks() {
+        val sample = """{"media_type":2,"is_completed":true,"total_time_milli":225186,"title":"【囧菌翻唱】东京不太热","bvid":"BV1as411D7rn","owner_name":"封茗囧菌","page_data":{"cid":3533764,"part":"【囧菌翻唱】东京不太热"}}"""
+        val metadata = BilibiliMusicImport.parseEntry(sample, "c_3533764")
+        assertEquals(BilibiliMusicEntry("【囧菌翻唱】东京不太热", "封茗囧菌", 225, true, "BV1as411D7rn", 3533764), metadata)
+        assertEquals(metadata.title, BilibiliMusicImport.candidateTitle(metadata, "16", 1))
+        assertEquals("${metadata.title}（16）", BilibiliMusicImport.candidateTitle(metadata, "16", 2))
+        assertEquals(false, BilibiliMusicImport.parseEntry(sample.replace("\"is_completed\":true", "\"is_completed\":false"), "c_3533764").completed)
+    }
+
+    @Test fun damagedBilibiliEntryDoesNotInventMetadata() {
+        assertEquals(BilibiliMusicEntry("c_3533764", "", 0, true),
+            BilibiliMusicImport.parseEntry("not-json", " c_3533764 "))
+        assertEquals(BilibiliMusicEntry("主标题", "UP", 0, true),
+            BilibiliMusicImport.parseEntry("""{"title":" 主标题 ","owner_name":" UP ","page_data":{"part":"  "}}""", ""))
+        assertEquals("未命名音频", BilibiliMusicImport.parseEntry(null, "").title)
+    }
 }

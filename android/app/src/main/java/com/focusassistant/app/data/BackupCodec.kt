@@ -119,6 +119,13 @@ internal object JsonCodec {
         require(value.has("percent")) { "缺少 percent" }
         return ProgressEntry(value.string("id"), value.string("sessionId"), value.string("projectId"), value.long("sessionEndedAt"), value.string("note"), if (value.isNull("percent")) null else value.integer("percent"), value.long("updatedAt"))
     }
+    fun musicTrack(value: MusicTrack): JSONObject = JSONObject().put("id", value.id).put("title", value.title).put("artist", value.artist)
+        .put("durationSeconds", value.durationSeconds).put("audioFile", value.audioFile).put("coverFile", value.coverFile)
+        .put("contentHash", value.contentHash).put("fileBytes", value.fileBytes).put("importedAt", value.importedAt)
+        .put("sourceBvid", value.sourceBvid).put("sourceCid", value.sourceCid)
+    fun readMusicTrack(value: JSONObject) = MusicTrack(value.string("id"), value.string("title"), value.string("artist"), value.long("durationSeconds"),
+        value.string("audioFile"), value.string("coverFile"), value.string("contentHash"), value.long("fileBytes"),
+        value.long("importedAt"), value.string("sourceBvid"), value.long("sourceCid"))
     fun settings(value: AppSettings): JSONObject = JSONObject().put("dailyGoalMinutes", value.dailyGoalMinutes).put("usageReminders", value.usageReminders).put("shortBreakMinutes", value.shortBreakMinutes).put("longBreakMinutes", value.longBreakMinutes)
     fun readSettings(value: JSONObject) = AppSettings(value.integer("dailyGoalMinutes"), value.boolean("usageReminders"), value.integer("shortBreakMinutes"), value.integer("longBreakMinutes"))
     fun timer(value: ActiveTimer): JSONObject = JSONObject().put("sessionId", value.sessionId).put("projectId", value.projectId).put("projectTitle", value.projectTitle).put("category", value.category)
