@@ -248,10 +248,13 @@ class NativeUiModel : ViewModel() {
 }
 
 @Composable
-fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quickHideToken: Int = 0) {
+fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quickHideToken: Int = 0, jobStopToken: Int = 0) {
     val context = LocalContext.current
     LaunchedEffect(quickHideToken) {
         if (quickHideToken > 0) ui.screen = Screen.PROJECTS
+    }
+    LaunchedEffect(jobStopToken) {
+        if (jobStopToken > 0) ui.screen = Screen.JOB_ASSIST
     }
     val appContext = context.applicationContext
     val state by repository.state.collectAsStateWithLifecycle()
@@ -856,7 +859,7 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
                 val left = AutoApplyRules.limitFor(settings, platform) - AutoApplyRules.contactedOn(state.autoApply.records, today, ZoneId.systemDefault(), platform)
                 val title = if (platform == JobPlatform.ZHAOPIN) "开始智联自动投递？" else "开始自动沟通？"
                 val body = if (platform == JobPlatform.ZHAOPIN) "将切换到智联招聘，界面变化后执行下一步（两步至少间隔 ${settings.stepDelayMs / 1000} 秒），今天最多再投递 ${maxOf(left, 0)} 个职位。" +
-                    "请先打开职位推荐列表；需要选简历时按「我的简历」选择同名简历，找不到会停止。运行中保持亮屏；触碰智联、离开智联或熄屏会暂停，可从悬浮按钮继续或停止。"
+                    "请先打开职位推荐列表；未配置简历时使用智联当前选中的默认简历，配置后找不到同名简历会停止。运行中保持亮屏；触碰智联、离开智联或熄屏会暂停，可从悬浮按钮继续或停止。"
                     else "将切换到 BOSS 直聘，界面变化后执行下一步（两步至少间隔 ${settings.stepDelayMs / 1000} 秒），今天最多再发起 ${maxOf(left, 0)} 条沟通。" +
                     "请先打开职位推荐列表。运行中保持亮屏；触碰 BOSS、离开 BOSS 或熄屏会暂停，可从悬浮按钮继续或停止。"
                 ConfirmDialog(title, body, ui.busy, { ui.close() }) {

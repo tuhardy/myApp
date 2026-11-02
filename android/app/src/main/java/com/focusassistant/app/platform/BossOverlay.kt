@@ -156,6 +156,14 @@ internal class BossOverlay(
         if (::maskButton.isInitialized) maskButton.text = if (enabled) "取消隐藏" else "隐藏"
     }
 
+    fun setGesturePassthrough(enabled: Boolean) {
+        val current = mask ?: return
+        if (current.parent == null) return
+        maskParams.flags = if (enabled) maskParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        else maskParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        runCatching { windowManager.updateViewLayout(current, maskParams) }
+    }
+
     fun hide() {
         mask?.let { runCatching { windowManager.removeView(it) } }
         mask = null

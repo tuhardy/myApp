@@ -2,6 +2,7 @@ package com.focusassistant.app.platform
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -11,6 +12,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Path
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
@@ -33,6 +35,7 @@ import com.focusassistant.app.domain.AutoApplyRules
 import com.focusassistant.app.domain.AutoApplyRun
 import com.focusassistant.app.domain.BossReading
 import com.focusassistant.app.domain.BossScreen
+import com.focusassistant.app.domain.StopCategory
 import com.focusassistant.app.domain.StopNotice
 import com.focusassistant.app.domain.JobPlatform
 import com.focusassistant.app.domain.PlatformReader
@@ -207,17 +210,28 @@ class BossAutomationService : AccessibilityService() {
         if (task != null) runCatching { halt(reason) }.onFailure { task = null } else BossAutomation.log(reason)
     }
 
-    /**
-     * 遮罩窗口会成为活动窗口，所以先在全部窗口里找目标 App 的根节点。
-     * 简历选择这类弹窗是目标 App 的另一个窗口，和详情页同时存在，必须取层级最高的那个，
-     * 否则只读到底下的详情页，弹窗一直识别不出来。
-     */
-    private fun targetRoot(): AccessibilityNodeInfo? {
+    /** 遮罩窗口会成为活动窗口，所以在全部窗口里找目标 App 的根节点，层级高的在前（弹窗盖在页面上）。 */
+    private fun targetRoots(): List<AccessibilityNodeInfo> {
         val target = platform.packageName
-        val top = runCatching {
-            windows.filter { it.root?.packageName?.toString() == target }.maxByOrNull { it.layer }?.root
-        }.getOrNull()
-        return top ?: rootInActiveWindow?.takeIf { it.packageName?.toString() == target }
+        val windowRoots = runCatching {
+            windows.filter { it.root?.packageName?.toString() == target }.sortedByDescending { it.layer }.mapNotNull { it.root }
+        }.getOrNull().orEmpty()
+        return windowRoots.ifEmpty { listOfNotNull(rootInActiveWindow?.takeIf { it.packageName?.toString() == target }) }
+    }
+
+    private fun targetRoot(): AccessibilityNodeInfo? = targetRoots().firstOrNull()
+
+    /**
+     * 简历选择这类弹窗是目标 App 的另一个窗口，和详情页同时存在；层级最高的窗口又可能是没有内容的
+     * 小浮层（提示条、输入法候选等），只取它会读不到职位列表。所以按层级从高到低挨个识别，
+     * 取第一个识别出具体界面的窗口；都认不出就用层级最高的那个，交给状态机超时处理。
+     * 点击路径必须相对同一个根节点，所以读到的 root 和 reading 一起返回。
+     */
+    private fun readTarget(): Pair<AccessibilityNodeInfo, BossReading>? {
+        val roots = targetRoots()
+        if (roots.isEmpty()) return null
+        val readings = roots.map { it to PlatformReader.read(platform, BossUiMap.snapshot(it, masked), System.currentTimeMillis()) }
+        return readings.firstOrNull { it.second.observation.screen != BossScreen.OTHER } ?: readings.first()
     }
 
     private fun handleEvent(event: AccessibilityEvent) {
@@ -336,6 +350,18 @@ class BossAutomationService : AccessibilityService() {
         BossAutomation.log(reason)
         NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID)
         if (current != BossTask.DIAGNOSE) notifyStopped(reason)
+        openJobAfterStop(current, reason)
+    }
+
+    /** 自动结束或异常停止后直接展示停止原因；用户主动停止时不抢占当前界面。 */
+    private fun openJobAfterStop(current: BossTask, reason: String) {
+        if (current == BossTask.DIAGNOSE || StopNotice.classify(reason) == StopCategory.USER_STOPPED) return
+        runCatching {
+            startActivity(Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra(MainActivity.EXTRA_JOB_STOP, true)
+            })
+        }.onFailure { BossAutomation.log("无法打开应用展示停止原因，请手动返回求职辅助页") }
     }
 
     internal fun pause(reason: String) {
@@ -426,15 +452,14 @@ class BossAutomationService : AccessibilityService() {
     private suspend fun tick() {
         if (run == null && resumeRun == null && zhaopinRun == null) return
         if (!getSystemService(PowerManager::class.java).isInteractive) return pause("屏幕已熄灭，已暂停；亮屏后点悬浮按钮继续")
-        val root = targetRoot()
-        val inTarget = root != null
-        if (!inTarget) {
+        val target = readTarget()
+        if (target == null) {
             if (seenTarget) return pause("已离开当前页面，已暂停；点悬浮按钮继续")
             if (SystemClock.elapsedRealtime() - startedAt > AutoApplyEngine.STEP_TIMEOUT_MS) halt("目标页面未打开，已停止")
             return
         }
         seenTarget = true
-        val reading = PlatformReader.read(platform, BossUiMap.snapshot(root!!, masked), System.currentTimeMillis())
+        val (root, reading) = target
         val seen = reading.observation.let { "${it.screen.name}${if (it.cards.isNotEmpty()) " · ${it.cards.size} 个职位" else ""}" }
         if (seen != lastScreen) { lastScreen = seen; BossAutomation.log("识别：$seen") }
         if (reading.observation.screen == BossScreen.JOB_LIST || reading.observation.screen == BossScreen.MESSAGE_LIST) sawList = true
@@ -506,14 +531,39 @@ class BossAutomationService : AccessibilityService() {
             }
             return halt(step.run.stopReason ?: "已停止")
         }
-        if (!performZhaopin(root, reading, step.action)) {
+        if (!performZhaopinWithRetry(root, reading, step.action)) {
             val failed = ZhaopinApplyEngine.fail(step.run, ZhaopinApplyEngine.failReason(step.action), System.currentTimeMillis()) { UUID.randomUUID().toString() }
             failed.record?.let { repository.addAutoApplyRecord(it) }
             halt(failed.run.stopReason ?: "已停止")
         }
     }
 
-    private fun performZhaopin(root: AccessibilityNodeInfo, reading: BossReading, action: ZhaopinAction): Boolean = when (action) {
+    /**
+     * 安全的智联动作失败后在原界面重试，间隔仍使用用户设置的固定值。
+     * 若界面已经变化，说明动作可能实际生效，直接交给状态机核对，不重复执行。
+     */
+    private suspend fun performZhaopinWithRetry(root: AccessibilityNodeInfo, reading: BossReading, action: ZhaopinAction): Boolean {
+        var currentRoot = root
+        var currentReading = reading
+        repeat(ZhaopinApplyEngine.MAX_ACTION_RETRIES + 1) { attempt ->
+            if (performZhaopin(currentRoot, currentReading, action)) return true
+            if (attempt == ZhaopinApplyEngine.MAX_ACTION_RETRIES || !ZhaopinApplyEngine.canRetry(action)) return false
+            val retry = attempt + 1
+            BossAutomation.log("界面操作未执行，进行第 $retry/${ZhaopinApplyEngine.MAX_ACTION_RETRIES} 次重试")
+            delay(repository.state.value.autoApply.settings.stepDelayMs)
+            if (task == null || paused != null) return true
+            val latest = readTarget() ?: return false
+            if (latest.second.observation.screen != reading.observation.screen) {
+                BossAutomation.log("界面已变化，取消重试并继续核对")
+                return true
+            }
+            currentRoot = latest.first
+            currentReading = latest.second
+        }
+        return false
+    }
+
+    private suspend fun performZhaopin(root: AccessibilityNodeInfo, reading: BossReading, action: ZhaopinAction): Boolean = when (action) {
         ZhaopinAction.Wait -> true
         is ZhaopinAction.OpenCard -> clickPath(root, reading.cardPaths.getOrNull(action.index))
         ZhaopinAction.TapApply -> clickPath(root, reading.contactPath)
@@ -521,6 +571,7 @@ class BossAutomationService : AccessibilityService() {
         ZhaopinAction.Confirm -> clickPath(root, reading.confirmPath)
         ZhaopinAction.Back -> { lastActionAt = SystemClock.elapsedRealtime(); performGlobalAction(GLOBAL_ACTION_BACK) }
         ZhaopinAction.ScrollList -> scrollList(root, reading)
+        ZhaopinAction.RefreshList -> refreshList(root, reading)
     }
 
     private fun clickPath(root: AccessibilityNodeInfo, path: List<Int>?): Boolean {
@@ -546,12 +597,50 @@ class BossAutomationService : AccessibilityService() {
         ResumeAction.ScrollList -> scrollList(root, reading)
     }
 
-    /** 列表到底时滚动会返回 false，这不算找不到元素；没有新内容由状态机的空滚计数停止。 */
+    /** 列表到底时滚动会返回 false，这不算找不到元素；没有新内容由状态机的空滚计数触发刷新。 */
     private fun scrollList(root: AccessibilityNodeInfo, reading: BossReading): Boolean {
         val list = reading.listPath?.let { BossUiMap.find(root, it) } ?: return false
         lastActionAt = SystemClock.elapsedRealtime()
         list.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
         return true
+    }
+
+    /** 空滚达到阈值后回到顶部，只在确认列表还能向后滚动或已到顶部时下拉；不做随机手势。 */
+    private suspend fun refreshList(root: AccessibilityNodeInfo, reading: BossReading): Boolean {
+        var currentRoot = root
+        var currentReading = reading
+        repeat(MAX_REFRESH_SCROLLS) {
+            if (task == null || paused != null) return true
+            val list = currentReading.listPath?.let { BossUiMap.find(currentRoot, it) } ?: return false
+            if (AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD !in list.actionList) return false
+            lastActionAt = SystemClock.elapsedRealtime()
+            if (!list.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)) {
+                val metrics = resources.displayMetrics
+                val x = metrics.widthPixels / 2f
+                val path = Path().apply {
+                    moveTo(x, metrics.heightPixels * REFRESH_START_RATIO)
+                    lineTo(x, metrics.heightPixels * REFRESH_END_RATIO)
+                }
+                val gesture = GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0, REFRESH_GESTURE_MS)).build()
+                overlay?.setGesturePassthrough(true)
+                try {
+                    lastActionAt = SystemClock.elapsedRealtime()
+                    val dispatched = dispatchGesture(gesture, null, null)
+                    if (dispatched) delay(REFRESH_SETTLE_MS)
+                    return dispatched
+                } finally {
+                    overlay?.setGesturePassthrough(false)
+                    lastActionAt = SystemClock.elapsedRealtime()
+                }
+            }
+            delay(repository.state.value.autoApply.settings.stepDelayMs)
+            val target = readTarget() ?: return false
+            if (target.second.observation.screen != BossScreen.JOB_LIST) return false
+            currentRoot = target.first
+            currentReading = target.second
+        }
+        return false
     }
 
     private suspend fun perform(root: AccessibilityNodeInfo, reading: BossReading, action: AutoApplyAction): Boolean {
@@ -562,6 +651,7 @@ class BossAutomationService : AccessibilityService() {
             AutoApplyAction.TapContact -> click(reading.contactPath)
             AutoApplyAction.Back -> { lastActionAt = SystemClock.elapsedRealtime(); performGlobalAction(GLOBAL_ACTION_BACK) }
             AutoApplyAction.ScrollList -> scrollList(root, reading)
+            AutoApplyAction.RefreshList -> refreshList(root, reading)
             is AutoApplyAction.SendGreeting -> {
                 val input = reading.inputPath?.let { BossUiMap.find(root, it) } ?: return false
                 lastActionAt = SystemClock.elapsedRealtime()
@@ -570,8 +660,7 @@ class BossAutomationService : AccessibilityService() {
                 if (!typed) return false
                 // 输入后发送按钮才出现，等界面刷新再重新读取一次。
                 delay(SEND_SETTLE_MS)
-                val fresh = targetRoot() ?: return false
-                val again = PlatformReader.read(JobPlatform.BOSS, BossUiMap.snapshot(fresh, masked), System.currentTimeMillis())
+                val (fresh, again) = readTarget() ?: return false
                 val send = again.sendPath?.let { BossUiMap.find(fresh, it) } ?: return false
                 var node: AccessibilityNodeInfo = send
                 while (!node.isClickable) node = node.parent ?: return false
@@ -583,7 +672,8 @@ class BossAutomationService : AccessibilityService() {
 
     private fun capture() {
         if (task != BossTask.DIAGNOSE) return
-        val root = targetRoot() ?: run { BossAutomation.log("当前不是${platform.short}界面，未记录"); return }
+        // 诊断按识别结果挑窗口，和真实执行一致，避免只记到弹窗底下的页面。
+        val root = readTarget()?.first ?: run { BossAutomation.log("当前不是${platform.short}界面，未记录"); return }
         val page = BossUiMap.diagnostic(BossUiMap.snapshot(root, false), platform, BossUiMap.installedVersion(this, platform), System.currentTimeMillis())
         val count = synchronized(BossAutomation.diagnosticPages) {
             if (BossAutomation.diagnosticPages.size >= MAX_DIAGNOSTIC_PAGES) BossAutomation.diagnosticPages.removeAt(0)
@@ -649,6 +739,11 @@ class BossAutomationService : AccessibilityService() {
         const val FALLBACK_MS = 1_000L
         const val OWN_EVENT_WINDOW_MS = 2_500L
         const val SEND_SETTLE_MS = 500L
+        const val REFRESH_GESTURE_MS = 350L
+        const val REFRESH_SETTLE_MS = 600L
+        const val REFRESH_START_RATIO = 0.30f
+        const val REFRESH_END_RATIO = 0.65f
+        const val MAX_REFRESH_SCROLLS = 40
         const val MAX_DIAGNOSTIC_PAGES = 20
     }
 }

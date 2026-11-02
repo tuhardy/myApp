@@ -385,7 +385,7 @@ private fun ContactSection(auto: AutoApplyPanel, actions: AutoApplyActions, busy
     val calibrated = auto.appVersion != null && AutoApplyRules.calibratedFor(auto.settings, platform) == auto.appVersion
     Column(cardModifier().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionTitle(if (zhaopin) "智联自动投递" else "自动沟通", "今日 ${auto.todayCount}/${AutoApplyRules.limitFor(auto.settings, platform)}")
-        Text(if (zhaopin) "在智联职位列表里按规则打开职位、点「申请职位」；需要选简历时按「我的简历」选择同名简历后确认。"
+        Text(if (zhaopin) "在智联职位列表里按规则打开职位、点「申请职位」；需要选简历时优先按「我的简历」选择，未配置时使用智联当前选中的默认简历。"
             else "在职位推荐列表里按规则打开职位、点「立即沟通」并发送招呼语。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
         PresetChips(auto.settings, enabled = !busy && !running, actions)
         if (running && auto.settings.presets.isNotEmpty()) DisabledHint("运行中不能切换方案")
@@ -427,7 +427,7 @@ private fun ResumeSection(auto: AutoApplyPanel, actions: AutoApplyActions, busy:
     Column(cardModifier().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (zhaopin) {
             SectionTitle("投递用简历", "两个平台共用")
-            Text("智联投递时直接附带简历，不需要等回复。弹出简历选择时按岗位关键词选简历，没命中用默认简历；找不到同名简历会停止，不投递。",
+            Text("智联投递时直接附带简历，不需要等回复。优先按岗位关键词和默认配置选择；未配置时使用智联当前选中的默认简历。配置后找不到同名简历会停止，不投递。",
                 color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
         } else {
             SectionTitle("自动发简历", "今日 ${auto.resumeTodayCount}/${auto.settings.dailyLimit} · 待回复 ${auto.awaitingResume}")
@@ -438,7 +438,8 @@ private fun ResumeSection(auto: AutoApplyPanel, actions: AutoApplyActions, busy:
             Text("我的简历", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).semantics { heading() })
             Text("${resumes.size}/${AutoApplyRules.MAX_RESUMES}", color = Muted, fontSize = 12.sp)
         }
-        if (resumes.isEmpty()) Text("还没有简历。名称要和招聘 App 里的简历名称一致，例如 BOSS 附件「张三-Android.pdf」。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+        if (resumes.isEmpty()) Text(if (zhaopin) "还没有配置简历。智联会使用弹窗中当前选中的默认简历；如需按岗位指定，请添加同名简历。"
+            else "还没有简历。名称要和 BOSS 附件里的文件名一致，例如「张三-Android.pdf」。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
         resumes.forEachIndexed { index, resume ->
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).border(1.dp, JobLine, RoundedCornerShape(12.dp)).padding(start = 12.dp, top = 10.dp, bottom = 4.dp, end = 4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -460,7 +461,7 @@ private fun ResumeSection(auto: AutoApplyPanel, actions: AutoApplyActions, busy:
         OutlinedButton(onClick = actions.addResume, enabled = !busy && !running && resumes.size < AutoApplyRules.MAX_RESUMES, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Outlined.Add, null, modifier = Modifier.size(16.dp)); Text("添加简历")
         }
-        if (resumes.isNotEmpty() && resumes.none { it.isDefault }) Text(if (zhaopin) "没有默认简历：关键词都没命中、且智联要求选简历时会停止。" else "没有默认简历：关键词都没命中的会话会跳过。",
+        if (resumes.isNotEmpty() && resumes.none { it.isDefault }) Text(if (zhaopin) "没有默认简历：关键词都没命中时使用智联当前选中的默认简历。" else "没有默认简历：关键词都没命中的会话会跳过。",
             color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
         // 智联没有回复后发简历，只管理共用的「我的简历」。
         if (!zhaopin) {

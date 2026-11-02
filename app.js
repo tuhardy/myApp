@@ -3970,7 +3970,7 @@
     const limit = FocusModel.autoApplyLimit(settings, platform);
     $("auto-contact-title").textContent = zhaopin ? "智联自动投递" : "自动沟通";
     $("auto-contact-intro").textContent = zhaopin
-      ? "在智联职位列表里按规则打开职位、点“申请职位”；需要选简历时按「我的简历」选择同名简历后确认。遇到验证、登录或次数上限立即停止，不识别验证码。"
+      ? "在智联职位列表里按规则打开职位、点“申请职位”；需要选简历时优先按「我的简历」选择，未配置时使用智联当前选中的默认简历。遇到验证、登录或次数上限立即停止，不识别验证码。"
       : "在职位推荐列表里按规则打开职位、点“立即沟通”并发送招呼语。遇到验证、登录或次数上限立即停止，不识别验证码。";
     $("auto-rules-title").textContent = zhaopin ? "投递规则 ›" : "沟通规则 ›";
     $("auto-apply-start").textContent = zhaopin ? "开始投递" : "开始沟通";
@@ -4084,15 +4084,17 @@
     const zhaopin = settings.platform === "zhaopin";
     $("auto-resume-title").textContent = zhaopin ? "投递用简历" : "自动发简历";
     $("auto-resume-intro").textContent = zhaopin
-      ? "智联投递时直接附带简历，不需要等回复。弹出简历选择时按岗位关键词选简历，没命中用默认简历；找不到同名简历会停止，不投递。"
+      ? "智联投递时直接附带简历，不需要等回复。优先按岗位关键词和默认配置选择；未配置时使用智联当前选中的默认简历。配置后找不到同名简历会停止，不投递。"
       : "对方回复后才能发附件简历。只处理本应用自动沟通过、会话有新消息的公司，不读消息内容；按岗位关键词选简历，没命中用默认简历。";
     // 智联没有回复后发简历，只管理两个平台共用的「我的简历」。
     $("auto-resume-actions").hidden = zhaopin;
-    $("auto-resume-default-hint").textContent = zhaopin ? "没有默认简历：关键词都没命中、且智联要求选简历时会停止。" : "没有默认简历：关键词都没命中的会话会跳过。";
+    $("auto-resume-default-hint").textContent = zhaopin ? "没有默认简历：关键词都没命中时使用智联当前选中的默认简历。" : "没有默认简历：关键词都没命中的会话会跳过。";
     $("auto-resume-today").textContent = zhaopin ? "两个平台共用" : `今日 ${FocusModel.resumesSentOn(auto.records, today)}/${settings.dailyLimit} · 待回复 ${FocusModel.awaitingResume(auto.records).length}`;
     $("auto-resume-total").textContent = `${resumes.length}/${FocusModel.AUTO_APPLY_LIMITS.maxResumes}`;
     const list = $("auto-resume-list");
-    if (!resumes.length) list.replaceChildren(element("li", "auto-resume-empty", "还没有简历。名称要和招聘 App 里的简历名称一致，例如 BOSS 附件「张三-Android.pdf」。"));
+    if (!resumes.length) list.replaceChildren(element("li", "auto-resume-empty", zhaopin
+      ? "还没有配置简历。智联会使用弹窗中当前选中的默认简历；如需按岗位指定，请添加同名简历。"
+      : "还没有简历。名称要和 BOSS 附件里的文件名一致，例如「张三-Android.pdf」。"));
     else list.replaceChildren(...resumes.map((resume, index) => {
       const item = element("li", "auto-resume-item");
       const head = element("div", "auto-resume-item-head");
@@ -5316,7 +5318,7 @@
     const platform = settings.platform;
     const left = Math.max(FocusModel.autoApplyLimit(settings, platform) - FocusModel.autoApplyContactedOn(state.autoApply.records, localDateKey(new Date()), platform), 0);
     if (platform === "zhaopin") {
-      confirmAction("开始智联自动投递？", `Android 版将切换到智联招聘，界面变化后执行下一步（两步至少间隔 ${settings.stepDelaySeconds} 秒），今天最多再投递 ${left} 个职位；需要选简历时按「我的简历」选择同名简历，找不到会停止。运行中保持亮屏；触碰智联、离开智联或熄屏会暂停，可从悬浮按钮继续或停止。原型只模拟结果，不操作任何 App。`, () => runAutoApply(false), "开始");
+      confirmAction("开始智联自动投递？", `Android 版将切换到智联招聘，界面变化后执行下一步（两步至少间隔 ${settings.stepDelaySeconds} 秒），今天最多再投递 ${left} 个职位；未配置简历时使用智联当前选中的默认简历，配置后找不到同名简历会停止。运行中保持亮屏；触碰智联、离开智联或熄屏会暂停，可从悬浮按钮继续或停止。原型只模拟结果，不操作任何 App。`, () => runAutoApply(false), "开始");
       return;
     }
     confirmAction("开始自动沟通？", `Android 版将切换到 BOSS 直聘，界面变化后执行下一步（两步至少间隔 ${settings.stepDelaySeconds} 秒），今天最多再发起 ${left} 条沟通。运行中保持亮屏；触碰 BOSS、离开 BOSS 或熄屏会暂停，可从悬浮按钮继续或停止。原型只模拟结果，不操作任何 App。`, () => runAutoApply(false), "开始");

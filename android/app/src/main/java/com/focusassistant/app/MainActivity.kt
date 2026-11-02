@@ -13,6 +13,7 @@ import com.focusassistant.app.ui.FocusApp
 
 class MainActivity : ComponentActivity() {
     private var quickHideToken by mutableIntStateOf(0)
+    private var jobStopToken by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -21,7 +22,7 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.DKGRAY),
             navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.DKGRAY)
         )
-        setContent { FocusApp((application as FocusApplication).repository, quickHideToken = quickHideToken) }
+        setContent { FocusApp((application as FocusApplication).repository, quickHideToken = quickHideToken, jobStopToken = jobStopToken) }
     }
 
     override fun onNewIntent(intent: android.content.Intent) {
@@ -31,9 +32,11 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: android.content.Intent?) {
         if (intent?.getBooleanExtra(EXTRA_QUICK_HIDE, false) == true) quickHideToken++
+        if (intent?.getBooleanExtra(EXTRA_JOB_STOP, false) == true) jobStopToken++
     }
 
     companion object {
         const val EXTRA_QUICK_HIDE = "quick_hide"
+        const val EXTRA_JOB_STOP = "job_stop"
     }
 }

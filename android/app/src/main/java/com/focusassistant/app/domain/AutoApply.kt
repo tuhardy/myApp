@@ -16,7 +16,7 @@ enum class StopCategory { NO_JOBS, NEED_RETURN_TO_LIST, NEED_USER_ACTION, LIMIT_
 object StopNotice {
     fun classify(reason: String): StopCategory = when {
         reason.startsWith("内部错误") -> StopCategory.INTERNAL_ERROR
-        reason.contains("列表没有更多新职位") || reason.contains("没有更多待发简历") -> StopCategory.NO_JOBS
+        reason.contains("没有更多新职位") || reason.contains("没有更多待发简历") -> StopCategory.NO_JOBS
         reason.contains("没有识别到职位列表") || reason.contains("没有识别到消息列表") -> StopCategory.NEED_RETURN_TO_LIST
         reason.contains("已达到") && reason.contains("上限") -> StopCategory.LIMIT_REACHED
         reason == "已手动停止" || reason == "已从通知停止" || reason == "诊断已结束" -> StopCategory.USER_STOPPED
@@ -537,6 +537,10 @@ object ZhaopinScreenReader {
             return BossReading(obs(BossScreen.LIMIT_REACHED))
         }
         if (labels.any { label -> doneWords.any { label.contains(it) } }) return BossReading(obs(BossScreen.APPLY_DONE))
+        // 智联 8.15.12 投递成功后会直接进入沟通页。只按固定控件 ID 识别，不读取聊天内容。
+        val chatInput = nodes.any { it.editable && it.viewId.endsWith("/editTextMessage") }
+        val chatSend = nodes.any { it.viewId.endsWith("/sendLayout") }
+        if (chatInput && chatSend) return BossReading(obs(BossScreen.CHAT))
         val confirm = nodes.firstOrNull { it.label.trim() in confirmLabels } ?: nodes.firstOrNull { it.label.trim() == "确定" || it.label.trim() == "确认" }
         // 标题可能带「请」等前后缀（真机为「请选择要投递的简历」），按包含匹配。
         if (labels.any { label -> pickerTitles.any { label.contains(it) } }) {
@@ -586,6 +590,7 @@ sealed interface AutoApplyAction {
     data class SendGreeting(val text: String) : AutoApplyAction
     data object Back : AutoApplyAction
     data object ScrollList : AutoApplyAction
+    data object RefreshList : AutoApplyAction
     data object Wait : AutoApplyAction
 }
 
@@ -598,6 +603,7 @@ data class AutoApplyRun(
     val target: JobCard? = null,
     val seen: Set<String> = emptySet(),
     val idleScrolls: Int = 0,
+    val refreshes: Int = 0,
     val backs: Int = 0,
     val contacted: Int = 0,
     val stopReason: String? = null,
@@ -609,6 +615,7 @@ data class AutoApplyStep(val run: AutoApplyRun, val action: AutoApplyAction = Au
 object AutoApplyEngine {
     const val STEP_TIMEOUT_MS = 20_000L
     const val MAX_IDLE_SCROLLS = 3
+    const val MAX_IDLE_REFRESHES = 3
     const val MAX_BACKS = 3
 
     fun start(mode: AutoApplyMode, now: Long) = AutoApplyRun(mode, phaseSince = now)
@@ -689,16 +696,22 @@ object AutoApplyEngine {
         val used = AutoApplyRules.contactedOn(records, day, zone)
         if (used >= settings.dailyLimit) return AutoApplyStep(stop(run, "已达到今日上限 ${settings.dailyLimit} 条，已停止", now), log = "已达到今日上限")
         val fresh = obs.cards.withIndex().filter { AutoApplyRules.jobKey(it.value) !in run.seen }
-        val seen = run.seen + fresh.map { AutoApplyRules.jobKey(it.value) }
         val pick = fresh.firstOrNull { decisions[it.index].decision == AutoApplyDecision.Apply }
         if (pick != null) {
-            return AutoApplyStep(run.copy(phase = AutoApplyPhase.OPENING, phaseSince = now, target = pick.value, seen = seen, idleScrolls = 0),
+            // 只标记本次打开的职位；其余符合条件的职位留到返回列表后继续处理。
+            val seen = run.seen + AutoApplyRules.jobKey(pick.value)
+            return AutoApplyStep(run.copy(phase = AutoApplyPhase.OPENING, phaseSince = now, target = pick.value, seen = seen, idleScrolls = 0, refreshes = 0),
                 AutoApplyAction.OpenCard(pick.index), log = "打开「${pick.value.position} · ${pick.value.company}」")
         }
+        val seen = run.seen + fresh.map { AutoApplyRules.jobKey(it.value) }
         val idle = if (fresh.isEmpty()) run.idleScrolls + 1 else 0
-        if (idle >= MAX_IDLE_SCROLLS) return AutoApplyStep(stop(run, "列表没有更多新职位，已停止", now), log = "列表没有更多新职位")
+        if (idle >= MAX_IDLE_SCROLLS) {
+            if (run.refreshes >= MAX_IDLE_REFRESHES) return AutoApplyStep(stop(run, "刷新后仍没有更多新职位，已停止", now), log = "多次刷新后仍没有更多新职位")
+            return AutoApplyStep(run.copy(seen = seen, idleScrolls = 0, refreshes = run.refreshes + 1, phaseSince = now),
+                AutoApplyAction.RefreshList, log = "没有新职位，回到顶部刷新列表")
+        }
         val skipped = fresh.size
-        return AutoApplyStep(run.copy(seen = seen, idleScrolls = idle, phaseSince = now), AutoApplyAction.ScrollList,
+        return AutoApplyStep(run.copy(seen = seen, idleScrolls = idle, refreshes = if (fresh.isNotEmpty()) 0 else run.refreshes, phaseSince = now), AutoApplyAction.ScrollList,
             log = if (skipped > 0) "跳过 $skipped 个不符合条件的职位" else null)
     }
 }
@@ -870,10 +883,10 @@ object ResumeEngine {
 }
 
 /**
- * 智联自动投递：职位列表 → 详情 → 点「申请职位」→（弹出时）按名称选简历 → 确认 → 看到成功或按钮变为「已申请」→ 返回。
- * 投递即附带简历，不做回复后发简历，不读消息页。弹出简历选择时核对不到同名简历就停止，不发送。
+ * 智联自动投递：职位列表 → 详情 → 点「申请职位」→（弹出时）按名称选简历；未配置时使用当前选中项 → 确认 → 看到成功或按钮变为「已申请」→ 返回。
+ * 投递即附带简历，不做回复后发简历，不读消息页。配置了简历但核对不到同名选项时停止，不发送。
  */
-enum class ZhaopinPhase { SCANNING, OPENING, APPLYING, PICKING, SUBMITTING, RETURNING, STOPPED }
+enum class ZhaopinPhase { SCANNING, OPENING, APPLYING, PICKING, SUBMITTING, CONFIRMING, RETURNING, STOPPED }
 
 sealed interface ZhaopinAction {
     data class OpenCard(val index: Int) : ZhaopinAction
@@ -882,6 +895,7 @@ sealed interface ZhaopinAction {
     data object Confirm : ZhaopinAction
     data object Back : ZhaopinAction
     data object ScrollList : ZhaopinAction
+    data object RefreshList : ZhaopinAction
     data object Wait : ZhaopinAction
 }
 
@@ -890,10 +904,11 @@ data class ZhaopinRun(
     val phase: ZhaopinPhase = ZhaopinPhase.SCANNING,
     val phaseSince: Long,
     val target: JobCard? = null,
-    /** 为空表示没有匹配的简历；智联弹出简历选择时会因此停止。 */
+    /** 为空表示没有配置匹配简历；弹出选择时使用智联当前选中的默认简历。 */
     val resumeName: String = "",
     val seen: Set<String> = emptySet(),
     val idleScrolls: Int = 0,
+    val refreshes: Int = 0,
     val backs: Int = 0,
     val applied: Int = 0,
     val stopReason: String? = null,
@@ -903,6 +918,8 @@ data class ZhaopinRun(
 data class ZhaopinStep(val run: ZhaopinRun, val action: ZhaopinAction = ZhaopinAction.Wait, val record: AutoApplyRecord? = null, val log: String? = null)
 
 object ZhaopinApplyEngine {
+    const val MAX_ACTION_RETRIES = 2
+
     fun start(mode: AutoApplyMode, now: Long) = ZhaopinRun(mode, phaseSince = now)
 
     fun stop(run: ZhaopinRun, reason: String, now: Long): ZhaopinRun =
@@ -910,7 +927,8 @@ object ZhaopinApplyEngine {
 
     /** 暂停后继续：扫描中原地继续；其余先回列表。点过投递后被暂停的职位已在 seen 中，本次不再处理，宁可漏投也不重复投。 */
     fun resume(run: ZhaopinRun, now: Long): ZhaopinStep {
-        val uncertain = run.phase == ZhaopinPhase.APPLYING || run.phase == ZhaopinPhase.PICKING || run.phase == ZhaopinPhase.SUBMITTING
+        val uncertain = run.phase == ZhaopinPhase.APPLYING || run.phase == ZhaopinPhase.PICKING ||
+            run.phase == ZhaopinPhase.SUBMITTING || run.phase == ZhaopinPhase.CONFIRMING
         val name = run.target?.let { "「${it.position} · ${it.company}」" }.orEmpty()
         return when (run.phase) {
             ZhaopinPhase.STOPPED -> ZhaopinStep(run)
@@ -939,8 +957,9 @@ object ZhaopinApplyEngine {
         val name = run.target?.let { "「${it.position} · ${it.company}」" }.orEmpty()
         fun done() = ZhaopinStep(returning(run.applied + 1), ZhaopinAction.Back,
             record(AutoApplyResult.APPLIED, if (run.resumeName.isBlank()) "智联默认简历" else "简历：${run.resumeName}"), "已投递$name")
-        // 成功提示可能一闪而过，回到详情页且按钮变为「已申请」同样视为投递完成。
-        fun finished() = obs.screen == BossScreen.APPLY_DONE || (obs.screen == BossScreen.JOB_DETAIL && obs.alreadyContacted)
+        // 成功提示可能一闪而过；回到详情页变为「已申请」或进入智联沟通页，同样视为投递完成。
+        fun finished() = obs.screen == BossScreen.APPLY_DONE || obs.screen == BossScreen.CHAT ||
+            (obs.screen == BossScreen.JOB_DETAIL && obs.alreadyContacted)
         return when (run.phase) {
             ZhaopinPhase.SCANNING -> scan(run, obs, settings, records, zone)
             ZhaopinPhase.OPENING -> when (obs.screen) {
@@ -955,10 +974,14 @@ object ZhaopinApplyEngine {
             ZhaopinPhase.APPLYING -> when {
                 finished() -> done()
                 obs.screen == BossScreen.RESUME_PICKER -> {
-                    if (run.resumeName.isBlank()) return halt("智联要求选择简历，但没有匹配$name 的简历，也没有默认简历；已停止，未投递")
-                    val index = obs.resumeOptions.indexOfFirst { AutoApplyRules.resumeNameMatches(it, run.resumeName) }
-                    if (index < 0) halt("智联里没有名为「${run.resumeName}」的简历，已停止，未投递；请核对「我的简历」里的名称")
-                    else ZhaopinStep(run.copy(phase = ZhaopinPhase.PICKING, phaseSince = now), ZhaopinAction.PickResume(index))
+                    if (run.resumeName.isBlank()) {
+                        ZhaopinStep(run.copy(phase = ZhaopinPhase.SUBMITTING, phaseSince = now), ZhaopinAction.Confirm,
+                            log = "未配置匹配简历，使用智联当前选中的默认简历")
+                    } else {
+                        val index = obs.resumeOptions.indexOfFirst { AutoApplyRules.resumeNameMatches(it, run.resumeName) }
+                        if (index < 0) halt("智联里没有名为「${run.resumeName}」的简历，已停止，未投递；请核对「我的简历」里的名称")
+                        else ZhaopinStep(run.copy(phase = ZhaopinPhase.PICKING, phaseSince = now), ZhaopinAction.PickResume(index))
+                    }
                 }
                 obs.screen == BossScreen.RESUME_CONFIRM -> ZhaopinStep(run.copy(phase = ZhaopinPhase.SUBMITTING, phaseSince = now), ZhaopinAction.Confirm)
                 else -> waitOrTimeout()
@@ -969,7 +992,14 @@ object ZhaopinApplyEngine {
                 obs.screen == BossScreen.RESUME_CONFIRM -> ZhaopinStep(run.copy(phase = ZhaopinPhase.SUBMITTING, phaseSince = now), ZhaopinAction.Confirm)
                 else -> waitOrTimeout()
             }
-            ZhaopinPhase.SUBMITTING -> if (finished()) done() else waitOrTimeout()
+            ZhaopinPhase.SUBMITTING -> when {
+                finished() -> done()
+                // 部分版本还有第二个确认框，只再确认一次；仍不变化就等待并超时，不反复点最终提交。
+                obs.screen == BossScreen.RESUME_CONFIRM && obs.hasConfirm ->
+                    ZhaopinStep(run.copy(phase = ZhaopinPhase.CONFIRMING, phaseSince = now), ZhaopinAction.Confirm)
+                else -> waitOrTimeout()
+            }
+            ZhaopinPhase.CONFIRMING -> if (finished()) done() else waitOrTimeout()
             ZhaopinPhase.RETURNING -> when (obs.screen) {
                 BossScreen.JOB_LIST -> scan(run.copy(phase = ZhaopinPhase.SCANNING, phaseSince = now, target = null, resumeName = "", backs = 0), obs, settings, records, zone)
                 else -> if (run.backs >= AutoApplyEngine.MAX_BACKS) halt("无法返回职位列表，已停止") else ZhaopinStep(run.copy(backs = run.backs + 1), ZhaopinAction.Back)
@@ -979,10 +1009,18 @@ object ZhaopinApplyEngine {
     }
 
     fun fail(run: ZhaopinRun, reason: String, now: Long, newId: () -> String): ZhaopinStep {
-        val record = run.target?.takeIf { run.mode == AutoApplyMode.LIVE }?.let {
+        // 返回列表失败不能覆盖此前已经确认的投递结果，也不再追加一条矛盾的 FAILED 记录。
+        val record = run.target?.takeIf { run.mode == AutoApplyMode.LIVE && run.phase != ZhaopinPhase.RETURNING }?.let {
             AutoApplyRecord(newId(), AutoApplyRules.jobKey(it), it.company, it.position, it.salary, now, AutoApplyResult.FAILED, reason.take(200), platform = JobPlatform.ZHAOPIN)
         }
         return ZhaopinStep(stop(run, reason, now), record = record, log = reason)
+    }
+
+    /** 只重试不会改变投递结果的动作；申请和最终确认可能已提交，绝不自动重复点击。 */
+    fun canRetry(action: ZhaopinAction): Boolean = when (action) {
+        is ZhaopinAction.OpenCard, is ZhaopinAction.PickResume,
+        ZhaopinAction.Back, ZhaopinAction.ScrollList, ZhaopinAction.RefreshList -> true
+        ZhaopinAction.TapApply, ZhaopinAction.Confirm, ZhaopinAction.Wait -> false
     }
 
     /** 动作没能执行时的停止原因，写明卡在哪一步，便于对照界面诊断。 */
@@ -993,6 +1031,7 @@ object ZhaopinApplyEngine {
         ZhaopinAction.Confirm -> "找不到可点击的确认投递按钮"
         ZhaopinAction.Back -> "返回操作没有执行"
         ZhaopinAction.ScrollList -> "找不到职位列表，无法滚动"
+        ZhaopinAction.RefreshList -> "无法回到顶部刷新职位列表"
         ZhaopinAction.Wait -> "界面操作没有执行"
     } + "，已停止；智联界面可能已更新，请在当前页面做界面诊断"
 
@@ -1014,15 +1053,21 @@ object ZhaopinApplyEngine {
             return ZhaopinStep(stop(run, "已达到智联今日上限 $limit 条，已停止", now), log = "已达到智联今日上限")
         }
         val fresh = obs.cards.withIndex().filter { AutoApplyRules.jobKey(it.value) !in run.seen }
-        val seen = run.seen + fresh.map { AutoApplyRules.jobKey(it.value) }
         val pick = fresh.firstOrNull { decisions[it.index].decision == AutoApplyDecision.Apply }
         if (pick != null) {
-            return ZhaopinStep(run.copy(phase = ZhaopinPhase.OPENING, phaseSince = now, target = pick.value, seen = seen, idleScrolls = 0),
+            // 与 BOSS 相同：返回列表后先处理当前页其余职位，全部处理完才滚动。
+            val seen = run.seen + AutoApplyRules.jobKey(pick.value)
+            return ZhaopinStep(run.copy(phase = ZhaopinPhase.OPENING, phaseSince = now, target = pick.value, seen = seen, idleScrolls = 0, refreshes = 0),
                 ZhaopinAction.OpenCard(pick.index), log = "打开「${pick.value.position} · ${pick.value.company}」")
         }
+        val seen = run.seen + fresh.map { AutoApplyRules.jobKey(it.value) }
         val idle = if (fresh.isEmpty()) run.idleScrolls + 1 else 0
-        if (idle >= AutoApplyEngine.MAX_IDLE_SCROLLS) return ZhaopinStep(stop(run, "列表没有更多新职位，已停止", now), log = "列表没有更多新职位")
-        return ZhaopinStep(run.copy(seen = seen, idleScrolls = idle, phaseSince = now), ZhaopinAction.ScrollList,
+        if (idle >= AutoApplyEngine.MAX_IDLE_SCROLLS) {
+            if (run.refreshes >= AutoApplyEngine.MAX_IDLE_REFRESHES) return ZhaopinStep(stop(run, "刷新后仍没有更多新职位，已停止", now), log = "多次刷新后仍没有更多新职位")
+            return ZhaopinStep(run.copy(seen = seen, idleScrolls = 0, refreshes = run.refreshes + 1, phaseSince = now),
+                ZhaopinAction.RefreshList, log = "没有新职位，回到顶部刷新列表")
+        }
+        return ZhaopinStep(run.copy(seen = seen, idleScrolls = idle, refreshes = if (fresh.isNotEmpty()) 0 else run.refreshes, phaseSince = now), ZhaopinAction.ScrollList,
             log = if (fresh.isNotEmpty()) "跳过 ${fresh.size} 个不符合条件的职位" else null)
     }
 }
