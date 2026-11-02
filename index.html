@@ -186,10 +186,11 @@
           </section>
           <section class="page" id="page-music" aria-labelledby="music-heading" hidden>
             <header class="music-header" id="music-main-header">
-              <div class="page-header music-title-row"><div><p class="overline">流行歌单与日常收听</p><h2 id="music-heading">声音馆<span class="heading-dot">.</span></h2></div><div class="header-actions"><button class="icon-button music-square-button" id="music-history" type="button" aria-label="查看收听回顾"><svg class="icon"><use href="#i-chart"/></svg></button><button class="icon-button music-add-button" id="music-add" type="button" aria-label="添加歌曲，界面演示"><svg class="icon"><use href="#i-plus"/></svg></button></div></div>
+              <div class="page-header music-title-row"><div><p class="overline">流行歌单与日常收听</p><h2 id="music-heading">声音馆<span class="heading-dot">.</span></h2></div><div class="header-actions"><button class="icon-button music-square-button" id="music-history" type="button" aria-label="查看收听回顾"><svg class="icon"><use href="#i-chart"/></svg></button><button class="icon-button music-add-button" id="music-add" type="button" aria-label="导入 B 站音频"><svg class="icon"><use href="#i-plus"/></svg></button></div></div>
               <label class="music-search"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><span class="sr-only">搜索歌名或歌手</span><input id="music-search" type="search" placeholder="搜索歌名或歌手" autocomplete="off"></label>
               <div class="music-tabs" role="tablist" aria-label="音乐分区"><button type="button" role="tab" id="music-tab-recommend" data-music-tab="recommend" aria-controls="music-panel-recommend" aria-selected="true">推荐</button><button type="button" role="tab" id="music-tab-playlists" data-music-tab="playlists" aria-controls="music-panel-playlists" aria-selected="false" tabindex="-1">歌单</button><button type="button" role="tab" id="music-tab-songs" data-music-tab="songs" aria-controls="music-panel-songs" aria-selected="false" tabindex="-1">歌曲</button><button type="button" role="tab" id="music-tab-history" data-music-tab="history" aria-controls="music-panel-history" aria-selected="false" tabindex="-1">回顾</button></div>
             </header>
+            <input id="music-directory-input" type="file" webkitdirectory multiple hidden aria-hidden="true" tabindex="-1">
             <section class="music-playlist-detail" id="music-playlist-detail" aria-labelledby="music-playlist-title" hidden>
               <header class="music-detail-header"><button class="icon-button back-button" id="music-playlist-back" type="button" aria-label="返回歌单列表"><svg class="icon"><use href="#i-arrow"/></svg></button><h2>歌单</h2><span class="sample-tag">示例</span></header>
               <div class="music-detail-body">
@@ -227,7 +228,7 @@
                   <button type="button" class="music-song-row" data-music-track="如果可以" data-music-artist="韦礼安" data-music-duration="4:34"><span class="music-cover tone-two"><svg aria-hidden="true"><use href="#i-cover-bars"/></svg></span><span class="music-song-copy"><strong>如果可以</strong><small>韦礼安</small></span><span class="music-song-duration">4:34</span></button>
                   <button type="button" class="music-song-row" data-music-track="小幸运" data-music-artist="田馥甄" data-music-duration="4:26"><span class="music-cover tone-three"><svg aria-hidden="true"><use href="#i-cover-lines"/></svg></span><span class="music-song-copy"><strong>小幸运</strong><small>田馥甄</small></span><span class="music-song-duration">4:26</span></button>
                 </div>
-                <p class="data-note music-data-note">流行歌曲与封面均为示例 · 不读取本地音乐，不播放真实音频</p>
+                <p class="data-note music-data-note">流行歌曲与封面均为示例 · 可导入 B 站缓存音频到内存曲库，不播放真实音频</p>
               </section>
 
               <section id="music-panel-playlists" data-music-panel="playlists" role="tabpanel" aria-labelledby="music-tab-playlists" hidden>
@@ -246,7 +247,7 @@
               <section id="music-panel-songs" data-music-panel="songs" role="tabpanel" aria-labelledby="music-tab-songs" hidden>
                 <div class="section-heading music-section-heading"><h3>全部歌曲</h3><small id="music-song-count">6 首 · 示例</small></div>
                 <div class="music-song-list" id="music-song-list"></div>
-                <p class="music-search-empty" id="music-search-empty" hidden>没有匹配的示例歌曲，换个歌名或歌手试试。</p>
+                <p class="music-search-empty" id="music-search-empty" hidden>没有匹配的歌曲，换个歌名或歌手试试。</p>
               </section>
 
               <section id="music-panel-history" data-music-panel="history" role="tabpanel" aria-labelledby="music-tab-history" hidden>

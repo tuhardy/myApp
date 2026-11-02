@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.DatePickerDialog
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
@@ -182,6 +183,8 @@ class NativeUiModel : ViewModel() {
     var hideAmounts by mutableStateOf(false)
     var pendingProject by mutableStateOf<Project?>(null)
     var pendingBackup by mutableStateOf<BackupData?>(null)
+    internal var pendingMusicRoot: Uri? = null
+    internal var pendingMusicImports by mutableStateOf<List<MusicImportCandidate>>(emptyList())
     var pendingExport: String? = null
     var notificationRequested = false
     private val channel = Channel<String>(Channel.BUFFERED)
@@ -195,6 +198,10 @@ class NativeUiModel : ViewModel() {
         dialogId = ""
         if (previous == "progress-auto") screen = Screen.PROJECTS
         if (previous == "project") pendingProject = null
+        if (previous == "music-import") {
+            pendingMusicRoot = null
+            pendingMusicImports = emptyList()
+        }
     }
     internal fun stopTodoAnimation(id: String) {
         todoAnimations.remove(id)?.cancel()
@@ -375,6 +382,14 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         BossAutomation.start(context, task, state.autoApply.settings.platform)?.let(ui::message)
+    }
+    val musicImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) ui.perform {
+            val candidates = repository.inspectBilibiliMusic(uri)
+            ui.pendingMusicRoot = uri
+            ui.pendingMusicImports = candidates
+            ui.open("music-import")
+        }
     }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) ui.perform {
@@ -557,7 +572,8 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
                         help = { ui.open("diary-help") },
                         message = ui::message
                     ))
-                    Screen.MUSIC -> MusicScreen(emptyList(), emptyList(), emptyList(), ui.music, today, ui::message)
+                    Screen.MUSIC -> MusicScreen(state.musicTracks, emptyList(), emptyList(), ui.music, today, ui::message,
+                        onAdd = { musicImportLauncher.launch(null) })
                     Screen.STATISTICS -> StatisticsScreen(state, ui.period, ui.statsAll, ui.anchor, ui.recordLimit, today,
                         onPeriod = { ui.period = it; ui.statsAll = false; ui.recordLimit = UiLimits.RECORD_PAGE },
                         onAll = { ui.statsAll = true; ui.recordLimit = UiLimits.RECORD_PAGE },
@@ -633,6 +649,23 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
         val dialogTodo = state.todos.find { it.id == ui.dialogId }
         val dialogJob = state.jobOpportunities.find { it.id == ui.dialogId }
         when (ui.dialog) {
+            "music-import" -> {
+                val root = ui.pendingMusicRoot
+                if (root == null) InformationDialog("导入内容已失效", listOf("请重新选择 B 站视频缓存主目录。"), { ui.close() })
+                else MusicImportDialog(ui.pendingMusicImports, ui.busy, { ui.close() }) { requests ->
+                    ui.perform {
+                        val result = repository.importBilibiliMusic(root, requests)
+                        ui.close()
+                        ui.music.tab = MusicTab.SONGS
+                        ui.message(buildString {
+                            append("已导入 ${result.imported} 首歌曲")
+                            if (result.duplicates > 0) append("，跳过 ${result.duplicates} 首重复音频")
+                            if (result.failures.isNotEmpty()) append("；${result.failures.first()}")
+                            append("。真实播放尚未接入")
+                        })
+                    }
+                }
+            }
             "project", "project-duration" -> ProjectEditorDialog(dialogProject, ui.busy, durationOnly = ui.dialog == "project-duration", onDismiss = { ui.close() }) { project ->
                 if (state.timer?.projectId == project.id) { ui.pendingProject = project; ui.open("save-project-confirm", project.id) }
                 else {

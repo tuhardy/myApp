@@ -1492,6 +1492,31 @@ test("全部周期只取截至今天的记录，范围从首个完成日到明�
   assert.equal(focusMonthlyTrend([{ endedAt: new Date(2025, 11, 31).toISOString(), durationMinutes: 5 }], now)[0].label, "25年12月");
 });
 
+test("B 站音乐缓存解析优先分 P 标题，并使用本地元数据回退", () => {
+  const { parseBilibiliMusicEntry, bilibiliMusicCandidateTitle } = require("./model.js");
+  const sample = JSON.stringify({
+    title: "【囧菌翻唱】东京不太热", owner_name: "封茗囧菌", total_time_milli: 225186,
+    is_completed: true, bvid: "BV1as411D7rn", page_data: { cid: 3533764, part: "【囧菌翻唱】东京不太热" },
+  });
+  const metadata = parseBilibiliMusicEntry(sample, "c_3533764");
+  assert.deepEqual(metadata, { title: "【囧菌翻唱】东京不太热", artist: "封茗囧菌", referenceSeconds: 225,
+    completed: true, bvid: "BV1as411D7rn", cid: 3533764 });
+  assert.equal(bilibiliMusicCandidateTitle(metadata, "16", 1), metadata.title);
+  assert.equal(bilibiliMusicCandidateTitle(metadata, "16", 2), `${metadata.title}（16）`);
+  assert.equal(parseBilibiliMusicEntry(JSON.stringify({ ...JSON.parse(sample), is_completed: false }), "c_3533764").completed, false);
+});
+
+test("B 站音乐缓存缺少或损坏 entry.json 时不阻止标题回退", () => {
+  const { parseBilibiliMusicEntry } = require("./model.js");
+  assert.deepEqual(parseBilibiliMusicEntry("not-json", " c_3533764 "), {
+    title: "c_3533764", artist: "", referenceSeconds: 0, completed: true, bvid: "", cid: 0,
+  });
+  assert.deepEqual(parseBilibiliMusicEntry(JSON.stringify({ title: " 主标题 ", owner_name: " UP ", page_data: { part: "  " } }), ""), {
+    title: "主标题", artist: "UP", referenceSeconds: 0, completed: true, bvid: "", cid: 0,
+  });
+  assert.equal(parseBilibiliMusicEntry(null, "").title, "未命名音频");
+});
+
 test("音乐回顾按日周月年过滤并生成播放次数与时长排行", () => {
   const { musicListeningSummary } = require("./model.js");
   const anchor = new Date(2026, 9, 30, 12);

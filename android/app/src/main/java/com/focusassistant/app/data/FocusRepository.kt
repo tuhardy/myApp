@@ -1,6 +1,7 @@
 package com.focusassistant.app.data
 
 import android.content.Context
+import android.net.Uri
 import android.os.SystemClock
 import android.provider.Settings
 import androidx.room.Room
@@ -25,7 +26,7 @@ import org.json.JSONObject
 class FocusRepository(context: Context, scope: CoroutineScope) {
     private val appContext = context.applicationContext
     private val database = Room.databaseBuilder(appContext, FocusDatabase::class.java, "focus-assistant.db")
-        .addMigrations(FocusDatabase.MIGRATION_1_2, FocusDatabase.MIGRATION_2_3, FocusDatabase.MIGRATION_3_4, FocusDatabase.MIGRATION_4_5, FocusDatabase.MIGRATION_5_6)
+        .addMigrations(FocusDatabase.MIGRATION_1_2, FocusDatabase.MIGRATION_2_3, FocusDatabase.MIGRATION_3_4, FocusDatabase.MIGRATION_4_5, FocusDatabase.MIGRATION_5_6, FocusDatabase.MIGRATION_6_7)
         .enableMultiInstanceInvalidation().build()
     private val dao = database.dao()
     private val mutex = Mutex()
@@ -51,6 +52,7 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
                     loadedRevision = loaded.second
                     // 启动时还没有正在编辑的内容，既不属于日记也不属于已存草稿的附件都是上次中断留下的，可安全清理。
                     DiaryFiles.cleanOrphans(appContext, (loaded.first.diaries.flatMap { it.files } + loaded.first.diaryDrafts.flatMap { it.files }).toSet())
+                    MusicFiles.cleanOrphans(appContext, loaded.first.musicTracks.mapTo(mutableSetOf()) { it.id })
                 }
                 ready.complete(Unit)
                 dao.observeRevision().collect { revision ->
@@ -146,6 +148,56 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         Validation.settings(settings)
         mutate { it.copy(settings = settings) }
     }
+
+    suspend fun inspectBilibiliMusic(treeUri: Uri): List<MusicImportCandidate> = withContext(Dispatchers.IO) {
+        ready.await()
+        MusicImportScanner.scan(appContext, treeUri).map { it.candidate }
+    }
+
+    /** 文件先复制到独立目录，再由唯一写入口登记曲库；重复或失败副本立即清理。 */
+    suspend fun importBilibiliMusic(treeUri: Uri, requests: List<MusicImportRequest>): MusicImportResult = withContext(Dispatchers.IO) {
+        ready.await()
+        require(requests.isNotEmpty()) { "请至少选择一首音频" }
+        val sources = MusicImportScanner.scan(appContext, treeUri).associateBy { it.candidate.sourceId }
+        val prepared = mutableListOf<MusicTrack>()
+        val failures = mutableListOf<String>()
+        try {
+            requests.distinctBy { it.sourceId }.forEach { request ->
+                val source = sources[request.sourceId]
+                if (source == null) {
+                    failures += "所选目录已变化，请重新扫描"
+                    return@forEach
+                }
+                val title = request.title.trim()
+                val artist = request.artist.trim()
+                when {
+                    source.candidate.error.isNotBlank() -> failures += "${source.candidate.directoryName}：${source.candidate.error}"
+                    title.isEmpty() || title.length > Validation.MAX_TITLE -> failures += "${source.candidate.directoryName}：歌名须为 1–${Validation.MAX_TITLE} 个字符"
+                    artist.length > Validation.MAX_TITLE -> failures += "${source.candidate.directoryName}：歌手不可超过 ${Validation.MAX_TITLE} 个字符"
+                    else -> try {
+                        prepared += MusicFiles.import(appContext, source, id(), title, artist.ifBlank { "未知歌手" })
+                    } catch (error: Exception) {
+                        failures += "${source.candidate.directoryName}：${error.message ?: "导入失败"}"
+                    }
+                }
+            }
+            val accepted = mutableListOf<MusicTrack>()
+            var duplicates = 0
+            mutate { current ->
+                val hashes = current.musicTracks.mapTo(mutableSetOf()) { it.contentHash }
+                prepared.forEach { track ->
+                    if (!hashes.add(track.contentHash)) duplicates++ else accepted += track
+                }
+                current.copy(musicTracks = current.musicTracks + accepted)
+            }
+            prepared.filterNot { it in accepted }.forEach { MusicFiles.delete(appContext, it.id) }
+            MusicImportResult(accepted.size, duplicates, failures)
+        } catch (error: Exception) {
+            prepared.forEach { MusicFiles.delete(appContext, it.id) }
+            throw error
+        }
+    }
+
     suspend fun saveProgress(sessionId: String, note: String, percent: Int?) {
         Validation.progress(note, percent)
         mutate { current ->
@@ -222,7 +274,7 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
             mutate { current ->
                 require(current.timer == null) { "请先结束或确认放弃当前计时，再恢复备份" }
                 // 现有备份不含日记与资产：恢复时原样保留本机记录，不能因为备份里没有而清空。
-                AppState(backup.projects.toList(), backup.todos.toList(), backup.sessions.map { it.copy(progressPrompted = true, segments = it.segments.toList()) }, backup.progress.toList(), backup.settings, loading = false, diaries = current.diaries, diaryDrafts = current.diaryDrafts, assets = current.assets, jobOpportunities = current.jobOpportunities, autoApply = current.autoApply)
+                AppState(backup.projects.toList(), backup.todos.toList(), backup.sessions.map { it.copy(progressPrompted = true, segments = it.segments.toList()) }, backup.progress.toList(), backup.settings, loading = false, diaries = current.diaries, diaryDrafts = current.diaryDrafts, assets = current.assets, jobOpportunities = current.jobOpportunities, autoApply = current.autoApply, musicTracks = current.musicTracks)
             }
         }
     }
@@ -424,7 +476,8 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
             dao.wishes().map { JsonCodec.readWish(JSONObject(it.payload)) }),
         jobOpportunities = dao.jobOpportunities().map { JsonCodec.readJobOpportunity(JSONObject(it.payload)) },
         autoApply = AutoApplyBook(dao.autoApplySettings()?.let { JsonCodec.readAutoApplySettings(JSONObject(it.payload)) } ?: AutoApplySettings(),
-            dao.autoApplyRecords().map { JsonCodec.readAutoApplyRecord(JSONObject(it.payload)) })
+            dao.autoApplyRecords().map { JsonCodec.readAutoApplyRecord(JSONObject(it.payload)) }),
+        musicTracks = dao.musicTracks().map { JsonCodec.readMusicTrack(JSONObject(it.payload)) }
     )
 
     private suspend fun persist(old: AppState, next: AppState) {
@@ -441,6 +494,7 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         sync(old.jobOpportunities, next.jobOpportunities, { it.id }, dao::removeJobOpportunities) { changed -> dao.putJobOpportunities(changed.map { (index, item) -> JobOpportunityRow(item.id, JsonCodec.jobOpportunity(item).toString(), index) }) }
         sync(old.autoApply.records, next.autoApply.records, { it.id }, dao::removeAutoApplyRecords) { changed -> dao.putAutoApplyRecords(changed.map { (index, item) -> AutoApplyRecordRow(item.id, JsonCodec.autoApplyRecord(item).toString(), index) }) }
         if (old.autoApply.settings != next.autoApply.settings) dao.putAutoApplySettings(AutoApplySettingsRow(payload = JsonCodec.autoApplySettings(next.autoApply.settings).toString()))
+        sync(old.musicTracks, next.musicTracks, { it.id }, dao::removeMusicTracks) { changed -> dao.putMusicTracks(changed.map { (index, item) -> MusicTrackRow(item.id, JsonCodec.musicTrack(item).toString(), index) }) }
         if (old.settings != next.settings) dao.putSettings(SettingsRow(payload = JsonCodec.settings(next.settings).toString()))
         if (old.timer != next.timer) {
             if (next.timer == null) dao.clearTimer() else dao.putTimer(TimerRow(payload = JsonCodec.timer(next.timer).toString()))

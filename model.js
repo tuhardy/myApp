@@ -1591,6 +1591,32 @@
     return { preview, records: added, stopReason: stopReason ?? (dryRun ? `发简历试运行完成：识别 ${conversations.length} 个会话，其中 ${sending} 个会发简历；未点击任何按钮` : "没有更多待发简历的新回复，已停止") };
   }
 
+  /** B 站缓存元数据只来自用户选择的 entry.json；损坏或缺字段时回退，不联网补全。 */
+  function parseBilibiliMusicEntry(text, rootName) {
+    const fallbackTitle = String(rootName || "").trim() || "未命名音频";
+    let entry = null;
+    try { entry = text ? JSON.parse(text) : null; } catch { entry = null; }
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) entry = {};
+    const page = entry.page_data && typeof entry.page_data === "object" && !Array.isArray(entry.page_data) ? entry.page_data : {};
+    const part = typeof page.part === "string" ? page.part.trim() : "";
+    const title = typeof entry.title === "string" ? entry.title.trim() : "";
+    const artist = typeof entry.owner_name === "string" ? entry.owner_name.trim() : "";
+    const milliseconds = Number(entry.total_time_milli);
+    return {
+      title: part || title || fallbackTitle,
+      artist,
+      referenceSeconds: Number.isFinite(milliseconds) && milliseconds > 0 ? Math.round(milliseconds / 1000) : 0,
+      completed: entry.is_completed !== false,
+      bvid: typeof entry.bvid === "string" ? entry.bvid.trim() : "",
+      cid: Number.isSafeInteger(page.cid) && page.cid > 0 ? page.cid : 0,
+    };
+  }
+
+  function bilibiliMusicCandidateTitle(metadata, directoryName, directoryCount) {
+    const base = String(metadata?.title || "").trim() || "未命名音频";
+    return directoryCount > 1 ? `${base}（${String(directoryName || "").trim() || "未命名目录"}）` : base;
+  }
+
   const MUSIC_TRACKS = Object.freeze([
     { id: "sunny", title: "晴天", artist: "周杰伦", duration: "4:29", seconds: 269, tone: "tone-one", art: "cover-wave" },
     { id: "if", title: "如果可以", artist: "韦礼安", duration: "4:34", seconds: 274, tone: "tone-two", art: "cover-bars" },
@@ -1762,7 +1788,7 @@
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
     validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary,
     allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,
-    MUSIC_TRACKS, initialMusicListens, musicListeningSummary, musicListeningTrend, compareMusicListening,
+    MUSIC_TRACKS, parseBilibiliMusicEntry, bilibiliMusicCandidateTitle, initialMusicListens, musicListeningSummary, musicListeningTrend, compareMusicListening,
     completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks,
     DIARY_LIMITS, initialDiaryEntries, diaryEntryDate, parseDiaryDateQuery, validateDiaryEntry, selectDiaryEntries, trashedDiaryEntries, listDiaryDrafts, moveDiaryToTrash, restoreDiaryEntry,
     diaryStreak, JOB_ASSIST_LIMITS, JOB_ASSIST_STATUS, validateJobOpportunity,
