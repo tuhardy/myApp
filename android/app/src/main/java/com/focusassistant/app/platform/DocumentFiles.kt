@@ -3,7 +3,9 @@ package com.focusassistant.app.platform
 import android.content.Context
 import android.net.Uri
 import com.focusassistant.app.data.BackupCodec
+import com.focusassistant.app.data.FullBackupArchive
 import com.focusassistant.app.domain.BackupData
+import com.focusassistant.app.domain.FullBackupData
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -42,8 +44,14 @@ object DocumentFiles {
         }
     }
 
-    suspend fun readBackup(context: Context, uri: Uri): BackupData = withContext(Dispatchers.IO) {
+    sealed interface BackupSelection {
+        data class Legacy(val data: BackupData) : BackupSelection
+        data class Full(val uri: Uri, val data: FullBackupData) : BackupSelection
+    }
+
+    suspend fun readBackup(context: Context, uri: Uri): BackupSelection = withContext(Dispatchers.IO) {
         require(uri.scheme == "content") { "请选择系统文件选择器提供的备份文档" }
+        if (isZip(context, uri)) return@withContext BackupSelection.Full(uri, FullBackupArchive.inspect(context, uri))
         val input = context.contentResolver.openInputStream(uri) ?: throw IOException("无法读取所选备份文档")
         val bytes = input.use { stream ->
             ByteArrayOutputStream().use { output ->
@@ -66,6 +74,22 @@ object DocumentFiles {
         } catch (error: CharacterCodingException) {
             throw IllegalArgumentException("备份不是有效的 UTF-8 文件", error)
         }
-        BackupCodec.decode(content)
+        BackupSelection.Legacy(BackupCodec.decode(content))
+    }
+
+    private fun isZip(context: Context, uri: Uri): Boolean {
+        val input = context.contentResolver.openInputStream(uri) ?: throw IOException("无法读取所选备份文档")
+        val signature = input.use { stream ->
+            val bytes = ByteArray(4)
+            var offset = 0
+            while (offset < bytes.size) {
+                val count = stream.read(bytes, offset, bytes.size - offset)
+                if (count < 0) break
+                offset += count
+            }
+            bytes.copyOf(offset)
+        }
+        return signature.size == 4 && signature[0] == 0x50.toByte() && signature[1] == 0x4b.toByte() &&
+            signature[2] == 3.toByte() && signature[3] == 4.toByte()
     }
 }

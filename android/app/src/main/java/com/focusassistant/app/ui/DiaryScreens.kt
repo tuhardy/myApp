@@ -135,6 +135,10 @@ internal class DiaryUiState {
     }
     fun search(value: String) { if (query != value) { query = value; openSwipeId = null } }
     fun openDetail(id: String) { detailId = id; openSwipeId = null; view = DiaryView.DETAIL }
+    fun resetAfterRestore() {
+        view = DiaryView.HOME; month = YearMonth.now(); query = ""; detailId = null
+        editor = null; openSwipeId = null; viewer = null
+    }
     /** 点「+」总是空白新日记；编辑已有日记时自动接上它的草稿。 */
     fun openEditor(entry: DiaryEntry?, drafts: List<DiaryDraft>, now: Long = System.currentTimeMillis()) {
         val returnTo = if (view == DiaryView.DETAIL && entry != null) DiaryView.DETAIL else DiaryView.HOME

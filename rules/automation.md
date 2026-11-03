@@ -79,7 +79,7 @@
 
 - 纯规则：`domain/AutoApply.kt`（`JobPlatform`，`AutoApplyRules` 匹配/去重/上限，`BossScreenReader` / `ZhaopinScreenReader` 界面识别、`PlatformReader` 按平台分发，`AutoApplyEngine` 沟通状态机、`ResumeEngine` 发简历状态机、`ZhaopinApplyEngine` 智联投递状态机）。改识别规则或流程优先改这里并补 `AutoApplyTest`。
 - 平台：`platform/BossUiMap.kt`（节点快照、按路径找回节点、诊断导出，按平台读版本）、`platform/BossAutomationService.kt`（无障碍服务、事件驱动步进、暂停/继续、通知、`BossAutomation` 进程内通道；`start(context, task, platform)`，类名沿用 Boss 前缀，两个平台共用）、`platform/BossOverlay.kt`（悬浮按钮）、`res/xml/boss_automation_service.xml`。
-- 数据：Room v6 表 `auto_apply_records`、`auto_apply_settings`，写入统一走 `FocusRepository`；不进入完整备份，`restoreBackup` 原样保留。
+- 数据：Room v6 表 `auto_apply_records`、`auto_apply_settings`，写入统一走 `FocusRepository`。新版 ZIP 全量备份包含自动投递设置、全部历史记录和求职进度；旧 JSON 不包含这些模块，`restoreBackup` 原样保留。备份未加密，诊断导出仍只含控件结构，不能把聊天正文放进任何备份。
 - 识别规则来自常见布局猜测，必须用真机诊断导出核对后再调整关键词和 viewId 片段。
 
 ## 浏览器原型

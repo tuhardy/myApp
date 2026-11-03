@@ -5456,9 +5456,9 @@
   $("usage-permission").addEventListener("click", permissions);
   $("permissions-button").addEventListener("click", permissions);
   $("backup-button").addEventListener("click", () => information("备份与恢复 · 流程预览", [
-    "导出：选择保存位置，将待办、专注记录和个人偏好写入 JSON 文件。",
-    "恢复：选择备份文件，校验格式和版本，预览数据数量，再确认恢复。正式版会在覆盖前提示风险。",
-    "这里仅展示计划中的流程，不读写文件。本原型的改动只保留在当前页面，刷新后恢复示例。",
+    "Android 导出：先预览记录与附件范围，再选择保存位置，将项目、待办、专注、设置、日记与草稿、资产、求职记录、曲库及日记/音乐附件写入未加密的全量 ZIP；未结束的计时不导出。",
+    "Android 恢复：支持全量 ZIP 和旧 JSON。先校验格式、附件路径、数量、大小与 SHA-256，再预览并确认覆盖；全量 ZIP 替换全部记录及附件，旧 JSON 保留其未包含的本机模块。当前计时须先结束。",
+    "这里仅同步信息层级和流程说明，不读写 ZIP、JSON 或手机附件。本原型的改动只保留在当前页面，刷新后恢复示例。",
   ]));
   $("job-entry-card").addEventListener("click", () => navigate("job-assist"));
   $("job-run-bar-open").addEventListener("click", () => navigate("job-assist"));

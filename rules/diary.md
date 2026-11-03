@@ -2,7 +2,7 @@
 
 - Android 已迁移（0.6.0 / versionCode 13）：规则在 `domain/Diary.kt` 的 `DiaryRules`（校验、`parseDateQuery`、`select`、回收站、`unreferenced`），界面在 `ui/DiaryScreens.kt`（`DiaryUiState` 四视图、`DiaryDrafts`、首页/详情/编辑/回收站），附件存储在 `data/DiaryFiles.kt`，录音/播放/缩略图在 `platform/DiaryMedia.kt`，单测 `DiaryTest.kt`。
 - Room 当前 v3：`MIGRATION_1_2` 新增 `diary` 表，`MIGRATION_2_3` 新增 `diary_drafts` 表（都与其他表同为 id/payload/position），覆盖升级保留旧数据；以后改表必须继续写迁移，不能靠破坏性重建。
-- 日记与草稿不进入现有完整备份：`restoreBackup` 必须带上 `current.diaries` 和 `current.diaryDrafts`，否则 `persist` 的差量同步会把它们全部删掉。备份与恢复文案已写明「暂不含日记 / 不会改动日记」。
+- 新版 ZIP 全量备份包含日记、已存草稿及其照片/录音附件，清单记录附件 SHA-256 与大小，恢复前完整校验并暂存，失败回滚旧目录。旧 JSON 仍不包含这些模块：`restoreBackup` 必须带上 `current.diaries` 和 `current.diaryDrafts`，否则 `persist` 的差量同步会把它们全部删掉；旧格式确认文案须明确保留本机日记，全量 ZIP 则明确覆盖。
 - Android 草稿（0.6.1 / versionCode 14）：领域类型 `DiaryDraft`（key 为 `new-UUID` 或 `edit:日记ID`）与 `DiaryRules.freshDraft / draftChanged / validateDraft / listDrafts` 在 `domain/Diary.kt`；仓库 `saveDiaryDraft / removeDiaryDraft`，`saveDiary(entry, existing, draftKey)` 在同一事务里移出草稿。编辑中的工作副本是 `DiaryUiState.editor`（`DiaryEditorSession`，在 ViewModel 里，旋转不丢）；编辑页 `ON_STOP` 先停录音再 `persistDraft()`，点返回同样持久化，没改动则移出。附件清理的保护集合 = 所有日记 + 已存草稿 + 当前工作副本（`ui.diary.editorFiles()`），启动清理也算上已存草稿。
 - Android 页签重选：`NavigationBarItem` 在已处于 `Screen.DIARY` 时调用 `DiaryUiState.reselect()`，二级页回首页，首页则 `homeList.animateScrollToItem(0)`；编辑页不显示导航栏。
 - 照片用系统照片选择器（`PickMultipleVisualMedia`，无需存储权限），复制到 `filesDir/diary/`，数据库只存文件名（`DiaryRules.isSafeFileName` 防路径穿越）；BitmapFactory 无法解码的格式拒绝导入。录音用 `MediaRecorder`（AAC/m4a），`RECORD_AUDIO` 首次点击才申请，拒绝后再点只引导去系统设置；编辑页 `ON_STOP`、离开编辑页、选图、返回、保存前都先停止并把录音放进草稿，不足 1 秒或设备中断时不保留并提示。

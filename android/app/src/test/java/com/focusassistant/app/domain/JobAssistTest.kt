@@ -30,7 +30,7 @@ class JobAssistTest {
         assertFalse(JobAssistRules.displayLabel(job()).isBlank())
     }
 
-    @Test fun jobJsonRoundTripAndFullBackupExclusion() {
+    @Test fun jobJsonRoundTripAndLegacyBackupExclusion() {
         val original = job()
         assertEquals(original, JsonCodec.readJobOpportunity(JSONObject(JsonCodec.jobOpportunity(original).toString())))
         val backup = JSONObject(com.focusassistant.app.data.BackupCodec.encode(AppState(loading = false, jobOpportunities = listOf(original))))

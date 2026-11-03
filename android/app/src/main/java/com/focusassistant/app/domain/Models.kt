@@ -56,20 +56,18 @@ data class AppState(
     val projects: List<Project> = emptyList(), val todos: List<Todo> = emptyList(),
     val sessions: List<FocusSession> = emptyList(), val progress: List<ProgressEntry> = emptyList(),
     val settings: AppSettings = AppSettings(), val timer: ActiveTimer? = null, val loading: Boolean = true,
-    /** 日记与草稿不进入现有完整备份，恢复备份时保持不变。 */
+    /** 旧 JSON 备份不包含这些模块；新版 ZIP 全量备份会包含。 */
     val diaries: List<DiaryEntry> = emptyList(),
     val diaryDrafts: List<DiaryDraft> = emptyList(),
-    /** 资产账户、余额快照与心愿同样不进入完整备份，恢复备份时保持不变。 */
     val assets: AssetBook = AssetBook(),
-    /** 求职职位和草稿仅保存在本机，不进入现有完整备份。 */
     val jobOpportunities: List<JobOpportunity> = emptyList(),
-    /** 自动投递规则与记录仅保存在本机，不进入完整备份。 */
     val autoApply: AutoApplyBook = AutoApplyBook(),
-    /** 音乐曲库与音频文件仅保存在本机；现有 JSON 备份不打包音频，恢复时保留当前曲库。 */
     val musicTracks: List<MusicTrack> = emptyList()
 )
 data class TimerEvent(val kind: TimerEventKind, val projectTitle: String, val sessionId: String? = null)
 data class BackupData(val projects: List<Project>, val todos: List<Todo>, val sessions: List<FocusSession>, val progress: List<ProgressEntry>, val settings: AppSettings)
+data class FullBackupFile(val path: String, val bytes: Long, val sha256: String)
+data class FullBackupData(val state: AppState, val files: List<FullBackupFile>)
 
 object Validation {
     const val MAX_TIMESTAMP_MS = 253402300799999L

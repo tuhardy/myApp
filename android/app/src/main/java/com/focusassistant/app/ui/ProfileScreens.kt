@@ -132,7 +132,7 @@ internal fun ProfileScreen(
         SectionHeading("设置", null)
         SettingsGroup(state, notificationAllowed, exactAllowed, life.usageAllowed, actions)
         Text("你的时间与资产，只属于你。所有记录保存在本机，不上传云端；资产是你手动记下的余额，没有连接银行或任何真实账户。" +
-            "备份文件未加密，日记与资产暂不在备份范围内，卸载应用会清除它们。本版本不申请 root 或无障碍控制权限。",
+            "备份文件未加密，包含日记、资产、求职记录与音乐附件，请妥善保管。卸载应用会清除本机数据。本版本不申请 root 或无障碍控制权限。",
             fontSize = 11.sp, color = Muted, lineHeight = 20.sp, modifier = Modifier.padding(horizontal = 4.dp))
         Text("专注助手 · Android\n更少打扰，更多属于你的时间", fontSize = 11.sp, color = Muted, lineHeight = 20.sp,
             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 8.dp))
@@ -403,8 +403,8 @@ private fun SettingsGroup(state: AppState, notificationAllowed: Boolean, exactAl
         SettingItem(Icons.Outlined.Notifications, "通知提醒", if (notificationAllowed) "已开启 · 管理系统通知" else "未开启 · 结束与超时提醒可能不可见", actions.onNotifications),
         SettingItem(Icons.Outlined.Alarm, "精确闹钟", if (exactAllowed) "已允许 · 管理系统授权" else "未允许 · 后台到时提醒可能延迟", actions.onExactAlarm),
         SettingItem(Icons.Outlined.QueryStats, "使用情况访问", if (usageAllowed) "已允许 · 读取应用前台用时" else "未允许 · 无法读取手机用时", actions.onUsagePermission),
-        SettingItem(Icons.Outlined.Backup, "导出完整备份", "项目、待办、专注、进度与偏好；不含日记和资产", actions.onBackup),
-        SettingItem(Icons.Outlined.Restore, "从文件恢复", "需先确认，当前计时须先结束；不改动日记和资产", actions.onRestore)
+        SettingItem(Icons.Outlined.Backup, "导出完整备份", "ZIP 全量：全部记录、日记附件、音乐音频与封面；未加密", actions.onBackup),
+        SettingItem(Icons.Outlined.Restore, "从文件恢复", "支持全量 ZIP 与旧 JSON；恢复前预览，当前计时须先结束", actions.onRestore)
     )
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(17.dp)).background(Color.White).border(1.dp, Line, RoundedCornerShape(17.dp)).padding(horizontal = 13.dp)) {
         rows.forEachIndexed { index, item ->

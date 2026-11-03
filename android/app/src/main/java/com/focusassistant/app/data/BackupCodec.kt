@@ -36,6 +36,17 @@ object BackupCodec {
         return data
     }
 
+    /** 旧 JSON 只覆盖其显式包含的模块；其他本机记录原样保留。 */
+    fun restoreState(current: AppState, backup: BackupData): AppState {
+        validate(backup)
+        require(current.timer == null) { "请先结束或确认放弃当前计时，再恢复备份" }
+        return AppState(backup.projects.toList(), backup.todos.toList(),
+            backup.sessions.map { it.copy(progressPrompted = true, segments = it.segments.toList()) },
+            backup.progress.toList(), backup.settings, loading = false,
+            diaries = current.diaries, diaryDrafts = current.diaryDrafts, assets = current.assets,
+            jobOpportunities = current.jobOpportunities, autoApply = current.autoApply, musicTracks = current.musicTracks)
+    }
+
     fun validate(data: BackupData) {
         require(data.projects.size <= MAX_PROJECTS && data.todos.size <= MAX_TODOS && data.sessions.size <= MAX_SESSIONS && data.progress.size <= MAX_PROGRESS) { "备份记录数超出限制" }
         fun ids(values: List<String>) {

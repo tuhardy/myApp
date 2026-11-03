@@ -42,6 +42,8 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
                 mutex.withLock {
                     val loaded = database.withTransaction {
                         dao.initializeRevision(RevisionRow())
+                        // 上次恢复若中断，依据数据库 revision 决定保留新附件还是回滚旧附件，再执行孤儿清理。
+                        FullBackupArchive.recoverPending(appContext, dao.revision())
                         val current = load()
                         val recovered = current.timer?.let { TimerEngine.recover(it, bootCount, SystemClock.elapsedRealtime()) }
                         val next = current.copy(timer = recovered)
@@ -268,14 +270,57 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         ready.await()
         mutex.withLock { database.withTransaction { BackupCodec.encode(load()) } }
     }
+
+    /** 全量导出持有仓库锁，避免记录与附件在两次读取之间被其他操作替换。 */
+    suspend fun exportFullBackup(uri: Uri) = withContext(Dispatchers.IO) {
+        ready.await()
+        mutex.withLock {
+            val snapshot = database.withTransaction { load() }
+            FullBackupArchive.export(appContext, uri, snapshot)
+        }
+    }
+
+    /** 先完整校验并暂存附件，再换文件、提交 Room；失败回滚，进程中断由启动日志恢复。 */
+    suspend fun restoreFullBackup(uri: Uri, backup: FullBackupData) {
+        withContext(Dispatchers.IO) {
+            FullBackupCodec.validate(backup)
+            ready.await()
+            FullBackupArchive.stage(appContext, uri, backup)
+            var replacementStarted = false
+            try {
+                mutex.withLock {
+                    val oldRevision = loadedRevision
+                    require(mutableState.value.timer == null) { "请先结束或确认放弃当前计时，再恢复备份" }
+                    val replacement = FullBackupArchive.beginReplacement(appContext, oldRevision)
+                    replacementStarted = true
+                    var committed = false
+                    try {
+                        val restored = database.withTransaction {
+                            val current = load()
+                            require(current.timer == null) { "请先结束或确认放弃当前计时，再恢复备份" }
+                            val next = backup.state.copy(timer = null, loading = false)
+                            persist(current, next)
+                            next to dao.revision()
+                        }
+                        committed = true
+                        mutableState.value = restored.first
+                        loadedRevision = restored.second
+                        replacement.commit()
+                    } catch (error: Exception) {
+                        if (committed) replacement.commit() else replacement.rollback()
+                        throw error
+                    }
+                }
+            } catch (error: Exception) {
+                if (!replacementStarted) FullBackupArchive.discardStaging(appContext)
+                throw error
+            }
+        }
+    }
+
     suspend fun restoreBackup(backup: BackupData) {
         withContext(Dispatchers.IO) {
-            BackupCodec.validate(backup)
-            mutate { current ->
-                require(current.timer == null) { "请先结束或确认放弃当前计时，再恢复备份" }
-                // 现有备份不含日记与资产：恢复时原样保留本机记录，不能因为备份里没有而清空。
-                AppState(backup.projects.toList(), backup.todos.toList(), backup.sessions.map { it.copy(progressPrompted = true, segments = it.segments.toList()) }, backup.progress.toList(), backup.settings, loading = false, diaries = current.diaries, diaryDrafts = current.diaryDrafts, assets = current.assets, jobOpportunities = current.jobOpportunities, autoApply = current.autoApply, musicTracks = current.musicTracks)
-            }
+            mutate { current -> BackupCodec.restoreState(current, backup) }
         }
     }
 

@@ -43,6 +43,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.focusassistant.app.data.ExportCodec
 import com.focusassistant.app.data.FocusRepository
+import com.focusassistant.app.data.FullBackupCodec
 import com.focusassistant.app.domain.*
 import com.focusassistant.app.platform.*
 import kotlinx.coroutines.CancellationException
@@ -182,7 +183,7 @@ class NativeUiModel : ViewModel() {
     /** 「隐藏金额」只影响显示，不写入本机数据；进程重启后恢复显示。 */
     var hideAmounts by mutableStateOf(false)
     var pendingProject by mutableStateOf<Project?>(null)
-    var pendingBackup by mutableStateOf<BackupData?>(null)
+    var pendingBackup by mutableStateOf<DocumentFiles.BackupSelection?>(null)
     internal var pendingMusicRoot: Uri? = null
     internal var pendingMusicImports by mutableStateOf<List<MusicImportCandidate>>(emptyList())
     var pendingExport: String? = null
@@ -198,6 +199,7 @@ class NativeUiModel : ViewModel() {
         dialogId = ""
         if (previous == "progress-auto") screen = Screen.PROJECTS
         if (previous == "project") pendingProject = null
+        if (previous == "restore-confirm") pendingBackup = null
         if (previous == "music-import") {
             pendingMusicRoot = null
             pendingMusicImports = emptyList()
@@ -368,6 +370,12 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
         ui.pendingExport = null
         if (uri != null && payload != null) ui.perform { DocumentFiles.write(appContext, uri, payload); ui.message("文件已保存。请妥善保管未加密的个人数据。") }
         else if (uri != null) ui.message("导出内容已失效，请重新导出。")
+    }
+    val zipLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri != null) ui.perform {
+            repository.exportFullBackup(uri)
+            ui.message("全量备份已保存。文件未加密，请妥善保管个人数据与附件。")
+        }
     }
     val csvLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
         val payload = ui.pendingExport
@@ -603,10 +611,10 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
                         onLife = { page -> if (page == Screen.TODOS) ui.todos.setFilter(TodoFilter.DONE); ui.screen = page },
                         actions = ProfileActions(::requestNotifications, { context.startActivity(usageMonitor.permissionIntent()) },
                             { context.startActivity(TimerAlarmScheduler.permissionIntent(context)) }, {
-                                ui.perform { ui.pendingExport = repository.exportBackup(); jsonLauncher.launch("专注助手备份_${LocalDate.now()}.json") }
+                                ui.open("backup-export")
                             }, {
                                 if (state.timer != null) ui.message("请先结束或放弃当前计时，再恢复备份。")
-                                else importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+                                else importLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/json", "text/plain", "application/octet-stream"))
                             }, { ui.open("rest-settings") }, { ui.screen = Screen.JOB_ASSIST }))
                     Screen.JOB_ASSIST -> JobAssistScreen(state.jobOpportunities, ui.busy,
                         auto = AutoApplyPanel(state.autoApply.settings, jobTodayCount,
@@ -926,11 +934,43 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
             "rest-settings" -> NumberSettingsDialog("休息偏好", listOf("短休息（分钟）" to state.settings.shortBreakMinutes, "长休息（分钟）" to state.settings.longBreakMinutes), ui.busy, { ui.close() }) { values ->
                 if (values.any { it !in 1..120 }) ui.message("休息时长需为 1–120 分钟。") else ui.perform { repository.saveSettings(state.settings.copy(shortBreakMinutes = values[0], longBreakMinutes = values[1])); ui.close() }
             }
+            "backup-export" -> ConfirmDialog(
+                "导出 ZIP 全量备份？",
+                "包含 ${state.projects.size} 个项目、${state.todos.size} 个待办、${state.sessions.size} 次专注、${state.diaries.size} 条日记、${state.assets.accounts.size} 个资产账户、${state.jobOpportunities.size} 条职位和 ${state.musicTracks.size} 首音乐；同时打包 ${FullBackupCodec.expectedPaths(state).size} 个日记/音乐附件。当前未结束的计时不导出。备份未加密，请妥善保管。",
+                ui.busy, { ui.close() }
+            ) {
+                ui.close()
+                zipLauncher.launch("专注助手全量备份_${LocalDate.now()}.zip")
+            }
             "restore-confirm" -> {
-                val backup = ui.pendingBackup
-                if (backup == null) InformationDialog("重新选择备份", listOf("备份预览已失效，请重新选择文件。未修改任何本地数据。"), { ui.close() })
-                else ConfirmDialog("确认覆盖本机数据？", "备份包含 ${backup.projects.size} 个项目、${backup.todos.size} 个待办、${backup.sessions.size} 次专注和 ${backup.progress.size} 条进度。恢复会替换当前数据，不合并。建议先导出当前备份。日记与资产不在备份范围内，恢复不会改动它们。", ui.busy, { ui.pendingBackup = null; ui.close() }) {
-                    ui.perform { repository.restoreBackup(backup); ProgressDrafts.clear(appContext); ProjectDrafts.clear(); ui.clearTodoUi(); ui.pendingBackup = null; ui.projectId = null; ui.close(); ui.message("备份已恢复。"); refresh++ }
+                val selection = ui.pendingBackup
+                if (selection == null) InformationDialog("重新选择备份", listOf("备份预览已失效，请重新选择文件。未修改任何本地数据。"), { ui.close() })
+                else {
+                    val description = when (selection) {
+                        is DocumentFiles.BackupSelection.Legacy -> selection.data.let { backup ->
+                            "旧版 JSON 备份：${backup.projects.size} 个项目、${backup.todos.size} 个待办、${backup.sessions.size} 次专注和 ${backup.progress.size} 条进度。恢复会替换这些模块，不合并；本机日记、资产、求职与音乐保持原样。建议先导出当前全量备份。"
+                        }
+                        is DocumentFiles.BackupSelection.Full -> selection.data.let { backup ->
+                            val size = backup.files.sumOf { it.bytes }
+                            "ZIP 全量备份：${backup.state.projects.size} 个项目、${backup.state.todos.size} 个待办、${backup.state.diaries.size} 条日记、${backup.state.assets.accounts.size} 个资产账户、${backup.state.jobOpportunities.size} 条职位、${backup.state.musicTracks.size} 首音乐；${backup.files.size} 个附件，共 ${"%.1f".format(size / 1024.0 / 1024.0)} MiB。恢复会替换全部本机记录及附件，不合并。建议先导出当前备份。"
+                        }
+                    }
+                    ConfirmDialog("确认覆盖本机数据？", description, ui.busy, { ui.close() }) {
+                        ui.perform {
+                            when (selection) {
+                                is DocumentFiles.BackupSelection.Legacy -> repository.restoreBackup(selection.data)
+                                is DocumentFiles.BackupSelection.Full -> {
+                                    repository.restoreFullBackup(selection.uri, selection.data)
+                                    ui.diary.resetAfterRestore()
+                                    ui.music.playing = false; ui.music.selectedTrackId = null; ui.music.playlistId = null
+                                }
+                            }
+                            ProgressDrafts.clear(appContext); ProjectDrafts.clear(); ui.clearTodoUi()
+                            ui.pendingBackup = null; ui.projectId = null; ui.close()
+                            ui.message(if (selection is DocumentFiles.BackupSelection.Full) "全量备份及附件已恢复。" else "旧版备份已恢复，未包含的本机模块保持不变。")
+                            refresh++
+                        }
+                    }
                 }
             }
             "delete-project", "discard", "finish-early", "switch-project", "save-project-confirm", "break-short", "break-long" -> {
