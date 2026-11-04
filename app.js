@@ -2011,7 +2011,84 @@
     });
   }
 
-  /** M：一条横向的小路，走过的点是实心的。路径只展示进展，展开后整行操作小步。 */
+  const stepTraceAnimations = new Set();
+  const STEP_TRACK_HEIGHT = 43;
+
+  function stopStepTraces() {
+    stepTraceAnimations.forEach(({ animation, node }) => { animation.cancel(); node.remove(); });
+    stepTraceAnimations.clear();
+  }
+  window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", event => { if (event.matches) stopStepTraces(); });
+
+  function stepTrackPoint(index, total) {
+    const yValues = [24, 14, 27, 16, 24, 15, 26, 17];
+    return { x: total === 1 ? 50 : 3 + 94 * index / (total - 1), y: total === 1 ? 24 : yValues[index % yValues.length] };
+  }
+
+  function stepCurve(from, to) {
+    const middle = (from.x + to.x) / 2;
+    return `M ${from.x} ${from.y} C ${middle} ${from.y}, ${middle} ${to.y}, ${to.x} ${to.y}`;
+  }
+
+  function buildStepTrack(task) {
+    const ns = "http://www.w3.org/2000/svg";
+    const track = element("div", "step-track");
+    track.setAttribute("aria-hidden", "true");
+    const nextIndex = task.steps.findIndex(step => !step.done);
+    task.steps.forEach((step, index) => {
+      const point = stepTrackPoint(index, task.steps.length);
+      if (index > 0) {
+        const previous = stepTrackPoint(index - 1, task.steps.length);
+        const link = element("span", `step-link${step.done && task.steps[index - 1].done ? " walked" : ""}`);
+        link.dataset.segment = String(index - 1);
+        const svg = document.createElementNS(ns, "svg");
+        svg.setAttribute("viewBox", `0 0 100 ${STEP_TRACK_HEIGHT}`);
+        svg.setAttribute("preserveAspectRatio", "none");
+        svg.setAttribute("focusable", "false");
+        const curve = document.createElementNS(ns, "path");
+        curve.setAttribute("d", stepCurve(previous, point));
+        curve.setAttribute("vector-effect", "non-scaling-stroke");
+        svg.append(curve);
+        link.append(svg);
+        track.append(link);
+      }
+      const dot = element("span", `step-dot${step.done ? " walked" : ""}${index === nextIndex ? " current" : ""}`);
+      dot.style.left = `${point.x}%`;
+      dot.style.top = `${point.y / STEP_TRACK_HEIGHT * 100}%`;
+      if (step.done) {
+        const mark = document.createElementNS(ns, "svg");
+        mark.setAttribute("viewBox", "0 0 20 20");
+        mark.setAttribute("class", task.done && index === task.steps.length - 1 ? "step-flag" : "step-dot-check");
+        const path = document.createElementNS(ns, "path");
+        path.setAttribute("d", task.done && index === task.steps.length - 1 ? "M6 17V3m0 1h10l-2.5 4L16 12H6" : "m4 10 4 4 8-8");
+        mark.append(path);
+        dot.append(mark);
+      }
+      track.append(dot);
+    });
+    return track;
+  }
+
+  function playStepTrace(wrapper, stepIndex) {
+    if (stepIndex < 1 || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const track = wrapper?.querySelector(".step-track");
+    const curve = track?.querySelector(`.step-link.walked[data-segment="${stepIndex - 1}"] path`);
+    if (!track || !curve) return;
+    const trace = element("span", "step-trace");
+    track.append(trace);
+    const length = curve.getTotalLength();
+    const frames = Array.from({ length: 17 }, (_, index) => {
+      const point = curve.getPointAtLength(length * index / 16);
+      return { left: `${point.x}%`, top: `${point.y / STEP_TRACK_HEIGHT * 100}%` };
+    });
+    Object.assign(trace.style, frames[0]);
+    const animation = trace.animate(frames, { duration: 480, easing: "cubic-bezier(.16, 1, .3, 1)" });
+    const entry = { animation, node: trace };
+    stepTraceAnimations.add(entry);
+    animation.onfinish = () => { trace.remove(); stepTraceAnimations.delete(entry); };
+  }
+
+  /** M：紧凑的弯曲小路只展示进展，展开后整行操作小步。 */
   function buildStepPath(task, progress) {
     const path = element("div", "step-path");
     const expanded = state.taskExpanded.has(task.id);
@@ -2029,11 +2106,8 @@
     const next = FocusModel.nextStep(task);
     expand.append(element("span", "step-count", `小步 ${progress.walked} / ${progress.total}`),
       element("span", "step-caption", next ? `下一步 · ${next.title}` : "每一步都走完了"), element("span", "step-toggle-label", expanded ? "收起" : "展开"));
-    const track = element("div", "step-track");
-    track.setAttribute("aria-hidden", "true");
+    const track = buildStepTrack(task);
     task.steps.forEach((step, index) => {
-      if (index > 0) track.append(element("span", `step-link${step.done && task.steps[index - 1].done ? " walked" : ""}`));
-      track.append(element("span", `step-dot${step.done ? " walked" : ""}`));
       const row = taskButton("", `step-row${step.done ? " walked" : ""}`, () => toggleStep(task, step));
       row.setAttribute("role", "checkbox");
       row.setAttribute("aria-checked", String(step.done));
@@ -2834,6 +2908,7 @@
       const index = task.steps.findIndex(item => item.id === step.id);
       wrapper?.querySelectorAll(".step-dot")[index]?.classList.add("just-walked");
       wrapper?.querySelectorAll(".step-row")[index]?.classList.add("just-walked");
+      playStepTrace(wrapper, index);
     }
   }
 

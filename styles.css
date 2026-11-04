@@ -386,21 +386,29 @@ h3 { font-size: 13px; font-weight: 600; margin: 0; }
 .task-menu:hover { background: var(--surface); }
 .task-tag { background: var(--surface); color: var(--muted); padding: 2px 5px; border-radius: 4px; }
 .task-tag.important { color: var(--accent-dark); background: var(--accent-soft); }
-/* 小路仅为装饰；展开后的整行步骤才是可交互的复选框。 */
-.step-path { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 0 6px; }
-.step-expand { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; width: 100%; min-width: 0; padding: 7px 5px; text-align: left; border-radius: 10px; }
+/* 紧凑曲线只展示进展；节点标题不重复，展开后的整行步骤承担操作。 */
+.step-path { display: flex; flex-direction: column; gap: 0; min-width: 0; padding: 0 6px; }
+.step-expand { display: flex; flex-wrap: nowrap; align-items: center; gap: 9px; width: 100%; min-width: 0; min-height: 44px; padding: 7px 5px; text-align: left; border-radius: 10px; }
 .step-expand:hover { background: var(--surface); }
 .step-caption { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-.step-expand .step-caption { order: 3; flex-basis: 100%; }
+.step-expand .step-caption { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .step-toggle-label, .history-arrow { font-size: 11px; color: var(--muted); }
-.step-toggle-label { margin-left: auto; }
-.step-count { font-size: 11px; color: var(--accent-dark); font-variant-numeric: tabular-nums; }
-.step-track { display: flex; flex: 0 0 100%; width: 100%; min-width: 0; align-items: center; padding: 5px 1px; pointer-events: none; }
-.step-dot { flex: 0 0 11px; width: 11px; height: 11px; display: grid; place-items: center; }
-.step-dot::before { content: ""; width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid #bcbcbc; background: var(--white); transition: background .18s, border-color .18s; }
-.step-dot.walked::before { background: var(--accent); border-color: var(--accent); }
-.step-link { flex: 1 1 0; min-width: 2px; height: 2px; background: var(--line); transition: background .18s; }
-.step-link.walked { background: var(--accent); }
+.step-toggle-label { flex: 0 0 auto; margin-left: auto; }
+.step-count { flex: 0 0 auto; font-size: 11px; font-weight: 600; color: var(--accent-dark); font-variant-numeric: tabular-nums; }
+.step-track { position: relative; flex: 0 0 43px; min-width: 0; height: 43px; margin: 0 3px 5px; width: calc(100% - 6px); pointer-events: none; }
+.step-link { position: absolute; inset: 0; display: block; }
+.step-link svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.step-link path { fill: none; stroke: var(--line); stroke-width: 2; stroke-linecap: round; transition: stroke .18s; }
+.step-link.walked path { stroke: var(--accent); stroke-width: 2.4; }
+.step-dot { position: absolute; z-index: 1; width: 20px; height: 20px; display: grid; place-items: center; transform: translate(-50%, -50%); color: var(--white); }
+.step-dot::before { content: ""; position: absolute; width: 13px; height: 13px; border-radius: 50%; border: 1.3px solid #bcbcbc; background: var(--white); transition: background .18s, border-color .18s, box-shadow .18s; }
+.step-dot:not(.walked)::after { content: ""; position: absolute; width: 4px; height: 4px; border-radius: 50%; background: #c8c8c8; }
+.step-dot.walked::before { width: 16px; height: 16px; background: var(--accent); border-color: var(--accent); }
+.step-dot.current::before { width: 18px; height: 18px; border: 1.7px solid var(--accent); box-shadow: 0 0 0 5px var(--accent-soft); }
+.step-dot.current::after { width: 5px; height: 5px; background: var(--accent); }
+.step-dot-check, .step-flag { position: relative; z-index: 1; width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.step-flag { width: 16px; height: 16px; stroke-width: 1.5; }
+.step-trace { position: absolute; z-index: 3; width: 8px; height: 8px; border: 1.5px solid var(--white); border-radius: 50%; background: var(--accent); transform: translate(-50%, -50%); pointer-events: none; }
 .step-list { display: flex; flex-direction: column; gap: 2px; padding-top: 5px; border-top: 1px solid var(--line); }
 .step-row { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 48px; padding: 10px 8px; border-radius: 9px; text-align: left; }
 .step-row:hover { background: var(--surface); }

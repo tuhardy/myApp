@@ -66,6 +66,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -1056,34 +1057,135 @@ private fun AgeActionPill(label: String, tint: Color, enabled: Boolean, onClick:
     }
 }
 
-/** 小路只展示；展开入口与每个步骤均使用整行触控区域。 */
+private val todoPathY = listOf(24f, 14f, 27f, 16f, 24f, 15f, 26f, 17f)
+
+/** 与浏览器 SVG 使用相同的曲线控制点布局；动画进度只改变装饰，不写数据。 */
+private fun todoJourneyPoint(from: Offset, to: Offset, progress: Float): Offset {
+    val t = progress.coerceIn(0f, 1f)
+    val u = 1f - t
+    val middle = (from.x + to.x) / 2f
+    val firstControl = Offset(middle, from.y)
+    val secondControl = Offset(middle, to.y)
+    return Offset(
+        u * u * u * from.x + 3f * u * u * t * firstControl.x + 3f * u * t * t * secondControl.x + t * t * t * to.x,
+        u * u * u * from.y + 3f * u * u * t * firstControl.y + 3f * u * t * t * secondControl.y + t * t * t * to.y
+    )
+}
+
+/** 紧凑小路只展示；摘要与展开后的每个步骤均使用整行触控区域。 */
 @Composable
 private fun StepPath(todo: Todo, expanded: Boolean, enabled: Boolean, onExpand: () -> Unit, onToggleStep: (TodoStep) -> Unit, finishGlow: Float = 0f, reduceMotion: Boolean = false) {
     val progress = TodoAging.progress(todo)
+    val next = TodoAging.nextStep(todo)
+    val nextIndex = todo.steps.indexOfFirst { !it.done }
+    val allDone = nextIndex < 0
+    val doneIds = todo.steps.filter { it.done }.map { it.id }.toSet()
+    var previousDone by remember(todo.id) { mutableStateOf(doneIds) }
+    var motionIndex by remember(todo.id) { mutableStateOf<Int?>(null) }
+    var traceSegment by remember(todo.id) { mutableStateOf<Int?>(null) }
+    val stepMotion = remember(todo.id) { Animatable(0f) }
+    LaunchedEffect(doneIds, reduceMotion, todo.done) {
+        val newlyDone = todo.steps.indexOfFirst { it.done && it.id !in previousDone }
+        previousDone = doneIds
+        stepMotion.snapTo(1f)
+        motionIndex = null
+        traceSegment = null
+        if (newlyDone < 0 || reduceMotion || todo.done) return@LaunchedEffect
+        stepMotion.snapTo(0f)
+        motionIndex = newlyDone
+        traceSegment = (newlyDone - 1).takeIf { it >= 0 && todo.steps[it].done }
+        stepMotion.animateTo(1f, tween(480, easing = FastOutSlowInEasing))
+        motionIndex = null
+        traceSegment = null
+    }
     Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp)) {
-        Column(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp))
-            .clickable(enabled = enabled, onClickLabel = if (expanded) "收起小步" else "展开小步", onClick = onExpand).semantics { stateDescription = if (expanded) "小步已展开" else "小步已收起" }
-            .padding(horizontal = 5.dp, vertical = 7.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("小步 ${progress.walked} / ${progress.total}", color = AccentDark, fontSize = 11.sp, modifier = Modifier.weight(1f))
-                Text(if (expanded) "收起" else "展开", color = Muted, fontSize = 11.sp)
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled, onClickLabel = if (expanded) "收起小步" else "展开小步", onClick = onExpand)
+            .semantics { stateDescription = if (expanded) "小步已展开" else "小步已收起" }
+            .padding(horizontal = 5.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            Text("小步 ${progress.walked} / ${progress.total}", color = AccentDark, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            Text(if (next == null) "每一步都走完了" else "下一步 · ${next.title}", color = Muted, fontSize = 12.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text(if (expanded) "收起" else "展开", color = Muted, fontSize = 11.sp)
+        }
+        Canvas(Modifier.fillMaxWidth().height(43.dp).padding(horizontal = 3.dp).clearAndSetSemantics {}) {
+            val margin = 13.dp.toPx()
+            val points = todo.steps.mapIndexed { index, _ ->
+                Offset(
+                    if (todo.steps.size == 1) size.width / 2f else margin + (size.width - margin * 2f) * index / (todo.steps.size - 1),
+                    (if (todo.steps.size == 1) 24f else todoPathY[index % todoPathY.size]).dp.toPx()
+                )
             }
-            val next = TodoAging.nextStep(todo)
-            Text(if (next == null) "每一步都走完了" else "下一步 · ${next.title}", color = Muted, fontSize = 12.sp)
-            Row(Modifier.fillMaxWidth().padding(vertical = 5.dp).clearAndSetSemantics {}, verticalAlignment = Alignment.CenterVertically) {
-                todo.steps.forEachIndexed { index, step ->
-                    if (index > 0) Box(Modifier.weight(1f).height(2.dp).background(if (step.done && todo.steps[index - 1].done) Accent else Line))
-                    Canvas(Modifier.size(11.dp)) {
-                        val radius = size.minDimension / 2
-                        if (index == todo.steps.lastIndex && finishGlow > 0f) {
-                            drawCircle(Accent.copy(alpha = 0.18f * finishGlow), radius = radius + 5.dp.toPx() * finishGlow)
-                        }
-                        drawCircle(if (step.done) Accent else Color(0xFFBCBCBC), radius)
-                        if (!step.done) drawCircle(Color.White, (radius - 1.5.dp.toPx()).coerceAtLeast(0f))
+            // 先画所有灰线，再覆盖已经连续走过的暖橙线段。
+            for (pass in 0..1) {
+                for (index in 0 until points.lastIndex) {
+                    val walked = todo.steps[index].done && todo.steps[index + 1].done
+                    if ((pass == 1) != walked) continue
+                    val from = points[index]
+                    val to = points[index + 1]
+                    val middle = (from.x + to.x) / 2f
+                    val curve = Path().apply {
+                        moveTo(from.x, from.y)
+                        cubicTo(middle, from.y, middle, to.y, to.x, to.y)
                     }
+                    drawPath(curve, if (walked) Accent else Line,
+                        style = Stroke(width = (if (walked) 2.4f else 2f).dp.toPx(), cap = StrokeCap.Round))
+                }
+            }
+            points.forEachIndexed { index, point ->
+                val step = todo.steps[index]
+                val current = index == nextIndex
+                val pulse = if (index == motionIndex) 1f + 0.22f * kotlin.math.sin(stepMotion.value * Math.PI).toFloat() else 1f
+                val radius = (when {
+                    allDone && index == points.lastIndex -> 10f
+                    step.done -> 8f
+                    current -> 9f
+                    else -> 6.5f
+                }).dp.toPx() * pulse
+                if (current) drawCircle(AccentSoft, 14.dp.toPx(), point)
+                if (index == points.lastIndex && finishGlow > 0f) {
+                    drawCircle(Accent.copy(alpha = 0.18f * finishGlow), radius = radius + 5.dp.toPx() * finishGlow, center = point)
+                }
+                drawCircle(if (step.done) Accent else Color.White, radius, point)
+                if (!step.done) {
+                    drawCircle(if (current) Accent else Color(0xFFBCBCBC), radius,
+                        style = Stroke(width = (if (current) 1.7f else 1.3f).dp.toPx()), center = point)
+                }
+                if (step.done) {
+                    if (allDone && index == points.lastIndex) {
+                        val flag = Path().apply {
+                            moveTo(point.x - 3.dp.toPx(), point.y + 5.dp.toPx())
+                            lineTo(point.x - 3.dp.toPx(), point.y - 5.dp.toPx())
+                            moveTo(point.x - 3.dp.toPx(), point.y - 5.dp.toPx())
+                            lineTo(point.x + 3.dp.toPx(), point.y - 5.dp.toPx())
+                            lineTo(point.x + 1.dp.toPx(), point.y - 2.dp.toPx())
+                            lineTo(point.x + 3.dp.toPx(), point.y + 1.dp.toPx())
+                            lineTo(point.x - 3.dp.toPx(), point.y + 1.dp.toPx())
+                        }
+                        drawPath(flag, Color.White, style = Stroke(width = 1.2.dp.toPx(), cap = StrokeCap.Round))
+                    } else {
+                        val scale = radius / 8.dp.toPx()
+                        val check = Path().apply {
+                            moveTo(point.x - 3.5.dp.toPx() * scale, point.y)
+                            lineTo(point.x - 1.2.dp.toPx() * scale, point.y + 2.3.dp.toPx() * scale)
+                            lineTo(point.x + 3.3.dp.toPx() * scale, point.y - 2.5.dp.toPx() * scale)
+                        }
+                        drawPath(check, Color.White, style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round))
+                    }
+                } else {
+                    drawCircle(if (current) Accent else Color(0xFFC8C8C8), (if (current) 2.5f else 2f).dp.toPx(), point)
+                }
+            }
+            traceSegment?.let { segment ->
+                if (segment in 0 until points.lastIndex) {
+                    val center = todoJourneyPoint(points[segment], points[segment + 1], stepMotion.value)
+                    drawCircle(Accent, 3.5.dp.toPx(), center)
+                    drawCircle(Color.White, 3.5.dp.toPx(), center, style = Stroke(width = 1.5.dp.toPx()))
                 }
             }
         }
+        Spacer(Modifier.height(5.dp))
         if (expanded) {
             HorizontalDivider(color = Line)
             todo.steps.forEach { step ->
