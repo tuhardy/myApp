@@ -738,10 +738,16 @@
     cover.className = `${baseClass} music-cover ${track.tone || "tone-one"}`.trim();
     if (track.coverUrl) {
       const image = document.createElement("img");
+      image.addEventListener("load", () => {
+        if (image.naturalWidth > 0 && image.naturalHeight > 0) cover.style.setProperty("--cover-ratio", String(image.naturalWidth / image.naturalHeight));
+      });
       image.src = track.coverUrl;
       image.alt = "";
       cover.replaceChildren(image);
-    } else cover.replaceChildren(icon(track.art || "cover-wave"));
+    } else {
+      cover.style.removeProperty("--cover-ratio");
+      cover.replaceChildren(icon(track.art || "cover-wave"));
+    }
   }
 
   function renderMusicRecent() {

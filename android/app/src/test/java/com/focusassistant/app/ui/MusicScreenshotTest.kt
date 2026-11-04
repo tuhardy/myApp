@@ -3,6 +3,7 @@ package com.focusassistant.app.ui
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -106,6 +107,7 @@ class MusicScreenshotTest {
         compose.onNodeWithText("0:42").assertExists()
         compose.onNodeWithText("3:20").assertExists()
         compose.onNodeWithText("列表循环").assertExists()
+        compose.onNodeWithText("播放队列 · 12").assertIsDisplayed()
         capture("music-immersive-player")
         compose.onNodeWithContentDescription("返回声音馆").performClick()
         compose.runOnIdle { assertEquals(false, state.playerOpen) }

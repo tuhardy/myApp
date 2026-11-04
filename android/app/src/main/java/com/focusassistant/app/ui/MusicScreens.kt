@@ -505,7 +505,8 @@ private fun SongRow(track: MusicTrack, selected: Boolean, rank: Int? = null, sta
 }
 
 @Composable
-internal fun TrackCoverArt(track: MusicTrack, modifier: Modifier = Modifier, radius: Dp = 7.dp) {
+internal fun TrackCoverArt(track: MusicTrack, modifier: Modifier = Modifier, radius: Dp = 7.dp,
+    contentScale: ContentScale = ContentScale.Crop, naturalAspectRatio: Boolean = false) {
     val context = LocalContext.current
     val bitmap by produceState<Bitmap?>(null, track.id, track.coverFile) {
         value = withContext(Dispatchers.IO) {
@@ -519,7 +520,10 @@ internal fun TrackCoverArt(track: MusicTrack, modifier: Modifier = Modifier, rad
         }
     }
     bitmap?.let {
-        Image(it.asImageBitmap(), null, modifier.clip(RoundedCornerShape(radius)), contentScale = ContentScale.Crop)
+        val imageModifier = if (naturalAspectRatio) Modifier.aspectRatio(it.width.toFloat() / it.height)
+            .background(Color(0xFFF2F3F3), RoundedCornerShape(radius)).clip(RoundedCornerShape(radius))
+        else modifier.clip(RoundedCornerShape(radius))
+        Image(it.asImageBitmap(), null, imageModifier, contentScale = contentScale)
     } ?: CoverArt(track.id, modifier, radius)
 }
 

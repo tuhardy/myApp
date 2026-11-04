@@ -17,6 +17,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -33,38 +35,52 @@ internal fun ImmersiveMusicPlayer(
     onPrevious: () -> Unit, onNext: () -> Unit, onSeek: (Long) -> Unit
 ) {
     val playback = state.playback
-    Column(Modifier.fillMaxSize().background(Color.White).verticalScroll(rememberScrollState())
-        .padding(horizontal = 24.dp, vertical = 10.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack, Modifier.size(44.dp)) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回声音馆") }
-            Text("正在播放", Modifier.weight(1f), fontSize = 13.sp, color = MusicMuted, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-            TextButton(onClick = onEdit, Modifier.sizeIn(minWidth = 44.dp, minHeight = 44.dp)) { Text("编辑", fontSize = 13.sp) }
-        }
-        TrackCoverArt(track, Modifier.fillMaxWidth().padding(top = 12.dp).aspectRatio(1f), radius = 14.dp)
-        Text(track.title, Modifier.padding(top = 24.dp), fontSize = 28.sp, lineHeight = 36.sp,
-            fontWeight = FontWeight.SemiBold, letterSpacing = (-0.6).sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(track.artist, Modifier.padding(top = 5.dp), color = MusicMuted, fontSize = 14.sp)
-        PlaybackProgress(playback.positionMs, playback.durationMs, onSeek, Modifier.padding(top = 20.dp))
-        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(30.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onPrevious, Modifier.size(52.dp)) { Icon(Icons.Outlined.SkipPrevious, "上一首", Modifier.size(29.dp)) }
-            FilledIconButton(onClick = onToggle, Modifier.size(66.dp), shape = RoundedCornerShape(50),
-                colors = IconButtonDefaults.filledIconButtonColors(containerColor = PlayerOrange, contentColor = Color.White)) {
-                Icon(if (playback.playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
-                    if (playback.playing) "暂停" else "播放", Modifier.size(30.dp))
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color.White)) {
+        val scrollFallback = maxHeight < 560.dp || LocalDensity.current.fontScale > 1.25f
+        val scrollCoverHeight = (maxHeight * 0.42f).coerceIn(180.dp, 320.dp)
+        Column(Modifier.fillMaxSize().then(if (scrollFallback) Modifier.verticalScroll(rememberScrollState()) else Modifier)
+            .padding(horizontal = 24.dp, vertical = 10.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack, Modifier.size(44.dp)) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回声音馆") }
+                Text("正在播放", Modifier.weight(1f), fontSize = 13.sp, color = MusicMuted, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                TextButton(onClick = onEdit, Modifier.sizeIn(minWidth = 44.dp, minHeight = 44.dp)) { Text("编辑", fontSize = 13.sp) }
             }
-            IconButton(onClick = onNext, Modifier.size(52.dp)) { Icon(Icons.Outlined.SkipNext, "下一首", Modifier.size(29.dp)) }
-        }
-        Row(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 24.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            TextButton(onClick = onMode, Modifier.heightIn(min = 48.dp)) {
-                Icon(if (playback.mode == MusicPlayMode.SHUFFLE) Icons.Outlined.Shuffle else Icons.Outlined.Repeat,
-                    null, Modifier.size(18.dp)); Spacer(Modifier.width(7.dp)); Text(playback.mode.label, fontSize = 13.sp)
+            if (scrollFallback) PlayerCover(track, Modifier.fillMaxWidth().height(scrollCoverHeight).padding(top = 8.dp))
+            else PlayerCover(track, Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp))
+            Text(track.title, Modifier.padding(top = 16.dp), fontSize = 28.sp, lineHeight = 36.sp,
+                fontWeight = FontWeight.SemiBold, letterSpacing = (-0.6).sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(track.artist, Modifier.padding(top = 4.dp), color = MusicMuted, fontSize = 14.sp)
+            PlaybackProgress(playback.positionMs, playback.durationMs, onSeek, Modifier.padding(top = 12.dp))
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(30.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onPrevious, Modifier.size(52.dp)) { Icon(Icons.Outlined.SkipPrevious, "上一首", Modifier.size(29.dp)) }
+                FilledIconButton(onClick = onToggle, Modifier.size(66.dp), shape = RoundedCornerShape(50),
+                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = PlayerOrange, contentColor = Color.White)) {
+                    Icon(if (playback.playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                        if (playback.playing) "暂停" else "播放", Modifier.size(30.dp))
+                }
+                IconButton(onClick = onNext, Modifier.size(52.dp)) { Icon(Icons.Outlined.SkipNext, "下一首", Modifier.size(29.dp)) }
             }
-            TextButton(onClick = onQueue, Modifier.heightIn(min = 48.dp)) {
-                Icon(Icons.AutoMirrored.Outlined.QueueMusic, null, Modifier.size(19.dp)); Spacer(Modifier.width(7.dp))
-                Text("播放队列 · ${playback.queueIds.size}", fontSize = 13.sp)
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(onClick = onMode, Modifier.heightIn(min = 48.dp)) {
+                    Icon(if (playback.mode == MusicPlayMode.SHUFFLE) Icons.Outlined.Shuffle else Icons.Outlined.Repeat,
+                        null, Modifier.size(18.dp)); Spacer(Modifier.width(7.dp)); Text(playback.mode.label, fontSize = 13.sp)
+                }
+                TextButton(onClick = onQueue, Modifier.heightIn(min = 48.dp)) {
+                    Icon(Icons.AutoMirrored.Outlined.QueueMusic, null, Modifier.size(19.dp)); Spacer(Modifier.width(7.dp))
+                    Text("播放队列 · ${playback.queueIds.size}", fontSize = 13.sp)
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun PlayerCover(track: MusicTrack, modifier: Modifier = Modifier) {
+    BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
+        val side = minOf(maxWidth, maxHeight)
+        if (side > 0.dp) TrackCoverArt(track, Modifier.size(side).background(Color(0xFFF2F3F3), RoundedCornerShape(14.dp)),
+            radius = 14.dp, contentScale = ContentScale.Fit, naturalAspectRatio = true)
     }
 }
 
