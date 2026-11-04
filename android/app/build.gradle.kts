@@ -24,8 +24,8 @@ android {
         applicationId = "com.focusassistant.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 52
-        versionName = "1.0.1"
+        versionCode = 58
+        versionName = "1.0.7"
     }
 
     buildTypes {
@@ -91,6 +91,9 @@ dependencies {
     implementation("androidx.room:room-ktx:2.7.1")
     ksp("androidx.room:room-compiler:2.7.1")
     implementation("androidx.work:work-runtime-ktx:2.10.1")
+    implementation("androidx.media3:media3-exoplayer:1.5.1")
+    implementation("androidx.media3:media3-session:1.5.1")
+    implementation("androidx.media3:media3-common:1.5.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

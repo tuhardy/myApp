@@ -1617,6 +1617,76 @@
     return directoryCount > 1 ? `${base}（${String(directoryName || "").trim() || "未命名目录"}）` : base;
   }
 
+  function bilibiliMusicCacheCid(directoryName) {
+    const match = /^c_(\d+)$/.exec(String(directoryName || "").trim());
+    if (!match) return 0;
+    const cid = Number(match[1]);
+    return Number.isSafeInteger(cid) && cid > 0 ? cid : 0;
+  }
+
+  function importedBilibiliMusicCids(tracks) {
+    return new Set((tracks || []).map(track => track?.sourceCid)
+      .filter(cid => Number.isSafeInteger(cid) && cid > 0));
+  }
+
+  function bilibiliMusicSourceCid(metadata, directoryName) {
+    return Number.isSafeInteger(metadata?.cid) && metadata.cid > 0 ? metadata.cid : bilibiliMusicCacheCid(directoryName);
+  }
+
+  const BILIBILI_MUSIC_CACHE_DEPTH = 3;
+
+  /** 返回共享目录中的缓存根路径；entry.json 定位缓存，c_<cid> 让缺失元数据的缓存也能识别。 */
+  function bilibiliMusicCacheRoots(paths) {
+    const roots = new Set();
+    (paths || []).forEach(value => {
+      const path = String(value || "").replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+      const parts = path.split("/").filter(Boolean);
+      const name = parts.at(-1);
+      if (name === "entry.json" && parts.length >= 2 && parts.length - 1 <= BILIBILI_MUSIC_CACHE_DEPTH + 1) {
+        roots.add(parts.slice(0, -1).join("/"));
+      }
+      if (name === "audio.m4s" && parts.length >= 3) {
+        const root = parts.slice(0, -2);
+        if (root.length <= BILIBILI_MUSIC_CACHE_DEPTH + 1 && bilibiliMusicCacheCid(root.at(-1)) > 0) roots.add(root.join("/"));
+      }
+    });
+    return [...roots].sort((left, right) => left.localeCompare(right, "zh-CN"));
+  }
+
+  const MUSIC_PLAY_MODES = Object.freeze([
+    { id: "sequential", label: "顺序播放" }, { id: "repeat-all", label: "列表循环" },
+    { id: "repeat-one", label: "单曲循环" }, { id: "shuffle", label: "随机播放" },
+  ]);
+
+  function musicQueueMove(ids, from, to) {
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from >= ids.length || to >= ids.length || from === to) return [...ids];
+    const next = [...ids];
+    next.splice(to, 0, next.splice(from, 1)[0]);
+    return next;
+  }
+
+  function musicQueueRemove(ids, index) {
+    return Number.isInteger(index) && index >= 0 && index < ids.length ? ids.filter((_, current) => current !== index) : [...ids];
+  }
+
+  function musicQueueClearUpcoming(ids, currentId) {
+    return currentId && ids.includes(currentId) ? [currentId] : [];
+  }
+
+  function musicQueueNextId(ids, currentId, wrap) {
+    if (!ids.length) return null;
+    const index = ids.indexOf(currentId);
+    if (index < 0) return ids[0];
+    return index + 1 < ids.length ? ids[index + 1] : wrap ? ids[0] : null;
+  }
+
+  function musicListenSeconds(accumulatedMs, playingSinceElapsed, nowElapsed) {
+    const active = playingSinceElapsed === null ? 0 : Math.max(0, nowElapsed - playingSinceElapsed);
+    return Math.floor((Math.max(0, accumulatedMs) + active) / 1000);
+  }
+
+  function musicListenRecordable(seconds) { return seconds >= 10; }
+
   const MUSIC_TRACKS = Object.freeze([
     { id: "sunny", title: "晴天", artist: "周杰伦", duration: "4:29", seconds: 269, tone: "tone-one", art: "cover-wave" },
     { id: "if", title: "如果可以", artist: "韦礼安", duration: "4:34", seconds: 274, tone: "tone-two", art: "cover-bars" },
@@ -1669,24 +1739,24 @@
     }));
   }
 
-  function musicListenInRange(record, start, end) {
+  function musicListenInRange(record, start, end, tracks = MUSIC_TRACKS) {
     const playedAt = new Date(record?.playedAt);
     if (!Number.isFinite(playedAt.getTime()) || playedAt < start || playedAt >= end) return null;
-    const track = MUSIC_TRACKS.find(item => item.id === record.trackId);
+    const track = tracks.find(item => item.id === record.trackId);
     if (!track) return null;
     const seconds = Number.isFinite(record.seconds) && record.seconds >= 0 ? record.seconds : track.seconds;
     return { playedAt, track, seconds };
   }
 
   /** 按周期聚合歌曲；名次先看播放次数，再看累计秒数，日均只计有收听的自然日。 */
-  function musicListeningSummary(records, period, anchor) {
+  function musicListeningSummary(records, period, anchor, tracks = MUSIC_TRACKS) {
     const { start, end } = periodRange(period, anchor);
     const byTrack = new Map();
     const days = new Set();
     let plays = 0;
     let seconds = 0;
     for (const record of Array.isArray(records) ? records : []) {
-      const listen = musicListenInRange(record, start, end);
+      const listen = musicListenInRange(record, start, end, tracks);
       if (!listen) continue;
       const { playedAt, track, seconds: listenedSeconds } = listen;
       const current = byTrack.get(track.id) ?? { ...track, plays: 0, seconds: 0, lastPlayedAt: record.playedAt };
@@ -1704,7 +1774,7 @@
   }
 
   /** 日按小时、周与月按自然日、年按月补零；每条记录归入开始播放的时间桶。 */
-  function musicListeningTrend(records, period, anchor) {
+  function musicListeningTrend(records, period, anchor, tracks = MUSIC_TRACKS) {
     const { start, end } = periodRange(period, anchor);
     const bins = [];
     if (period === "day") {
@@ -1726,15 +1796,15 @@
     }
     const byKey = new Map(bins.map(bin => [bin.key, bin]));
     for (const record of Array.isArray(records) ? records : []) {
-      const listen = musicListenInRange(record, start, end);
+      const listen = musicListenInRange(record, start, end, tracks);
       if (listen) byKey.get(trendKey(listen.playedAt, period)).seconds += listen.seconds;
     }
     return bins;
   }
 
-  function compareMusicListening(records, period, anchor) {
-    const current = musicListeningSummary(records, period, anchor).seconds;
-    const previous = musicListeningSummary(records, period, shiftPeriodAnchor(period, anchor, -1)).seconds;
+  function compareMusicListening(records, period, anchor, tracks = MUSIC_TRACKS) {
+    const current = musicListeningSummary(records, period, anchor, tracks).seconds;
+    const previous = musicListeningSummary(records, period, shiftPeriodAnchor(period, anchor, -1), tracks).seconds;
     return { current, previous, difference: current - previous };
   }
 
@@ -1788,7 +1858,9 @@
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
     validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary,
     allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,
-    MUSIC_TRACKS, parseBilibiliMusicEntry, bilibiliMusicCandidateTitle, initialMusicListens, musicListeningSummary, musicListeningTrend, compareMusicListening,
+    MUSIC_TRACKS, MUSIC_PLAY_MODES, musicQueueMove, musicQueueRemove, musicQueueClearUpcoming, musicQueueNextId, musicListenSeconds, musicListenRecordable,
+    parseBilibiliMusicEntry, bilibiliMusicCandidateTitle, BILIBILI_MUSIC_CACHE_DEPTH, bilibiliMusicCacheCid, importedBilibiliMusicCids, bilibiliMusicSourceCid, bilibiliMusicCacheRoots,
+    initialMusicListens, musicListeningSummary, musicListeningTrend, compareMusicListening,
     completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks,
     DIARY_LIMITS, initialDiaryEntries, diaryEntryDate, parseDiaryDateQuery, validateDiaryEntry, selectDiaryEntries, trashedDiaryEntries, listDiaryDrafts, moveDiaryToTrash, restoreDiaryEntry,
     diaryStreak, JOB_ASSIST_LIMITS, JOB_ASSIST_STATUS, validateJobOpportunity,

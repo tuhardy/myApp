@@ -129,4 +129,36 @@ class MusicTest {
             BilibiliMusicImport.parseEntry("""{"title":" 主标题 ","owner_name":" UP ","page_data":{"part":"  "}}""", ""))
         assertEquals("未命名音频", BilibiliMusicImport.parseEntry(null, "").title)
     }
+
+    @Test fun playbackQueueEditingAndListeningThresholdRules() {
+        val ids = listOf("a", "b", "c")
+        assertEquals(listOf("b", "a", "c"), MusicQueue.move(ids, 1, 0))
+        assertEquals(ids, MusicQueue.move(ids, -1, 2))
+        assertEquals(listOf("a", "c"), MusicQueue.remove(ids, 1))
+        assertEquals(listOf("b"), MusicQueue.clearUpcoming(ids, "b"))
+        assertEquals(emptyList<String>(), MusicQueue.clearUpcoming(ids, null))
+        assertEquals("c", MusicQueue.nextId(ids, "b", wrap = false))
+        assertEquals(null, MusicQueue.nextId(ids, "c", wrap = false))
+        assertEquals("a", MusicQueue.nextId(ids, "c", wrap = true))
+        assertEquals(8L, MusicListenSession.seconds(8_500, 1_000, 1_499))
+        assertEquals(10L, MusicListenSession.seconds(8_500, 1_000, 2_500))
+        assertEquals(8L, MusicListenSession.seconds(8_500, null, 99_999))
+        assertEquals(false, MusicListenSession.recordable(9))
+        assertEquals(true, MusicListenSession.recordable(10))
+    }
+
+    @Test fun bilibiliSharedDirectoryAndDeduplicationRules() {
+        assertEquals(3, BilibiliMusicImport.CACHE_DEPTH)
+        assertEquals(3533764L, BilibiliMusicImport.cacheCid(" c_3533764 "))
+        assertEquals(0L, BilibiliMusicImport.cacheCid("16"))
+        assertEquals(0L, BilibiliMusicImport.cacheCid("c_0"))
+        assertEquals(0L, BilibiliMusicImport.cacheCid("c_12a"))
+        assertEquals(42L, BilibiliMusicImport.sourceCid(BilibiliMusicImport.parseEntry(null, "c_42"), "c_42"))
+        assertEquals(7L, BilibiliMusicImport.sourceCid(BilibiliMusicEntry("标题", "", 1, true, cid = 7), "c_42"))
+        assertEquals("内部存储/Music/专注助手/B站导入", BilibiliMusicImport.treeLabel("primary:Music/专注助手/B站导入"))
+        assertEquals("内部存储", BilibiliMusicImport.treeLabel("primary:"))
+        assertEquals("1A2B-3C4D/Music", BilibiliMusicImport.treeLabel("1A2B-3C4D:Music/"))
+        val imported = listOf(MusicTrack("a", "A", "", 1, sourceCid = 7), MusicTrack("b", "B", "", 1))
+        assertEquals(setOf(7L), BilibiliMusicImport.importedCids(imported))
+    }
 }

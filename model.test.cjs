@@ -1517,6 +1517,46 @@ test("B 站音乐缓存缺少或损坏 entry.json 时不阻止标题回退", () 
   assert.equal(parseBilibiliMusicEntry(null, "").title, "未命名音频");
 });
 
+test("B 站共享目录识别单个、并列与整个 download 缓存，并按已导入 cid 去重", () => {
+  const { bilibiliMusicCacheCid, importedBilibiliMusicCids, bilibiliMusicSourceCid, bilibiliMusicCacheRoots, parseBilibiliMusicEntry } = require("./model.js");
+  assert.equal(bilibiliMusicCacheCid(" c_3533764 "), 3533764);
+  assert.equal(bilibiliMusicCacheCid("16"), 0);
+  assert.equal(bilibiliMusicCacheCid("c_0"), 0);
+  assert.equal(bilibiliMusicCacheCid("c_12a"), 0);
+  assert.equal(bilibiliMusicSourceCid(parseBilibiliMusicEntry(null, "c_42"), "c_42"), 42);
+  assert.equal(bilibiliMusicSourceCid({ cid: 7 }, "c_42"), 7);
+  assert.deepEqual(new Set(bilibiliMusicCacheRoots([
+    "导入/c_3533764/entry.json", "导入/c_3533764/16/audio.m4s",
+    "导入/av8/c_43/16/audio.m4s", "导入/download/av9/c_42/32/audio.m4s",
+    "导入/extra/download/av9/c_99/32/audio.m4s", "导入/c_0/16/audio.m4s", "导入/other/video.m4s",
+  ])), new Set(["导入/c_3533764", "导入/av8/c_43", "导入/download/av9/c_42"]));
+  assert.deepEqual(bilibiliMusicCacheRoots(["c_7/16/audio.m4s"]), ["c_7"]);
+  assert.deepEqual([...importedBilibiliMusicCids([{ sourceCid: 7 }, { sourceCid: 0 }, {}])], [7]);
+});
+
+test("音乐队列编辑保留当前曲，收听记录只累计真实播放时间", () => {
+  const { MUSIC_PLAY_MODES, musicQueueMove, musicQueueRemove, musicQueueClearUpcoming, musicQueueNextId, musicListenSeconds, musicListenRecordable, musicListeningSummary } = require("./model.js");
+  assert.deepEqual(MUSIC_PLAY_MODES.map(mode => mode.id), ["sequential", "repeat-all", "repeat-one", "shuffle"]);
+  const ids = ["a", "b", "c"];
+  assert.deepEqual(musicQueueMove(ids, 1, 0), ["b", "a", "c"]);
+  assert.deepEqual(musicQueueMove(ids, -1, 2), ids);
+  assert.deepEqual(musicQueueRemove(ids, 1), ["a", "c"]);
+  assert.deepEqual(musicQueueClearUpcoming(ids, "b"), ["b"]);
+  assert.deepEqual(musicQueueClearUpcoming(ids, null), []);
+  assert.equal(musicQueueNextId(ids, "b", false), "c");
+  assert.equal(musicQueueNextId(ids, "c", false), null);
+  assert.equal(musicQueueNextId(ids, "c", true), "a");
+  assert.equal(musicListenSeconds(8500, 1000, 1499), 8);
+  assert.equal(musicListenSeconds(8500, 1000, 2500), 10);
+  assert.equal(musicListenSeconds(8500, null, 99999), 8);
+  assert.equal(musicListenRecordable(9), false);
+  assert.equal(musicListenRecordable(10), true);
+  const local = { id: "local", title: "本机音频", artist: "UP 主", seconds: 100 };
+  const actual = [{ trackId: "local", playedAt: new Date(2026, 9, 30, 8).toISOString(), seconds: 12 }];
+  assert.equal(musicListeningSummary(actual, "day", new Date(2026, 9, 30, 12), [local]).seconds, 12);
+  assert.equal(musicListeningSummary(actual, "day", new Date(2026, 9, 30, 12)).plays, 0);
+});
+
 test("音乐回顾按日周月年过滤并生成播放次数与时长排行", () => {
   const { musicListeningSummary } = require("./model.js");
   const anchor = new Date(2026, 9, 30, 12);

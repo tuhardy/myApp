@@ -26,7 +26,7 @@ import org.json.JSONObject
 class FocusRepository(context: Context, scope: CoroutineScope) {
     private val appContext = context.applicationContext
     private val database = Room.databaseBuilder(appContext, FocusDatabase::class.java, "focus-assistant.db")
-        .addMigrations(FocusDatabase.MIGRATION_1_2, FocusDatabase.MIGRATION_2_3, FocusDatabase.MIGRATION_3_4, FocusDatabase.MIGRATION_4_5, FocusDatabase.MIGRATION_5_6, FocusDatabase.MIGRATION_6_7)
+        .addMigrations(FocusDatabase.MIGRATION_1_2, FocusDatabase.MIGRATION_2_3, FocusDatabase.MIGRATION_3_4, FocusDatabase.MIGRATION_4_5, FocusDatabase.MIGRATION_5_6, FocusDatabase.MIGRATION_6_7, FocusDatabase.MIGRATION_7_8)
         .enableMultiInstanceInvalidation().build()
     private val dao = database.dao()
     private val mutex = Mutex()
@@ -149,16 +149,19 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         mutate { it.copy(settings = settings) }
     }
 
-    suspend fun inspectBilibiliMusic(treeUri: Uri): List<MusicImportCandidate> = withContext(Dispatchers.IO) {
+    suspend fun inspectBilibiliMusic(treeUri: Uri): MusicImportScan = withContext(Dispatchers.IO) {
         ready.await()
-        MusicImportScanner.scan(appContext, treeUri).map { it.candidate }
+        val imported = BilibiliMusicImport.importedCids(mutableState.value.musicTracks)
+        val scan = MusicImportScanner.scan(appContext, treeUri, imported)
+        MusicImportScan(scan.sources.map { it.candidate }, scan.skipped)
     }
 
     /** 文件先复制到独立目录，再由唯一写入口登记曲库；重复或失败副本立即清理。 */
     suspend fun importBilibiliMusic(treeUri: Uri, requests: List<MusicImportRequest>): MusicImportResult = withContext(Dispatchers.IO) {
         ready.await()
         require(requests.isNotEmpty()) { "请至少选择一首音频" }
-        val sources = MusicImportScanner.scan(appContext, treeUri).associateBy { it.candidate.sourceId }
+        // 确认时重新完整扫描；即使另一个窗口已导入相同 cid，最终 SHA-256 仍会拦住重复文件。
+        val sources = MusicImportScanner.scan(appContext, treeUri).sources.associateBy { it.candidate.sourceId }
         val prepared = mutableListOf<MusicTrack>()
         val failures = mutableListOf<String>()
         try {
@@ -195,6 +198,33 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         } catch (error: Exception) {
             prepared.forEach { MusicFiles.delete(appContext, it.id) }
             throw error
+        }
+    }
+
+    suspend fun updateMusicTrack(trackId: String, title: String, artist: String, coverUri: Uri?) = withContext(Dispatchers.IO) {
+        ready.await()
+        val cleanTitle = title.trim()
+        val cleanArtist = artist.trim()
+        require(cleanTitle.isNotEmpty() && cleanTitle.length <= Validation.MAX_TITLE) { "歌名须为 1–${Validation.MAX_TITLE} 个字符" }
+        require(cleanArtist.length <= Validation.MAX_TITLE) { "歌手不可超过 ${Validation.MAX_TITLE} 个字符" }
+        val existing = mutableState.value.musicTracks.find { it.id == trackId } ?: error("歌曲已不在曲库中")
+        val coverFile = coverUri?.let { MusicFiles.replaceCover(appContext, existing, it) } ?: existing.coverFile
+        mutate { current ->
+            val track = current.musicTracks.find { it.id == trackId } ?: error("歌曲已不在曲库中")
+            current.copy(musicTracks = current.musicTracks.map {
+                if (it.id == trackId) track.copy(title = cleanTitle, artist = cleanArtist.ifBlank { "未知歌手" }, coverFile = coverFile) else it
+            })
+        }
+        if (coverUri != null && existing.coverFile != coverFile) MusicFiles.deleteCover(appContext, existing.coverFile)
+    }
+
+    /** 同一次媒体会话只保留一条记录，暂停、切歌和周期保存时更新真实收听秒数。 */
+    suspend fun recordMusicListen(listen: MusicListen) = withContext(Dispatchers.IO) {
+        ready.await()
+        require(MusicListenSession.recordable(listen.seconds ?: 0)) { "收听时长未达到记录阈值" }
+        mutate { current ->
+            if (current.musicTracks.none { it.id == listen.trackId }) current
+            else current.copy(musicListens = upsert(current.musicListens, listen) { it.id })
         }
     }
 
@@ -274,7 +304,7 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
             mutate { current ->
                 require(current.timer == null) { "请先结束或确认放弃当前计时，再恢复备份" }
                 // 现有备份不含日记与资产：恢复时原样保留本机记录，不能因为备份里没有而清空。
-                AppState(backup.projects.toList(), backup.todos.toList(), backup.sessions.map { it.copy(progressPrompted = true, segments = it.segments.toList()) }, backup.progress.toList(), backup.settings, loading = false, diaries = current.diaries, diaryDrafts = current.diaryDrafts, assets = current.assets, jobOpportunities = current.jobOpportunities, autoApply = current.autoApply, musicTracks = current.musicTracks)
+                AppState(backup.projects.toList(), backup.todos.toList(), backup.sessions.map { it.copy(progressPrompted = true, segments = it.segments.toList()) }, backup.progress.toList(), backup.settings, loading = false, diaries = current.diaries, diaryDrafts = current.diaryDrafts, assets = current.assets, jobOpportunities = current.jobOpportunities, autoApply = current.autoApply, musicTracks = current.musicTracks, musicListens = current.musicListens)
             }
         }
     }
@@ -477,7 +507,8 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         jobOpportunities = dao.jobOpportunities().map { JsonCodec.readJobOpportunity(JSONObject(it.payload)) },
         autoApply = AutoApplyBook(dao.autoApplySettings()?.let { JsonCodec.readAutoApplySettings(JSONObject(it.payload)) } ?: AutoApplySettings(),
             dao.autoApplyRecords().map { JsonCodec.readAutoApplyRecord(JSONObject(it.payload)) }),
-        musicTracks = dao.musicTracks().map { JsonCodec.readMusicTrack(JSONObject(it.payload)) }
+        musicTracks = dao.musicTracks().map { JsonCodec.readMusicTrack(JSONObject(it.payload)) },
+        musicListens = dao.musicListens().map { JsonCodec.readMusicListen(JSONObject(it.payload)) }
     )
 
     private suspend fun persist(old: AppState, next: AppState) {
@@ -495,6 +526,7 @@ class FocusRepository(context: Context, scope: CoroutineScope) {
         sync(old.autoApply.records, next.autoApply.records, { it.id }, dao::removeAutoApplyRecords) { changed -> dao.putAutoApplyRecords(changed.map { (index, item) -> AutoApplyRecordRow(item.id, JsonCodec.autoApplyRecord(item).toString(), index) }) }
         if (old.autoApply.settings != next.autoApply.settings) dao.putAutoApplySettings(AutoApplySettingsRow(payload = JsonCodec.autoApplySettings(next.autoApply.settings).toString()))
         sync(old.musicTracks, next.musicTracks, { it.id }, dao::removeMusicTracks) { changed -> dao.putMusicTracks(changed.map { (index, item) -> MusicTrackRow(item.id, JsonCodec.musicTrack(item).toString(), index) }) }
+        sync(old.musicListens, next.musicListens, { it.id }, dao::removeMusicListens) { changed -> dao.putMusicListens(changed.map { (index, item) -> MusicListenRow(item.id, JsonCodec.musicListen(item).toString(), index) }) }
         if (old.settings != next.settings) dao.putSettings(SettingsRow(payload = JsonCodec.settings(next.settings).toString()))
         if (old.timer != next.timer) {
             if (next.timer == null) dao.clearTimer() else dao.putTimer(TimerRow(payload = JsonCodec.timer(next.timer).toString()))

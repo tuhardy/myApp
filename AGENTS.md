@@ -30,6 +30,7 @@
 
 ## 协作方式
 
+- **前端设计必须先使用 `frontend-design` Skill。** 凡涉及页面、组件、布局、 typography、配色或交互视觉设计，若该技能已加载就通过 Skill 工具调用；若当前会话未加载，先读取本机官方源文件 `C:\Users\Administrator\.claude\plugins\marketplaces\claude-plugins-official\plugins\frontend-design\skills\frontend-design\SKILL.md`，按其中“设计计划、对照需求自审、实现、截图复盘”流程执行。不得跳过设计流程，也不得把直接读取源文件假称为 Skill 工具调用成功。
 - **需要联网下载、或耗时超过一两分钟的构建与测试，给出纯 PowerShell 命令让用户执行并贴回输出，不要自己反复起构建干等。** 助手沙箱没有外网（`curl` 直接 exit 35），用户本机有；长构建期间助手既看不到进度也做不了别的事。助手负责改代码和读报错，用户负责跑。
 - **助手自己执行的命令一律限时 2 分钟（Bash 工具 `timeout: 120000`，或命令前加 `timeout 120`）。超时就放弃，不重试、不改长时限，直接把等价的 PowerShell 命令交给用户执行。** Gradle 任务（含 `compileDebugKotlin`、`testDebugUnitTest`、`lintDebug`、截图测试）和完整浏览器回归 `browser_check.py` 默认都按「可能超时」处理，直接给命令，不先自己试跑。另外 `android/verify.ps1` 在助手的 bash 里结束时会因 `SetConsoleWindowTitle` 报错，且 daemon 占着句柄让命令迟迟不返回，这也是不要由助手执行它的原因。
 - 给用户的命令必须能直接粘贴：用 `;` 分隔而不是 `&&`（PowerShell 5.1 不支持 `&&`），不带 `!` 前缀（那是 Claude Code 的输入前缀，不是 shell 语法）。

@@ -65,6 +65,8 @@ internal class MusicUiState {
     var query by mutableStateOf("")
     var selectedTrackId by mutableStateOf<String?>(null)
     var playing by mutableStateOf(false)
+    var playback by mutableStateOf(MusicPlaybackSnapshot())
+    var playerOpen by mutableStateOf(false)
     var playlistId by mutableStateOf<String?>(null)
     var period by mutableStateOf(Period.WEEK)
     var anchor by mutableStateOf(LocalDate.now())
@@ -79,9 +81,9 @@ private const val MUSIC_MAX_YEAR = 2100
 
 // 与浏览器 music-* 样式一致：音乐页使用更明亮的播放橙和独立的灰阶。
 private val MusicOrange = Color(0xFFEF5B24)
-private val MusicMuted = Color(0xFF686E72)
+internal val MusicMuted = Color(0xFF686E72)
 private val MusicSurface = Color(0xFFF2F3F3)
-private val MusicLine = Color(0xFFDDE0E1)
+internal val MusicLine = Color(0xFFDDE0E1)
 private val MusicSongLine = Color(0xFFE7E9E9)
 private val MusicCurrent = Color(0xFFF7F7F6)
 private val MusicWaveIdle = Color(0xFFC9CED0)
@@ -126,23 +128,35 @@ internal fun MusicScreen(
     state: MusicUiState,
     today: LocalDate,
     onMessage: (String) -> Unit = {},
-    onAdd: () -> Unit = {}
+    onAdd: () -> Unit = {},
+    onPlay: (MusicTrack) -> Unit = {},
+    onToggle: () -> Unit = {},
+    onOpenPlayer: () -> Unit = {},
+    onPrevious: () -> Unit = {},
+    onNext: () -> Unit = {},
+    onSeek: (Long) -> Unit = {},
+    onMode: () -> Unit = {},
+    onQueue: () -> Unit = {},
+    onEdit: () -> Unit = {}
 ) {
     val current = tracks.find { it.id == state.selectedTrackId }
+    if (state.playerOpen && current != null) {
+        BackHandler { state.playerOpen = false }
+        ImmersiveMusicPlayer(current, state, onBack = { state.playerOpen = false }, onEdit = onEdit,
+            onMode = onMode, onQueue = onQueue, onToggle = onToggle, onPrevious = onPrevious, onNext = onNext, onSeek = onSeek)
+        return
+    }
     val playlist = playlists.find { it.id == state.playlistId }
     BackHandler(enabled = playlist != null) { state.playlistId = null }
     Column(Modifier.fillMaxSize().background(Color.White)) {
         if (playlist != null) {
-            PlaylistDetail(playlist, tracks, state.selectedTrackId, Modifier.weight(1f), onBack = { state.playlistId = null }, onSelect = { track ->
-                state.selectedTrackId = track.id; state.playing = true
-                onMessage("已切换到《${track.title}》，仅展示界面状态，没有播放音频。")
-            })
+            PlaylistDetail(playlist, tracks, state.selectedTrackId, Modifier.weight(1f), onBack = { state.playlistId = null }, onSelect = onPlay)
         } else {
             MusicHeader(state, onAdd)
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(start = 23.dp, end = 23.dp, bottom = 20.dp)) {
                 when (state.tab) {
                     MusicTab.RECOMMEND -> item(key = "recommend") {
-                        RecommendationPanel(tracks, listens, playlists, state, onMessage)
+                        RecommendationPanel(tracks, listens, playlists, state, onPlay, onToggle, onOpenPlayer)
                     }
                     MusicTab.PLAYLISTS -> item(key = "playlists") {
                         MusicSectionHeading("我的歌单", "${playlists.size} 个")
@@ -161,27 +175,24 @@ internal fun MusicScreen(
                         val filtered = tracks.filter { query.isEmpty() || "${it.title} ${it.artist}".contains(query, ignoreCase = true) }
                         MusicSectionHeading("全部歌曲", if (query.isEmpty()) "${tracks.size} 首" else "${filtered.size} 首匹配")
                         if (filtered.isEmpty()) EmptyCard(if (tracks.isEmpty()) "还没有本机歌曲" else "没有匹配的歌曲",
-                            if (tracks.isEmpty()) "选择右上角「＋」，从 B 站缓存主目录导入本机音频。" else "换个歌名或歌手试试。")
+                            if (tracks.isEmpty()) "选择右上角「＋」，从共享目录批量导入 B 站缓存音频。" else "换个歌名或歌手试试。")
                         else Column { filtered.forEachIndexed { index, track ->
                             SongRow(track, current?.id == track.id, showDivider = index < filtered.lastIndex,
-                                onClick = { selectTrack(track, state, onMessage) })
+                                onClick = { onPlay(track) })
                         } }
                     }
                     MusicTab.HISTORY -> item(key = "history") {
-                        MusicHistoryPanel(tracks, listens, state, today, onMessage)
+                        MusicHistoryPanel(tracks, listens, state, today, onMessage, onPlay)
                     }
                 }
                 if (state.tab != MusicTab.HISTORY) item(key = "data-note") {
-                    Text("只展示本机真实曲库与记录 · 已接入 B 站音频导入，真实播放与设备音乐读取尚未接入",
+                    Text("本机曲库与真实收听记录 · 支持后台播放、进度拖动、队列编辑和歌曲信息修改",
                         color = MusicMuted, fontSize = 12.sp, lineHeight = 22.sp, textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth().padding(top = 16.dp))
                 }
             }
         }
-        if (current != null) MiniPlayer(current, state.playing) {
-            state.playing = !state.playing
-            onMessage(if (state.playing) "已切换为播放状态，仅作界面演示，没有播放音频。" else "已暂停界面演示。")
-        }
+        if (current != null) MiniPlayer(current, state.playback, onToggle, onOpenPlayer)
     }
 }
 
@@ -193,10 +204,6 @@ private fun MusicHeader(state: MusicUiState, onAdd: () -> Unit) {
                 Text("流行歌单与日常收听", color = MusicMuted, fontSize = 12.sp, letterSpacing = 0.4.sp,
                     modifier = Modifier.padding(bottom = 4.dp))
                 Text("声音馆.", fontSize = 26.sp, lineHeight = 36.sp, letterSpacing = (-0.9).sp, fontWeight = FontWeight.SemiBold)
-            }
-            IconButton(onClick = { state.tab = MusicTab.HISTORY },
-                Modifier.padding(end = 7.dp).size(44.dp).border(1.dp, Line, RoundedCornerShape(10.dp))) {
-                Icon(Icons.Outlined.BarChart, "查看收听回顾", Modifier.size(18.dp), tint = Ink)
             }
             IconButton(onClick = onAdd,
                 Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)).background(Ink)) {
@@ -220,6 +227,28 @@ private fun MusicHeader(state: MusicUiState, onAdd: () -> Unit) {
     }
 }
 
+@Composable
+internal fun MusicSourceDialog(onDismiss: () -> Unit, onBind: () -> Unit, onOnce: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), color = Color.White) {
+            Column(Modifier.padding(20.dp)) {
+                Text("手动复制，自动去重", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+                Text("1. 用手机文件管理器把 B 站整个 download 文件夹复制到共享目录，例如：\n内部存储/Music/专注助手/B站导入\n\n2. 在这里选择该共享目录。也支持直接放多个 c_数字 文件夹，或 av号/c_数字 结构。",
+                    color = MusicMuted, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 10.dp))
+                Text("选择“记住共享目录”后，下次点击「＋」会重新扫描并跳过已导入缓存；导入时还会按音频 SHA-256 去重。无需 Shizuku，不读取其他应用的 Android/data。",
+                    color = MusicMuted, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 10.dp, bottom = 16.dp))
+                Button(onClick = onBind, Modifier.fillMaxWidth(), shape = RoundedCornerShape(9.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Color.White)) {
+                    Text("选择并记住共享目录")
+                }
+                OutlinedButton(onClick = onOnce, Modifier.fillMaxWidth().padding(top = 8.dp), shape = RoundedCornerShape(9.dp),
+                    border = BorderStroke(1.dp, Line)) { Text("仅本次选择") }
+                TextButton(onClick = onDismiss, Modifier.align(Alignment.End).padding(top = 4.dp)) { Text("取消") }
+            }
+        }
+    }
+}
+
 private class MusicImportDraft(candidate: MusicImportCandidate) {
     val sourceId = candidate.sourceId
     val directoryName = candidate.directoryName
@@ -234,7 +263,9 @@ private class MusicImportDraft(candidate: MusicImportCandidate) {
 
 @Composable
 internal fun MusicImportDialog(candidates: List<MusicImportCandidate>, busy: Boolean,
-    onDismiss: () -> Unit, onConfirm: (List<MusicImportRequest>) -> Unit) {
+    directoryLabel: String = "", skipped: Int = 0, onReselect: () -> Unit = {},
+    onUnbind: (() -> Unit)? = null, onDismiss: () -> Unit,
+    onConfirm: (List<MusicImportRequest>) -> Unit) {
     val drafts = remember(candidates) { candidates.map(::MusicImportDraft) }
     val selected = drafts.filter { it.selected && it.error.isEmpty() }
     Dialog(onDismissRequest = { if (!busy) onDismiss() }) {
@@ -242,8 +273,25 @@ internal fun MusicImportDialog(candidates: List<MusicImportCandidate>, busy: Boo
             Column(Modifier.padding(20.dp)) {
                 Text("导入 B 站音频", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
                 Text("只复制 audio.m4s 和本地 cover.jpg；不会读取视频、弹幕或远程资源。",
-                    color = MusicMuted, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 6.dp, bottom = 14.dp))
+                    color = MusicMuted, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 6.dp))
+                Row(Modifier.fillMaxWidth().padding(top = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (directoryLabel.isEmpty()) "本次选择的目录不会记住" else directoryLabel,
+                        Modifier.weight(1f), color = MusicMuted, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    TextButton(onClick = onReselect, enabled = !busy, contentPadding = PaddingValues(horizontal = 7.dp)) {
+                        Text(if (directoryLabel.isEmpty()) "重选" else "更换", fontSize = 11.sp)
+                    }
+                    if (onUnbind != null) TextButton(onClick = onUnbind, enabled = !busy, contentPadding = PaddingValues(horizontal = 7.dp)) {
+                        Text("解绑", fontSize = 11.sp)
+                    }
+                }
+                if (skipped > 0) Text("已自动跳过 $skipped 个已导入缓存；写入前仍会校验音频 SHA-256。",
+                    color = AccentDark, fontSize = 11.sp, lineHeight = 17.sp, modifier = Modifier.padding(bottom = 10.dp))
+                else Spacer(Modifier.height(4.dp))
                 LazyColumn(Modifier.heightIn(max = 430.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (drafts.isEmpty()) item(key = "empty") {
+                        EmptyCard("没有可导入的新音频", if (skipped > 0) "所选目录中的缓存均已在曲库中，可以直接取消。"
+                            else "请确认整个 download 或 c_数字 缓存文件夹已复制到所选共享目录。")
+                    }
                     items(drafts.size, key = { drafts[it].sourceId }) { index ->
                         val draft = drafts[index]
                         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(11.dp)).background(MusicSurface).padding(11.dp)) {
@@ -319,10 +367,11 @@ private fun MusicTabs(state: MusicUiState) {
 }
 
 @Composable
-private fun RecommendationPanel(tracks: List<MusicTrack>, listens: List<MusicListen>, playlists: List<MusicPlaylist>, state: MusicUiState, onMessage: (String) -> Unit) {
+private fun RecommendationPanel(tracks: List<MusicTrack>, listens: List<MusicListen>, playlists: List<MusicPlaylist>, state: MusicUiState,
+    onPlay: (MusicTrack) -> Unit, onToggle: () -> Unit, onOpenPlayer: () -> Unit) {
     val current = tracks.find { it.id == state.selectedTrackId }
-    if (current == null) EmptyCard("还没有本机歌曲", "导入方案确认后，可在这里选择真实音频；当前播放器不会发出声音。", Modifier.padding(top = 19.dp))
-    else NowPlayingCard(current, tracks, state, onMessage)
+    if (current == null) EmptyCard("还没有本机歌曲", "导入后可在这里播放应用私有目录中的真实音频。", Modifier.padding(top = 19.dp))
+    else CurrentPlaybackCard(current, state.playing, onOpenPlayer, onToggle)
     MusicSectionHeading("我的歌单", action = "全部") { state.tab = MusicTab.PLAYLISTS }
     if (playlists.isEmpty()) EmptyCard("还没有本机歌单", "不会用示例歌单替代尚未创建的记录。")
     else MusicPlaylistGrid(playlists.take(3)) { state.playlistId = it.id }
@@ -330,92 +379,28 @@ private fun RecommendationPanel(tracks: List<MusicTrack>, listens: List<MusicLis
     MusicSectionHeading("最近播放", action = "全部歌曲") { state.tab = MusicTab.SONGS }
     val byId = tracks.associateBy { it.id }
     val recent = listens.sortedByDescending { it.playedAt }.mapNotNull { byId[it.trackId] }.distinctBy { it.id }.take(2)
-    if (recent.isEmpty()) EmptyCard("还没有收听记录", "真实播放接入后才会在这里生成记录。")
+    if (recent.isEmpty()) EmptyCard("还没有收听记录", "实际播放累计满 10 秒后才会生成记录。")
     else Column { recent.forEachIndexed { index, track ->
-        SongRow(track, current?.id == track.id, showDivider = index < recent.lastIndex) { selectTrack(track, state, onMessage) }
+        SongRow(track, current?.id == track.id, showDivider = index < recent.lastIndex) { onPlay(track) }
     } }
 }
 
-private fun selectTrack(track: MusicTrack, state: MusicUiState, onMessage: (String) -> Unit) {
-    state.selectedTrackId = track.id; state.playing = true
-    onMessage("已切换到《${track.title}》，仅展示界面状态，没有播放音频。")
-}
-
 @Composable
-private fun NowPlayingCard(track: MusicTrack, tracks: List<MusicTrack>, state: MusicUiState, onMessage: (String) -> Unit) {
+private fun CurrentPlaybackCard(track: MusicTrack, playing: Boolean, onOpen: () -> Unit, onToggle: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = 19.dp)) {
-        Row(Modifier.fillMaxWidth().height(32.dp), verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(6.dp).background(MusicOrange, RoundedCornerShape(50)))
-                Text(if (state.playing) "正在播放" else "已暂停", color = MusicMuted, fontSize = 11.sp,
-                    modifier = Modifier.padding(start = 7.dp))
+        Row(Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            TrackCoverArt(track, Modifier.size(68.dp), radius = 9.dp)
+            Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+                Text(if (playing) "正在播放" else "继续播放", color = MusicMuted, fontSize = 11.sp)
+                Text(track.title, Modifier.padding(top = 4.dp), fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(track.artist, color = MusicMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            IconButton(onClick = { onMessage("更多操作将在真实播放接入后开放，本轮仅展示界面。") }, Modifier.size(44.dp)) {
-                Icon(Icons.Outlined.MoreHoriz, "当前歌曲更多操作，界面演示", Modifier.size(19.dp), tint = MusicMuted)
-            }
-        }
-        Text(track.title, fontSize = 24.sp, lineHeight = 32.sp, letterSpacing = (-0.7).sp,
-            fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 4.dp))
-        Text("${track.artist} · ${clockText(track.durationSeconds)}", color = MusicMuted, fontSize = 12.sp,
-            modifier = Modifier.padding(top = 4.dp))
-        WavePanel(track.id, Modifier.padding(top = 16.dp))
-        Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(34.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { stepTrack(tracks, state, -1, onMessage) }, Modifier.size(44.dp)) {
-                Icon(Icons.Outlined.SkipPrevious, "上一首，界面演示", tint = Color(0xFF565C60))
-            }
-            FilledIconButton(onClick = {
-                state.playing = !state.playing
-                onMessage(if (state.playing) "已切换为播放状态，仅作界面演示，没有播放音频。" else "已暂停界面演示。")
-            }, modifier = Modifier.size(50.dp), shape = RoundedCornerShape(50),
-                colors = IconButtonDefaults.filledIconButtonColors(containerColor = MusicOrange, contentColor = Color(0xFF252729))) {
-                Icon(if (state.playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
-                    if (state.playing) "暂停，界面演示" else "播放，界面演示", Modifier.size(20.dp))
-            }
-            IconButton(onClick = { stepTrack(tracks, state, 1, onMessage) }, Modifier.size(44.dp)) {
-                Icon(Icons.Outlined.SkipNext, "下一首，界面演示", tint = Color(0xFF565C60))
+            IconButton(onClick = onToggle, Modifier.size(48.dp)) {
+                Icon(if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, if (playing) "暂停" else "播放", tint = MusicOrange)
             }
         }
-        Spacer(Modifier.height(16.dp))
-        HorizontalDivider(color = MusicLine)
-    }
-}
-
-private fun stepTrack(tracks: List<MusicTrack>, state: MusicUiState, direction: Int, onMessage: (String) -> Unit) {
-    if (tracks.isEmpty()) return
-    val index = tracks.indexOfFirst { it.id == state.selectedTrackId }.coerceAtLeast(0)
-    selectTrack(tracks[(index + direction + tracks.size) % tracks.size], state, onMessage)
-}
-
-@Composable
-private fun WavePanel(seed: String, modifier: Modifier = Modifier) {
-    val levels = remember(seed) {
-        val base = listOf(18, 32, 48, 26, 66, 88, 56, 36, 74, 46, 24, 60, 82, 44,
-            28, 64, 94, 50, 30, 72, 40, 20, 54, 78, 42, 88, 60, 32, 68, 48, 22, 58, 80, 38)
-        val shift = seed.hashCode().and(3)
-        base.mapIndexed { index, level -> if (index < 14) level else base[(index + shift) % base.size] }
-    }
-    Column(modifier.fillMaxWidth()) {
-        Canvas(Modifier.fillMaxWidth().height(76.dp).semantics { contentDescription = "歌曲波形示意，不代表真实播放进度" }) {
-            val gap = 3.dp.toPx()
-            val cell = (size.width - gap * (levels.size - 1)) / levels.size
-            val waveTop = 4.dp.toPx()
-            val waveHeight = size.height - waveTop
-            levels.forEachIndexed { index, level ->
-                val height = waveHeight * level / 100f
-                drawRoundRect(if (index < 14) MusicOrange else MusicWaveIdle,
-                    Offset(index * (cell + gap), waveTop + (waveHeight - height) / 2),
-                    Size(cell, height), CornerRadius(2.dp.toPx()))
-            }
-            val playheadX = size.width * 0.39f
-            drawLine(AccentDark, Offset(playheadX, 2.dp.toPx()), Offset(playheadX, size.height - 20.dp.toPx()), 1.dp.toPx())
-            drawCircle(AccentDark, 2.5.dp.toPx(), Offset(playheadX, 1.dp.toPx()))
-        }
-        Row(Modifier.fillMaxWidth().padding(top = 2.dp)) {
-            Text("00:00", color = Ink, fontSize = 10.sp, modifier = Modifier.weight(1f))
-            Text("未播放", color = MusicMuted, fontSize = 10.sp)
-        }
+        HorizontalDivider(color = MusicLine, modifier = Modifier.padding(top = 11.dp))
     }
 }
 
@@ -520,7 +505,7 @@ private fun SongRow(track: MusicTrack, selected: Boolean, rank: Int? = null, sta
 }
 
 @Composable
-private fun TrackCoverArt(track: MusicTrack, modifier: Modifier = Modifier, radius: Dp = 7.dp) {
+internal fun TrackCoverArt(track: MusicTrack, modifier: Modifier = Modifier, radius: Dp = 7.dp) {
     val context = LocalContext.current
     val bitmap by produceState<Bitmap?>(null, track.id, track.coverFile) {
         value = withContext(Dispatchers.IO) {
@@ -567,10 +552,10 @@ private fun EmptyCard(title: String, detail: String, modifier: Modifier = Modifi
 }
 
 @Composable
-private fun MiniPlayer(track: MusicTrack, playing: Boolean, onToggle: () -> Unit) {
+private fun MiniPlayer(track: MusicTrack, playback: MusicPlaybackSnapshot, onToggle: () -> Unit, onOpen: () -> Unit) {
     Column(Modifier.fillMaxWidth().background(Color.White).padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 7.dp)) {
         Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MusicSurface)) {
-            Row(Modifier.fillMaxWidth().heightIn(min = 62.dp).padding(start = 10.dp, end = 8.dp, top = 3.dp),
+            Row(Modifier.fillMaxWidth().heightIn(min = 62.dp).clickable(onClick = onOpen).padding(start = 10.dp, end = 8.dp, top = 3.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 TrackCoverArt(track, Modifier.size(36.dp), radius = 6.dp)
                 Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
@@ -579,13 +564,14 @@ private fun MiniPlayer(track: MusicTrack, playing: Boolean, onToggle: () -> Unit
                 }
                 FilledIconButton(onClick = onToggle, Modifier.size(44.dp), shape = RoundedCornerShape(50),
                     colors = IconButtonDefaults.filledIconButtonColors(containerColor = Ink, contentColor = Color.White)) {
-                    Icon(if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
-                        if (playing) "暂停，界面演示" else "播放，界面演示", Modifier.size(17.dp))
+                    Icon(if (playback.playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                        if (playback.playing) "暂停" else "播放", Modifier.size(17.dp))
                 }
             }
+            val progress = if (playback.durationMs > 0) playback.positionMs.toFloat() / playback.durationMs else 0f
             Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 9.dp)) {
                 Box(Modifier.fillMaxWidth().height(2.dp).background(MusicLine))
-                Box(Modifier.fillMaxWidth(0.39f).height(2.dp).background(if (playing) MusicOrange else Color(0xFFA8ADB0)))
+                Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).height(2.dp).background(MusicOrange))
             }
         }
     }
@@ -593,7 +579,8 @@ private fun MiniPlayer(track: MusicTrack, playing: Boolean, onToggle: () -> Unit
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MusicHistoryPanel(tracks: List<MusicTrack>, listens: List<MusicListen>, state: MusicUiState, today: LocalDate, onMessage: (String) -> Unit) {
+private fun MusicHistoryPanel(tracks: List<MusicTrack>, listens: List<MusicListen>, state: MusicUiState, today: LocalDate,
+    onMessage: (String) -> Unit, onPlay: (MusicTrack) -> Unit) {
     val zone = ZoneId.systemDefault()
     val period = state.period
     val anchor = state.anchor
@@ -682,7 +669,7 @@ private fun MusicHistoryPanel(tracks: List<MusicTrack>, listens: List<MusicListe
     } else {
         Column { summary.ranking.take(count).forEachIndexed { index, ranked ->
             SongRow(ranked.track, ranked.track.id == state.selectedTrackId, index + 1, ranked.plays to ranked.seconds,
-                showDivider = index < count - 1) { selectTrack(ranked.track, state, onMessage) }
+                showDivider = index < count - 1) { onPlay(ranked.track) }
         } }
         Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically) {
@@ -692,7 +679,7 @@ private fun MusicHistoryPanel(tracks: List<MusicTrack>, listens: List<MusicListe
             if (count > MUSIC_RANK_PAGE) TextButton(onClick = { state.rankLimit = MUSIC_RANK_PAGE }) { Text("收起排行", fontSize = 12.sp) }
         }
     }
-    Text("统计仅来自本机真实收听事件；当前未接入音频播放，因此不会自动生成记录。",
+    Text("统计来自真实播放：累计满 10 秒后记录，暂停、缓冲和拖动进度不计入收听时长。",
         color = MusicMuted, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 20.dp))
     if (pickerOpen) MusicPeriodPickerSheet(period, anchor, today, daily, { pickerOpen = false }, ::selectAnchor)
 }

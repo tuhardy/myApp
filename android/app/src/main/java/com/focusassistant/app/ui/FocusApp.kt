@@ -43,6 +43,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.focusassistant.app.data.ExportCodec
 import com.focusassistant.app.data.FocusRepository
+import com.focusassistant.app.data.MusicCacheBinding
 import com.focusassistant.app.domain.*
 import com.focusassistant.app.platform.*
 import kotlinx.coroutines.CancellationException
@@ -185,6 +186,9 @@ class NativeUiModel : ViewModel() {
     var pendingBackup by mutableStateOf<BackupData?>(null)
     internal var pendingMusicRoot: Uri? = null
     internal var pendingMusicImports by mutableStateOf<List<MusicImportCandidate>>(emptyList())
+    internal var pendingMusicSkipped by mutableIntStateOf(0)
+    internal var pendingMusicLabel by mutableStateOf("")
+    internal var pendingMusicCover by mutableStateOf<Uri?>(null)
     var pendingExport: String? = null
     var notificationRequested = false
     private val channel = Channel<String>(Channel.BUFFERED)
@@ -198,9 +202,12 @@ class NativeUiModel : ViewModel() {
         dialogId = ""
         if (previous == "progress-auto") screen = Screen.PROJECTS
         if (previous == "project") pendingProject = null
+        if (previous == "music-edit") pendingMusicCover = null
         if (previous == "music-import") {
             pendingMusicRoot = null
             pendingMusicImports = emptyList()
+            pendingMusicSkipped = 0
+            pendingMusicLabel = ""
         }
     }
     internal fun stopTodoAnimation(id: String) {
@@ -269,6 +276,13 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
     val navScope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current
     val usageMonitor = remember { UsageMonitor(appContext) }
+    val musicPlayer = remember(appContext, ui) {
+        MusicPlaybackClient(appContext, onUpdate = { playback ->
+            ui.music.playback = playback
+            ui.music.playing = playback.playing
+            if (playback.connected) ui.music.selectedTrackId = playback.trackId
+        }, onError = ui::message)
+    }
     var refresh by remember { mutableIntStateOf(0) }
     var nowElapsed by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     var today by remember { mutableStateOf(LocalDate.now()) }
@@ -386,13 +400,40 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
         }
         BossAutomation.start(context, task, state.autoApply.settings.platform)?.let(ui::message)
     }
-    val musicImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri != null) ui.perform {
-            val candidates = repository.inspectBilibiliMusic(uri)
+    fun scanMusicDirectory(uri: Uri, label: String = "") {
+        ui.perform {
+            val scan = repository.inspectBilibiliMusic(uri)
             ui.pendingMusicRoot = uri
-            ui.pendingMusicImports = candidates
+            ui.pendingMusicImports = scan.candidates
+            ui.pendingMusicSkipped = scan.skipped
+            ui.pendingMusicLabel = label
             ui.open("music-import")
         }
+    }
+    var rememberMusicDirectory by remember { mutableStateOf(false) }
+    val musicImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val rememberDirectory = rememberMusicDirectory
+        rememberMusicDirectory = false
+        if (uri != null) {
+            val bound = if (rememberDirectory) runCatching { MusicCacheBinding.bind(appContext, uri) }
+                .onFailure { ui.message("系统未允许记住目录，本次仍可正常导入。") }.getOrNull() else null
+            scanMusicDirectory(uri, bound?.label.orEmpty())
+        }
+    }
+    val musicCoverLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) ui.pendingMusicCover = uri
+    }
+    fun pickMusicDirectory(rememberDirectory: Boolean) {
+        rememberMusicDirectory = rememberDirectory
+        musicImportLauncher.launch(null)
+    }
+    fun addMusic() {
+        val bound = MusicCacheBinding.current(appContext)
+        if (bound == null) ui.open("music-source") else scanMusicDirectory(bound.uri, bound.label)
+    }
+    fun playMusic(track: MusicTrack) {
+        ui.music.selectedTrackId = track.id
+        musicPlayer.play(state.musicTracks, track.id)
     }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) ui.perform {
@@ -419,10 +460,21 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
         }
     }
 
-    DisposableEffect(lifecycle) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) { refresh++; today = LocalDate.now() } }
+    DisposableEffect(lifecycle, musicPlayer) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) { refresh++; today = LocalDate.now() }
+        }
         lifecycle.lifecycle.addObserver(observer)
-        onDispose { lifecycle.lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycle.lifecycle.removeObserver(observer)
+            musicPlayer.release()
+        }
+    }
+    LaunchedEffect(ui.music.playing) {
+        while (ui.music.playing) {
+            delay(500)
+            musicPlayer.tick()
+        }
     }
     LaunchedEffect(Unit) { ui.messages.collect { snackbar.showSnackbar(it) } }
     LaunchedEffect(Unit) { TimerServiceCommands.errors.collect { ui.message(it) } }
@@ -575,8 +627,11 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
                         help = { ui.open("diary-help") },
                         message = ui::message
                     ))
-                    Screen.MUSIC -> MusicScreen(state.musicTracks, emptyList(), emptyList(), ui.music, today, ui::message,
-                        onAdd = { musicImportLauncher.launch(null) })
+                    Screen.MUSIC -> MusicScreen(state.musicTracks, state.musicListens, emptyList(), ui.music, today, ui::message,
+                        onAdd = ::addMusic, onPlay = ::playMusic, onToggle = musicPlayer::toggle,
+                        onOpenPlayer = { ui.music.playerOpen = true }, onPrevious = musicPlayer::previous, onNext = musicPlayer::next,
+                        onSeek = musicPlayer::seekTo, onMode = { ui.open("music-mode") }, onQueue = { ui.open("music-queue") },
+                        onEdit = { ui.open("music-edit", ui.music.selectedTrackId.orEmpty()) })
                     Screen.STATISTICS -> StatisticsScreen(state, ui.period, ui.statsAll, ui.anchor, ui.recordLimit, today,
                         onPeriod = { ui.period = it; ui.statsAll = false; ui.recordLimit = UiLimits.RECORD_PAGE },
                         onAll = { ui.statsAll = true; ui.recordLimit = UiLimits.RECORD_PAGE },
@@ -652,10 +707,30 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
         val dialogTodo = state.todos.find { it.id == ui.dialogId }
         val dialogJob = state.jobOpportunities.find { it.id == ui.dialogId }
         when (ui.dialog) {
+            "music-source" -> MusicSourceDialog({ ui.close() }, {
+                ui.close()
+                pickMusicDirectory(rememberDirectory = true)
+            }, {
+                ui.close()
+                pickMusicDirectory(rememberDirectory = false)
+            })
             "music-import" -> {
                 val root = ui.pendingMusicRoot
-                if (root == null) InformationDialog("导入内容已失效", listOf("请重新选择 B 站视频缓存主目录。"), { ui.close() })
-                else MusicImportDialog(ui.pendingMusicImports, ui.busy, { ui.close() }) { requests ->
+                if (root == null) InformationDialog("导入内容已失效", listOf("请重新选择存放 B 站缓存的共享目录。"), { ui.close() })
+                else MusicImportDialog(ui.pendingMusicImports, ui.busy,
+                    directoryLabel = ui.pendingMusicLabel,
+                    skipped = ui.pendingMusicSkipped,
+                    onReselect = {
+                        val rememberDirectory = ui.pendingMusicLabel.isNotEmpty()
+                        ui.close()
+                        pickMusicDirectory(rememberDirectory)
+                    },
+                    onUnbind = if (ui.pendingMusicLabel.isEmpty()) null else ({
+                        MusicCacheBinding.clear(appContext)
+                        ui.close()
+                        ui.message("已解除共享目录绑定，现有曲库不受影响。")
+                    }),
+                    onDismiss = { ui.close() }) { requests ->
                     ui.perform {
                         val result = repository.importBilibiliMusic(root, requests)
                         ui.close()
@@ -664,8 +739,25 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
                             append("已导入 ${result.imported} 首歌曲")
                             if (result.duplicates > 0) append("，跳过 ${result.duplicates} 首重复音频")
                             if (result.failures.isNotEmpty()) append("；${result.failures.first()}")
-                            append("。真实播放尚未接入")
                         })
+                    }
+                }
+            }
+            "music-mode" -> MusicModeDialog(ui.music.playback.mode, { ui.close() }) { mode ->
+                musicPlayer.setMode(mode)
+                ui.close()
+            }
+            "music-queue" -> MusicQueueDialog(state.musicTracks, ui.music.playback.queueIds, ui.music.selectedTrackId,
+                onDismiss = { ui.close() }, onMove = musicPlayer::move, onRemove = musicPlayer::remove, onClear = musicPlayer::clearUpcoming)
+            "music-edit" -> {
+                val track = state.musicTracks.find { it.id == ui.dialogId }
+                if (track == null) InformationDialog("歌曲已不在曲库中", listOf("请返回歌曲页重新选择。"), { ui.close() })
+                else MusicEditDialog(track, ui.pendingMusicCover != null, ui.busy,
+                    onPickCover = { musicCoverLauncher.launch(arrayOf("image/*")) }, onDismiss = { ui.close() }) { title, artist ->
+                    ui.perform {
+                        repository.updateMusicTrack(track.id, title, artist, ui.pendingMusicCover)
+                        ui.close()
+                        ui.message("歌曲信息已保存")
                     }
                 }
             }

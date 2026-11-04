@@ -11,6 +11,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import com.focusassistant.app.domain.MusicListen
+import com.focusassistant.app.domain.MusicPlayMode
+import com.focusassistant.app.domain.MusicPlaybackSnapshot
 import com.focusassistant.app.domain.MusicTrack
 import com.focusassistant.app.domain.Period
 import java.io.File
@@ -65,7 +67,9 @@ class MusicScreenshotTest {
         compose.setContent {
             FocusTheme {
                 MusicScreen(if (withData) tracks else emptyList(), if (withData) listens else emptyList(),
-                    if (withData) playlists else emptyList(), state, today, messages::add)
+                    if (withData) playlists else emptyList(), state, today, messages::add,
+                    onPlay = { track -> state.selectedTrackId = track.id; state.playing = true },
+                    onToggle = { state.playing = !state.playing })
             }
         }
     }
@@ -90,10 +94,26 @@ class MusicScreenshotTest {
         compose.runOnIdle { assertEquals(MusicTab.RECOMMEND, state.tab) }
     }
 
-    @Test fun playlistOpensDetailAndPlaybackIsExplicitlyDemoOnly() {
+    @Test fun immersivePlayerShowsRealProgressAndReturnsToLibrary() {
+        val state = MusicUiState().apply {
+            selectedTrackId = "track-0"
+            playerOpen = true
+            playing = true
+            playback = MusicPlaybackSnapshot("track-0", true, 42_000, 200_000,
+                tracks.map { it.id }, MusicPlayMode.REPEAT_ALL, connected = true)
+        }
+        render(state)
+        compose.onNodeWithText("0:42").assertExists()
+        compose.onNodeWithText("3:20").assertExists()
+        compose.onNodeWithText("列表循环").assertExists()
+        capture("music-immersive-player")
+        compose.onNodeWithContentDescription("返回声音馆").performClick()
+        compose.runOnIdle { assertEquals(false, state.playerOpen) }
+    }
+
+    @Test fun playlistOpensDetailAndSelectsTrack() {
         val state = MusicUiState()
-        val messages = mutableListOf<String>()
-        render(state, messages = messages)
+        render(state)
         compose.onNodeWithContentDescription("歌单 通勤流行，4 首").performClick()
         compose.onNodeWithText("4 首 · 本机歌单").assertExists()
         compose.onNodeWithText("测试歌曲0").performClick()
@@ -101,7 +121,6 @@ class MusicScreenshotTest {
         compose.runOnIdle {
             assertEquals("track-0", state.selectedTrackId)
             assertTrue(state.playing)
-            assertTrue(messages.last().contains("没有播放音频"))
         }
         compose.onNodeWithContentDescription("返回").performClick()
         compose.onNodeWithText("我的歌单", substring = true).assertExists()

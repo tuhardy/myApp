@@ -126,6 +126,9 @@ internal object JsonCodec {
     fun readMusicTrack(value: JSONObject) = MusicTrack(value.string("id"), value.string("title"), value.string("artist"), value.long("durationSeconds"),
         value.string("audioFile"), value.string("coverFile"), value.string("contentHash"), value.long("fileBytes"),
         value.long("importedAt"), value.string("sourceBvid"), value.long("sourceCid"))
+    fun musicListen(value: MusicListen): JSONObject = JSONObject().put("id", value.id).put("trackId", value.trackId)
+        .put("playedAt", value.playedAt).put("seconds", value.seconds ?: 0)
+    fun readMusicListen(value: JSONObject) = MusicListen(value.string("id"), value.string("trackId"), value.long("playedAt"), value.long("seconds"))
     fun settings(value: AppSettings): JSONObject = JSONObject().put("dailyGoalMinutes", value.dailyGoalMinutes).put("usageReminders", value.usageReminders).put("shortBreakMinutes", value.shortBreakMinutes).put("longBreakMinutes", value.longBreakMinutes)
     fun readSettings(value: JSONObject) = AppSettings(value.integer("dailyGoalMinutes"), value.boolean("usageReminders"), value.integer("shortBreakMinutes"), value.integer("longBreakMinutes"))
     fun timer(value: ActiveTimer): JSONObject = JSONObject().put("sessionId", value.sessionId).put("projectId", value.projectId).put("projectTitle", value.projectTitle).put("category", value.category)
