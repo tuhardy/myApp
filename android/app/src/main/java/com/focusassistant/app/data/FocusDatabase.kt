@@ -46,6 +46,8 @@ internal data class AutoApplySettingsRow(@PrimaryKey val id: Int = 1, val payloa
 internal data class MusicTrackRow(@PrimaryKey val id: String, val payload: String, val position: Int)
 @Entity(tableName = "music_listens")
 internal data class MusicListenRow(@PrimaryKey val id: String, val payload: String, val position: Int)
+@Entity(tableName = "music_playlists")
+internal data class MusicPlaylistRow(@PrimaryKey val id: String, val payload: String, val position: Int)
 
 @Dao
 internal interface FocusDao {
@@ -99,9 +101,12 @@ internal interface FocusDao {
     @Query("SELECT * FROM music_listens ORDER BY position") suspend fun musicListens(): List<MusicListenRow>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putMusicListens(rows: List<MusicListenRow>)
     @Query("DELETE FROM music_listens WHERE id IN (:ids)") suspend fun removeMusicListens(ids: List<String>)
+    @Query("SELECT * FROM music_playlists ORDER BY position") suspend fun musicPlaylists(): List<MusicPlaylistRow>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putMusicPlaylists(rows: List<MusicPlaylistRow>)
+    @Query("DELETE FROM music_playlists WHERE id IN (:ids)") suspend fun removeMusicPlaylists(ids: List<String>)
 }
 
-@Database(entities = [ProjectRow::class, TodoRow::class, SessionRow::class, ProgressRow::class, SettingsRow::class, TimerRow::class, RevisionRow::class, DiaryRow::class, DiaryDraftRow::class, AssetAccountRow::class, AssetSnapshotRow::class, WishRow::class, JobOpportunityRow::class, AutoApplyRecordRow::class, AutoApplySettingsRow::class, MusicTrackRow::class, MusicListenRow::class], version = 8, exportSchema = false)
+@Database(entities = [ProjectRow::class, TodoRow::class, SessionRow::class, ProgressRow::class, SettingsRow::class, TimerRow::class, RevisionRow::class, DiaryRow::class, DiaryDraftRow::class, AssetAccountRow::class, AssetSnapshotRow::class, WishRow::class, JobOpportunityRow::class, AutoApplyRecordRow::class, AutoApplySettingsRow::class, MusicTrackRow::class, MusicListenRow::class, MusicPlaylistRow::class], version = 9, exportSchema = false)
 internal abstract class FocusDatabase : RoomDatabase() {
     abstract fun dao(): FocusDao
 
@@ -149,6 +154,12 @@ internal abstract class FocusDatabase : RoomDatabase() {
         val MIGRATION_7_8 = object : Migration(7, 8) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `music_listens` (`id` TEXT NOT NULL, `payload` TEXT NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+            }
+        }
+        /** v8 → v9 只新增本机歌单表，曲目顺序存于各自 payload，其他数据不动。 */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `music_playlists` (`id` TEXT NOT NULL, `payload` TEXT NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`id`))")
             }
         }
     }

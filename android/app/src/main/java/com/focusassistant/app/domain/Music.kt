@@ -13,6 +13,23 @@ data class MusicTrack(
     val fileBytes: Long = 0, val importedAt: Long = 0, val sourceBvid: String = "", val sourceCid: Long = 0
 )
 data class MusicListen(val id: String, val trackId: String, val playedAt: Long, val seconds: Long? = null)
+data class MusicPlaylist(val id: String, val name: String, val trackIds: List<String>)
+
+object MusicPlaylists {
+    const val MAX_NAME = 30
+
+    /** 与浏览器同口径：名称去空格、忽略大小写去重，曲目按选择顺序保存且不重复。 */
+    fun validate(value: MusicPlaylist, playlists: List<MusicPlaylist>, availableTrackIds: Set<String>): MusicPlaylist {
+        val id = value.id.trim()
+        val name = value.name.trim()
+        require(id.isNotEmpty() && id.length <= 128) { "歌单标识无效" }
+        require(name.isNotEmpty() && name.length <= MAX_NAME) { "歌单名称须为 1–$MAX_NAME 个字符" }
+        require(playlists.none { it.id != id && it.name.trim().equals(name, ignoreCase = true) }) { "已有同名歌单，请换一个名称" }
+        val trackIds = value.trackIds.distinct()
+        require(trackIds.all(availableTrackIds::contains)) { "所选歌曲已不在曲库中，请重新选择" }
+        return MusicPlaylist(id, name, trackIds)
+    }
+}
 
 enum class MusicPlayMode(val label: String) {
     SEQUENTIAL("顺序播放"), REPEAT_ALL("列表循环"), REPEAT_ONE("单曲循环"), SHUFFLE("随机播放")

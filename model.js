@@ -1680,6 +1680,34 @@
     return index + 1 < ids.length ? ids[index + 1] : wrap ? ids[0] : null;
   }
 
+  const MUSIC_PLAYLIST_NAME_MAX = 30;
+
+  /** 两端共用规则：名称去空格且不区分大小写去重；曲目按用户顺序保存并去重。 */
+  function validateMusicPlaylist(input, playlists = [], availableTrackIds = []) {
+    const id = String(input?.id ?? "").trim();
+    const name = String(input?.name ?? "").trim();
+    if (!id || id.length > 128) throw new Error("歌单标识无效。");
+    if (!name || name.length > MUSIC_PLAYLIST_NAME_MAX) throw new Error(`歌单名称需为 1–${MUSIC_PLAYLIST_NAME_MAX} 个字符。`);
+    if (playlists.some(item => item.id !== id && String(item.name).trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      throw new Error("已有同名歌单，请换一个名称。");
+    }
+    const available = new Set(availableTrackIds);
+    const trackIds = [];
+    for (const value of Array.isArray(input?.trackIds) ? input.trackIds : []) {
+      const trackId = String(value);
+      if (!available.has(trackId)) throw new Error("所选歌曲已不在曲库中，请重新选择。");
+      if (!trackIds.includes(trackId)) trackIds.push(trackId);
+    }
+    return { id, name, trackIds };
+  }
+
+  function initialMusicPlaylists() {
+    return ["通勤流行", "深夜电台", "中文珍藏", "轻快心情", "独自散步", "怀旧金曲"].map((name, index) => ({
+      id: `music-sample-playlist-${index + 1}`, name, sample: true,
+      trackIds: Array.from({ length: 4 }, (_, offset) => MUSIC_TRACKS[(index * 4 + offset) % MUSIC_TRACKS.length].id),
+    }));
+  }
+
   function musicListenSeconds(accumulatedMs, playingSinceElapsed, nowElapsed) {
     const active = playingSinceElapsed === null ? 0 : Math.max(0, nowElapsed - playingSinceElapsed);
     return Math.floor((Math.max(0, accumulatedMs) + active) / 1000);
@@ -1858,7 +1886,7 @@
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
     validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary,
     allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,
-    MUSIC_TRACKS, MUSIC_PLAY_MODES, musicQueueMove, musicQueueRemove, musicQueueClearUpcoming, musicQueueNextId, musicListenSeconds, musicListenRecordable,
+    MUSIC_TRACKS, MUSIC_PLAY_MODES, MUSIC_PLAYLIST_NAME_MAX, initialMusicPlaylists, validateMusicPlaylist, musicQueueMove, musicQueueRemove, musicQueueClearUpcoming, musicQueueNextId, musicListenSeconds, musicListenRecordable,
     parseBilibiliMusicEntry, bilibiliMusicCandidateTitle, BILIBILI_MUSIC_CACHE_DEPTH, bilibiliMusicCacheCid, importedBilibiliMusicCids, bilibiliMusicSourceCid, bilibiliMusicCacheRoots,
     initialMusicListens, musicListeningSummary, musicListeningTrend, compareMusicListening,
     completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks,

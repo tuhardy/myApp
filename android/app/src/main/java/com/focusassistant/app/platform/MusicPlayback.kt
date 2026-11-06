@@ -167,13 +167,13 @@ internal class MusicPlaybackClient(
         }, ContextCompat.getMainExecutor(appContext))
     }
 
-    fun play(tracks: List<MusicTrack>, trackId: String) {
+    fun play(tracks: List<MusicTrack>, trackId: String, replaceQueue: Boolean = false) {
         val current = controller
         if (current == null) {
             onError("播放服务正在连接，请稍候再试。")
             return
         }
-        if (current.currentMediaItem?.mediaId == trackId) {
+        if (!replaceQueue && current.currentMediaItem?.mediaId == trackId) {
             toggle()
             return
         }

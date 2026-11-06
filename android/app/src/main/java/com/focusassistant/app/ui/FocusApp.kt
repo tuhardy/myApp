@@ -435,6 +435,10 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
         ui.music.selectedTrackId = track.id
         musicPlayer.play(state.musicTracks, track.id)
     }
+    fun playMusicPlaylist(tracks: List<MusicTrack>, track: MusicTrack) {
+        ui.music.selectedTrackId = track.id
+        musicPlayer.play(tracks, track.id, replaceQueue = true)
+    }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) ui.perform {
             ui.pendingBackup = DocumentFiles.readBackup(appContext, uri)
@@ -627,11 +631,19 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
                         help = { ui.open("diary-help") },
                         message = ui::message
                     ))
-                    Screen.MUSIC -> MusicScreen(state.musicTracks, state.musicListens, emptyList(), ui.music, today, ui::message,
+                    Screen.MUSIC -> MusicScreen(state.musicTracks, state.musicListens, state.musicPlaylists, ui.music, today, ui::message,
                         onAdd = ::addMusic, onPlay = ::playMusic, onToggle = musicPlayer::toggle,
                         onOpenPlayer = { ui.music.playerOpen = true }, onPrevious = musicPlayer::previous, onNext = musicPlayer::next,
                         onSeek = musicPlayer::seekTo, onMode = { ui.open("music-mode") }, onQueue = { ui.open("music-queue") },
-                        onEdit = { ui.open("music-edit", ui.music.selectedTrackId.orEmpty()) })
+                        onEdit = { ui.open("music-edit", ui.music.selectedTrackId.orEmpty()) },
+                        playlistActions = MusicPlaylistActions(
+                            create = { ui.open("music-playlist-edit") },
+                            edit = { ui.open("music-playlist-edit", it.id) },
+                            delete = { ui.open("music-playlist-delete", it.id) },
+                            save = { playlist -> ui.perform { repository.saveMusicPlaylist(playlist, existing = true); ui.message("歌单已更新") } },
+                            play = ::playMusicPlaylist,
+                            addTrack = { ui.open("music-playlist-add", it.id) }
+                        ))
                     Screen.STATISTICS -> StatisticsScreen(state, ui.period, ui.statsAll, ui.anchor, ui.recordLimit, today,
                         onPeriod = { ui.period = it; ui.statsAll = false; ui.recordLimit = UiLimits.RECORD_PAGE },
                         onAll = { ui.statsAll = true; ui.recordLimit = UiLimits.RECORD_PAGE },
@@ -740,6 +752,48 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
                             if (result.duplicates > 0) append("，跳过 ${result.duplicates} 首重复音频")
                             if (result.failures.isNotEmpty()) append("；${result.failures.first()}")
                         })
+                    }
+                }
+            }
+            "music-playlist-edit" -> {
+                val initialTrackId = ui.dialogId.takeIf { it.startsWith("track:") }?.removePrefix("track:")
+                val existingId = ui.dialogId.takeIf { it.isNotEmpty() && initialTrackId == null }
+                val playlist = state.musicPlaylists.find { it.id == existingId }
+                if (existingId != null && playlist == null) InformationDialog("这个歌单已不存在", listOf("请返回歌单列表重新选择。"), { ui.close() })
+                else MusicPlaylistEditorDialog(playlist, state.musicTracks, initialTrackId, ui.busy, { ui.close() }) { name, trackIds ->
+                    ui.perform {
+                        val saved = repository.saveMusicPlaylist(playlist?.copy(name = name, trackIds = trackIds)
+                            ?: MusicPlaylist("", name, trackIds), existing = playlist != null)
+                        ui.close()
+                        ui.music.tab = MusicTab.PLAYLISTS
+                        ui.music.playlistId = saved.id
+                        ui.message(if (playlist == null) "已创建歌单「${saved.name}」" else "歌单已保存")
+                    }
+                }
+            }
+            "music-playlist-add" -> {
+                val track = state.musicTracks.find { it.id == ui.dialogId }
+                if (track == null) InformationDialog("歌曲已不在曲库中", listOf("请返回歌曲页重新选择。"), { ui.close() })
+                else MusicPlaylistPickerDialog(track, state.musicPlaylists, { ui.close() },
+                    onCreate = { ui.open("music-playlist-edit", "track:${track.id}") }, onSelect = { playlist ->
+                        ui.perform {
+                            repository.addMusicTrackToPlaylist(playlist.id, track.id)
+                            ui.close()
+                            ui.message("已添加到「${playlist.name}」")
+                        }
+                    })
+            }
+            "music-playlist-delete" -> {
+                val playlist = state.musicPlaylists.find { it.id == ui.dialogId }
+                if (playlist == null) InformationDialog("这个歌单已不存在", listOf("可能已经在其他窗口删除。"), { ui.close() })
+                else ConfirmDialog("删除这个歌单？", "「${playlist.name}」及其歌曲顺序会被删除，本机曲库和音频文件不受影响。此操作无法撤销。",
+                    ui.busy, { ui.close() }) {
+                    ui.perform {
+                        repository.deleteMusicPlaylist(playlist.id)
+                        ui.music.playlistId = null
+                        ui.music.tab = MusicTab.PLAYLISTS
+                        ui.close()
+                        ui.message("已删除歌单")
                     }
                 }
             }

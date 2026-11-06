@@ -5,7 +5,7 @@
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv,
     initialFocusItems, validateFocusItem, focusHourDistribution, initialProgressEntries, validateProgress,
     latestProjectProgress, allTimeFocusSummary, allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,
-    MUSIC_TRACKS, MUSIC_PLAY_MODES, musicQueueMove, musicQueueRemove, musicQueueClearUpcoming, musicQueueNextId, musicListenSeconds, musicListenRecordable,
+    MUSIC_TRACKS, MUSIC_PLAY_MODES, initialMusicPlaylists, validateMusicPlaylist, musicQueueMove, musicQueueRemove, musicQueueClearUpcoming, musicQueueNextId, musicListenSeconds, musicListenRecordable,
     parseBilibiliMusicEntry, bilibiliMusicCandidateTitle, BILIBILI_MUSIC_CACHE_DEPTH, bilibiliMusicCacheCid, importedBilibiliMusicCids, bilibiliMusicSourceCid, bilibiliMusicCacheRoots,
     initialMusicListens, musicListeningSummary, musicListeningTrend, compareMusicListening } = FocusModel;
   const UI = Object.freeze({ tickMs: 250, toastMs: 3400, ringRadius: 118, tickRadius: 134, initialGoalMinutes: 240, gaugeTicks: 20, goalTicks: 40, minutesPerHour: 60, finishRevealMs: 900,
@@ -23,7 +23,7 @@
     finishHoldMs: 680, finishCollapseMs: 240, historyPage: 20, newDraft: "new" });
   const DURATION_PRESETS = [15, 25, 45, 60];
   const DURATION_STEP = 5;
-  const MODAL_VARIANTS = ["todo-guide-sheet", "focus-item-sheet", "usage-zoom-sheet", "asset-sheet"];
+  const MODAL_VARIANTS = ["todo-guide-sheet", "focus-item-sheet", "usage-zoom-sheet", "asset-sheet", "music-playlist-sheet"];
   const PAGES = ["focus", "timer", "statistics", "tasks", "diary", "music", "usage", "profile", "job-assist"];
   const MUSIC_TABS = ["recommend", "playlists", "songs", "history"];
   const MUSIC_HISTORY_PERIODS = ["day", "week", "month", "year"];
@@ -54,7 +54,7 @@
     musicTab: "recommend", musicPlaying: true, musicSearch: "", musicTrack: { id: "sunny", title: "晴天", artist: "周杰伦", duration: "4:29" },
     musicImportedTracks: [], musicImportDraft: null, musicDirectoryHandle: null, nextMusicTrackId: 1,
     musicPlayMode: "repeat-all", musicQueueIds: MUSIC_TRACKS.map(track => track.id), musicPlayerOpen: false, nextMusicListenId: 1,
-    musicPlaylist: null, musicHistoryPeriod: "week", musicHistoryAnchor: new Date(), musicHistoryPickerOpen: false, musicHistoryPickerCursor: null,
+    musicPlaylist: null, musicPlaylists: initialMusicPlaylists(), nextMusicPlaylistId: 1, musicHistoryPeriod: "week", musicHistoryAnchor: new Date(), musicHistoryPickerOpen: false, musicHistoryPickerCursor: null,
     musicListens: initialMusicListens(), musicRankLimit: UI.musicRankPageSize, musicTrendBins: [], musicTrendSelection: null,
     openProjects: new Set(), progressEntries: [], progressDrafts: new Map(), nextProgressId: 1,
     pendingProgressPrompts: [], progressDialogRecord: null, progressReturnHome: false,
@@ -182,25 +182,32 @@
     renderMusic();
   }
 
-  function buildMusicSongRow(track, subtitle = track.artist) {
+  function buildMusicSongRow(track, subtitle = track.artist, onMore = null, onPlay = null) {
     const button = element("button", "music-song-row");
     button.type = "button";
     button.dataset.musicTrack = track.title;
     button.dataset.musicTrackId = track.id;
     button.dataset.musicArtist = track.artist;
     button.dataset.musicDuration = track.duration;
-    const cover = element("span", `music-cover ${track.tone}`);
+    const cover = element("span", `music-cover ${track.tone || "tone-one"}`);
     if (track.coverUrl) {
       const image = document.createElement("img");
       image.src = track.coverUrl;
       image.alt = "";
       cover.append(image);
-    } else cover.append(icon(track.art));
+    } else cover.append(icon(track.art || "cover-wave"));
     const copy = element("span", "music-song-copy");
     copy.append(element("strong", "", track.title), element("small", "", subtitle));
     button.append(cover, copy, element("span", "music-song-duration", track.duration));
-    button.addEventListener("click", () => selectMusicTrack(button));
-    return button;
+    button.addEventListener("click", () => onPlay ? onPlay() : selectMusicTrack(button));
+    if (!onMore) return button;
+    const wrap = element("div", "music-song-row-wrap");
+    const more = element("button", "music-song-more", "＋");
+    more.type = "button";
+    more.setAttribute("aria-label", `添加 ${track.title} 到歌单`);
+    more.addEventListener("click", onMore);
+    wrap.append(button, more);
+    return wrap;
   }
 
   function accumulateMusicListening() {
@@ -290,8 +297,8 @@
     }
   }
 
-  function playMusicTrack(track, preserveQueue = false) {
-    if (track.sourceFile && musicAudio && musicAudioTrackId === track.id) {
+  function playMusicTrack(track, preserveQueue = false, replaceQueue = false) {
+    if (!replaceQueue && track.sourceFile && musicAudio && musicAudioTrackId === track.id) {
       toggleMusicPlayback();
       return;
     }
@@ -703,23 +710,109 @@
     renderMusicRanking(summary);
   }
 
+  function currentMusicPlaylist() {
+    return state.musicPlaylists.find(playlist => playlist.id === state.musicPlaylist) || null;
+  }
+
+  function musicPlaylistTracks(playlist) {
+    const byId = new Map(musicLibraryTracks().map(track => [track.id, track]));
+    return playlist.trackIds.map(id => byId.get(id)).filter(Boolean);
+  }
+
+  function paintMusicPlaylistCover(cover, playlist) {
+    const tracks = musicPlaylistTracks(playlist).slice(0, 4);
+    cover.className = tracks.length ? "music-cover music-playlist-collage" : "music-cover tone-one";
+    cover.dataset.count = String(tracks.length);
+    if (!tracks.length) {
+      cover.replaceChildren(icon("cover-wave"));
+      return cover;
+    }
+    cover.replaceChildren(...tracks.map(track => {
+      const tile = element("span", `music-cover ${track.tone || "tone-one"}`);
+      if (track.coverUrl) {
+        const image = document.createElement("img");
+        image.src = track.coverUrl;
+        image.alt = "";
+        tile.append(image);
+      } else tile.append(icon(track.art || "cover-wave"));
+      return tile;
+    }));
+    return cover;
+  }
+
+  function buildMusicPlaylistButton(playlist) {
+    const button = element("button", "music-playlist");
+    button.type = "button";
+    button.dataset.musicPlaylist = playlist.name;
+    button.dataset.musicPlaylistId = playlist.id;
+    button.dataset.musicCount = String(playlist.trackIds.length);
+    button.setAttribute("aria-label", `歌单 ${playlist.name}，${playlist.trackIds.length} 首${playlist.sample ? "，示例" : "，本次创建"}`);
+    button.append(paintMusicPlaylistCover(document.createElement("span"), playlist),
+      element("strong", "", playlist.name), element("small", "", `${playlist.trackIds.length} 首 · ${playlist.sample ? "示例" : "本次创建"}`));
+    button.addEventListener("click", () => openMusicPlaylist(button));
+    return button;
+  }
+
+  function renderMusicPlaylists() {
+    const recommended = state.musicPlaylists.slice(0, 3);
+    $("music-playlist-recommend").replaceChildren(...recommended.map(buildMusicPlaylistButton));
+    $("music-playlist-grid").replaceChildren(...state.musicPlaylists.map(buildMusicPlaylistButton));
+    $("music-playlist-recommend-empty").hidden = recommended.length > 0;
+    $("music-playlist-list-empty").hidden = state.musicPlaylists.length > 0;
+    const samples = state.musicPlaylists.filter(playlist => playlist.sample).length;
+    const created = state.musicPlaylists.length - samples;
+    $("music-playlist-count-label").textContent = `${state.musicPlaylists.length} 个${samples ? ` · ${samples} 示例` : ""}${created ? ` · ${created} 本次创建` : ""}`;
+  }
+
+  function updateMusicPlaylist(playlist, trackIds) {
+    const validated = validateMusicPlaylist({ ...playlist, trackIds }, state.musicPlaylists, musicLibraryTracks().map(track => track.id));
+    state.musicPlaylists = state.musicPlaylists.map(item => item.id === playlist.id ? { ...item, ...validated } : item);
+    renderMusic();
+  }
+
+  function buildMusicPlaylistTrackRow(playlist, track, index, tracks) {
+    const wrap = element("div", "music-song-row-wrap music-playlist-track-row");
+    wrap.append(buildMusicSongRow(track, track.artist, null, () => playMusicPlaylist(playlist, track)));
+    const actions = element("span", "music-playlist-track-actions");
+    [["↑", "上移", index === 0, musicQueueMove(playlist.trackIds, index, index - 1)],
+      ["↓", "下移", index === tracks.length - 1, musicQueueMove(playlist.trackIds, index, index + 1)],
+      ["×", "移除", false, musicQueueRemove(playlist.trackIds, index)]].forEach(([label, name, disabled, trackIds]) => {
+      const button = element("button", "", label);
+      button.type = "button";
+      button.disabled = disabled;
+      button.setAttribute("aria-label", `${name} ${track.title}`);
+      button.addEventListener("click", () => updateMusicPlaylist(playlist, trackIds));
+      actions.append(button);
+    });
+    wrap.append(actions);
+    return wrap;
+  }
+
   function renderMusicPlaylist() {
-    if (!state.musicPlaylist) return;
-    const { name, count, offset } = state.musicPlaylist;
-    const firstTrack = MUSIC_TRACKS[offset % MUSIC_TRACKS.length];
-    $("music-playlist-title").textContent = name;
-    $("music-playlist-count").textContent = `${count} 首 · 示例歌单`;
-    $("music-detail-cover").className = `music-cover ${firstTrack.tone}`;
-    $("music-detail-cover").querySelector("use").setAttribute("href", `#i-${firstTrack.art}`);
-    const tracks = Array.from({ length: 4 }, (_, index) => MUSIC_TRACKS[(offset + index) % MUSIC_TRACKS.length]);
-    $("music-playlist-track-list").replaceChildren(...tracks.map(track => buildMusicSongRow(track)));
+    const playlist = currentMusicPlaylist();
+    if (!playlist) { state.musicPlaylist = null; return; }
+    const tracks = musicPlaylistTracks(playlist);
+    $("music-playlist-title").textContent = playlist.name;
+    $("music-playlist-count").textContent = `${tracks.length} 首 · ${playlist.sample ? "示例歌单" : "本次创建"}`;
+    $("music-playlist-kind").textContent = playlist.sample ? "示例" : "本次创建";
+    paintMusicPlaylistCover($("music-detail-cover"), playlist);
+    $("music-play-all").disabled = tracks.length === 0;
+    $("music-playlist-track-list").replaceChildren(...tracks.map((track, index) => buildMusicPlaylistTrackRow(playlist, track, index, tracks)));
+    $("music-playlist-empty").hidden = tracks.length > 0;
   }
 
   function openMusicPlaylist(button) {
-    state.musicPlaylist = { name: button.dataset.musicPlaylist, count: Number(button.dataset.musicCount), offset: Number(button.dataset.musicOffset) };
+    state.musicPlaylist = button.dataset.musicPlaylistId;
     renderMusic();
     $("phone-content").scrollTop = 0;
     $("music-playlist-back").focus({ preventScroll: true });
+  }
+
+  function openMusicPlaylistById(id) {
+    state.musicPlaylist = id;
+    state.musicPlayerOpen = false;
+    renderMusic();
+    $("phone-content").scrollTop = 0;
   }
 
   function closeMusicPlaylist() {
@@ -727,6 +820,165 @@
     renderMusic();
     $("phone-content").scrollTop = 0;
     $(`music-tab-${state.musicTab}`).focus({ preventScroll: true });
+  }
+
+  function showMusicPlaylistEditor(playlist = null, initialTrackId = "") {
+    const tracks = musicLibraryTracks();
+    const available = new Set(tracks.map(track => track.id));
+    const selected = [...new Set([...(playlist?.trackIds || []), initialTrackId].filter(id => available.has(id)))];
+    const content = element("div", "music-playlist-editor");
+    const nameField = element("label", "field music-playlist-name", "歌单名称");
+    const name = document.createElement("input");
+    name.value = playlist?.name || "";
+    name.maxLength = 30;
+    name.placeholder = "输入 1–30 个字符";
+    name.autocomplete = "off";
+    nameField.append(name);
+    const searchField = element("label", "music-playlist-search");
+    searchField.append(icon("search"));
+    const searchLabel = element("span", "sr-only", "在曲库中搜索歌曲");
+    const search = document.createElement("input");
+    search.type = "search";
+    search.placeholder = "搜索歌名或歌手，点选加入歌单";
+    search.autocomplete = "off";
+    searchField.append(searchLabel, search);
+    const selection = element("div", "music-playlist-selection");
+    const selectedCount = element("strong");
+    selection.append(selectedCount, element("small", "", "按点选顺序保存，可创建空歌单"));
+    const list = element("div", "music-playlist-choice-list");
+    const empty = element("p", "music-search-empty", "没有匹配的歌曲，换个关键词试试。");
+    empty.hidden = true;
+    const rows = tracks.map(track => {
+      const row = element("label", "music-playlist-choice");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = selected.includes(track.id);
+      checkbox.setAttribute("aria-label", `选择 ${track.title}`);
+      const cover = element("span", `music-cover ${track.tone || "tone-one"}`);
+      if (track.coverUrl) {
+        const image = document.createElement("img");
+        image.src = track.coverUrl;
+        image.alt = "";
+        cover.append(image);
+      } else cover.append(icon(track.art || "cover-wave"));
+      const copy = element("span", "music-playlist-choice-copy");
+      copy.append(element("strong", "", track.title), element("small", "", track.artist));
+      const order = element("span", "music-playlist-choice-order");
+      row.append(checkbox, cover, copy, order);
+      row.dataset.search = `${track.title} ${track.artist}`.toLocaleLowerCase();
+      checkbox.addEventListener("change", () => {
+        const index = selected.indexOf(track.id);
+        if (checkbox.checked && index < 0) selected.push(track.id);
+        if (!checkbox.checked && index >= 0) selected.splice(index, 1);
+        updateSelection();
+      });
+      list.append(row);
+      return { row, checkbox, order, track };
+    });
+    function updateSelection() {
+      selectedCount.textContent = `已选 ${selected.length} 首`;
+      rows.forEach(({ row, checkbox, order, track }) => {
+        const index = selected.indexOf(track.id);
+        checkbox.checked = index >= 0;
+        row.classList.toggle("selected", index >= 0);
+        order.textContent = index >= 0 ? String(index + 1) : "";
+      });
+    }
+    function filterChoices() {
+      const query = search.value.trim().toLocaleLowerCase();
+      let visible = 0;
+      rows.forEach(({ row, row: { dataset } }) => {
+        row.hidden = Boolean(query && !dataset.search.includes(query));
+        if (!row.hidden) visible += 1;
+      });
+      empty.hidden = visible > 0;
+    }
+    search.addEventListener("input", filterChoices);
+    const error = element("p", "field-error music-playlist-error");
+    error.setAttribute("role", "alert");
+    error.hidden = true;
+    const actions = element("div", "modal-actions sheet-actions");
+    const cancel = element("button", "secondary-button", "取消");
+    cancel.type = "button";
+    cancel.addEventListener("click", closeModal);
+    const save = element("button", "primary-button", playlist ? "保存歌单" : "创建歌单");
+    save.type = "button";
+    save.addEventListener("click", () => {
+      try {
+        const id = playlist?.id || `music-user-playlist-${state.nextMusicPlaylistId}`;
+        const validated = validateMusicPlaylist({ id, name: name.value, trackIds: selected }, state.musicPlaylists, tracks.map(track => track.id));
+        if (playlist) state.musicPlaylists = state.musicPlaylists.map(item => item.id === id ? { ...item, ...validated } : item);
+        else {
+          state.nextMusicPlaylistId += 1;
+          state.musicPlaylists.push({ ...validated, sample: false });
+        }
+        closeModal();
+        state.musicTab = "playlists";
+        openMusicPlaylistById(id);
+        toast(playlist ? "歌单已保存" : "歌单已创建");
+      } catch (reason) {
+        error.textContent = reason.message;
+        error.hidden = false;
+        name.focus();
+      }
+    });
+    actions.append(cancel, save);
+    content.append(nameField, searchField, selection, list, empty, error, actions);
+    updateSelection();
+    showModal(playlist ? "编辑歌单" : initialTrackId ? "新建歌单并加入" : "新建歌单", content, "music-playlist-sheet");
+    name.focus({ preventScroll: true });
+  }
+
+  function showMusicPlaylistPicker(trackId) {
+    const track = musicLibraryTracks().find(item => item.id === trackId);
+    if (!track) return;
+    const content = element("div", "music-playlist-picker");
+    content.append(element("p", "modal-copy", `把《${track.title}》加入已有歌单，或新建歌单并加入。`));
+    const list = element("div", "music-playlist-picker-list");
+    state.musicPlaylists.forEach(playlist => {
+      const exists = playlist.trackIds.includes(trackId);
+      const button = element("button", "music-playlist-picker-row");
+      button.type = "button";
+      button.disabled = exists;
+      button.append(paintMusicPlaylistCover(document.createElement("span"), playlist));
+      const copy = element("span", "music-playlist-picker-copy");
+      copy.append(element("strong", "", playlist.name), element("small", "", `${playlist.trackIds.length} 首 · ${playlist.sample ? "示例" : "本次创建"}`));
+      button.append(copy, element("span", "music-playlist-picker-state", exists ? "已添加" : "＋"));
+      button.addEventListener("click", () => {
+        try {
+          const validated = validateMusicPlaylist({ ...playlist, trackIds: [...playlist.trackIds, trackId] }, state.musicPlaylists, musicLibraryTracks().map(item => item.id));
+          state.musicPlaylists = state.musicPlaylists.map(item => item.id === playlist.id ? { ...item, ...validated } : item);
+          closeModal();
+          renderMusic();
+          toast(`已加入「${playlist.name}」`);
+        } catch (reason) { toast(reason.message); }
+      });
+      list.append(button);
+    });
+    if (!state.musicPlaylists.length) list.append(element("p", "music-search-empty", "还没有歌单，先新建一个。"));
+    const create = element("button", "primary-button music-wide-action", "＋ 新建歌单并加入");
+    create.type = "button";
+    create.addEventListener("click", () => showMusicPlaylistEditor(null, trackId));
+    content.append(list, create);
+    showModal("添加到歌单", content, "music-playlist-sheet");
+  }
+
+  function playMusicPlaylist(playlist, track = musicPlaylistTracks(playlist)[0]) {
+    const tracks = musicPlaylistTracks(playlist);
+    if (!track || !tracks.some(item => item.id === track.id)) return;
+    state.musicQueueIds = tracks.map(item => item.id);
+    playMusicTrack(track, true, true);
+  }
+
+  function deleteCurrentMusicPlaylist() {
+    const playlist = currentMusicPlaylist();
+    if (!playlist) return;
+    confirmAction("删除歌单？", `将删除「${playlist.name}」及歌单内的排序设置，不会删除曲库歌曲或已导入的音频。`, () => {
+      state.musicPlaylists = state.musicPlaylists.filter(item => item.id !== playlist.id);
+      state.musicPlaylist = null;
+      renderMusic();
+      toast("歌单已删除");
+    }, "删除");
   }
 
   function currentMusicTrack() {
@@ -787,6 +1039,7 @@
     $("music-main-header").classList.toggle("history-mode", state.musicTab === "history");
     $("music-tab-content").hidden = detailOpen || playerOpen;
     $("music-playlist-detail").hidden = !detailOpen;
+    renderMusicPlaylists();
     if (detailOpen) renderMusicPlaylist();
     renderMusicHistory();
     renderMusicRecent();
@@ -846,7 +1099,7 @@
   function musicLibraryTracks() { return [...state.musicImportedTracks, ...MUSIC_TRACKS]; }
 
   function renderMusicLibrary() {
-    $("music-song-list").replaceChildren(...musicLibraryTracks().map(track => buildMusicSongRow(track)));
+    $("music-song-list").replaceChildren(...musicLibraryTracks().map(track => buildMusicSongRow(track, track.artist, () => showMusicPlaylistPicker(track.id))));
     filterMusicSongs();
   }
 
@@ -856,6 +1109,7 @@
     $("music-song-list").querySelectorAll("[data-music-track]").forEach(button => {
       const matches = !query || `${button.dataset.musicTrack} ${button.dataset.musicArtist}`.toLocaleLowerCase().includes(query);
       button.hidden = !matches;
+      if (button.parentElement?.classList.contains("music-song-row-wrap")) button.parentElement.hidden = !matches;
       if (matches) count += 1;
     });
     const total = musicLibraryTracks().length;
@@ -1012,10 +1266,6 @@
     });
     content.append(title, artist, cover, coverStatus, error, save);
     showModal("编辑歌曲信息", content);
-  }
-
-  function musicUiOnly(label) {
-    toast(`${label}将在网页 UI 确认后接入，本轮仅展示界面。`);
   }
 
   function musicClockText(seconds) {
@@ -5615,7 +5865,6 @@
     });
   });
   document.querySelectorAll("[data-music-open]").forEach(button => button.addEventListener("click", () => chooseMusicTab(button.dataset.musicOpen)));
-  document.querySelectorAll("[data-music-playlist]").forEach(button => button.addEventListener("click", () => openMusicPlaylist(button)));
   document.querySelectorAll("[data-music-history-period]").forEach(button => button.addEventListener("click", () => {
     if (!MUSIC_HISTORY_PERIODS.includes(button.dataset.musicHistoryPeriod)) return;
     state.musicHistoryPeriod = button.dataset.musicHistoryPeriod;
@@ -5667,7 +5916,19 @@
   });
   document.querySelectorAll("[data-music-track]").forEach(button => button.addEventListener("click", () => selectMusicTrack(button)));
   $("music-playlist-back").addEventListener("click", closeMusicPlaylist);
-  $("music-play-all").addEventListener("click", () => musicUiOnly("播放全部"));
+  $("music-play-all").addEventListener("click", () => {
+    const playlist = currentMusicPlaylist();
+    if (playlist) playMusicPlaylist(playlist);
+  });
+  $("music-playlist-edit").addEventListener("click", () => {
+    const playlist = currentMusicPlaylist();
+    if (playlist) showMusicPlaylistEditor(playlist);
+  });
+  $("music-playlist-add").addEventListener("click", () => {
+    const playlist = currentMusicPlaylist();
+    if (playlist) showMusicPlaylistEditor(playlist);
+  });
+  $("music-playlist-delete").addEventListener("click", deleteCurrentMusicPlaylist);
   $("music-search").addEventListener("input", event => {
     state.musicSearch = event.target.value;
     if (state.musicSearch.trim()) state.musicTab = "songs";
@@ -5714,7 +5975,7 @@
     catch (error) { toast(error.message || "无法读取所选目录。"); }
     finally { event.target.value = ""; }
   });
-  $("music-new-playlist").addEventListener("click", () => musicUiOnly("新建歌单"));
+  $("music-new-playlist").addEventListener("click", () => showMusicPlaylistEditor());
   window.addEventListener("hashchange", () => navigate(location.hash.slice(1), false));
   document.querySelectorAll("[data-mode]").forEach(button => button.addEventListener("click", () => {
     if (button.dataset.mode === timer.mode) return;

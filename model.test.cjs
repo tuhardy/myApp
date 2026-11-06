@@ -1534,6 +1534,23 @@ test("B 站共享目录识别单个、并列与整个 download 缓存，并按�
   assert.deepEqual([...importedBilibiliMusicCids([{ sourceCid: 7 }, { sourceCid: 0 }, {}])], [7]);
 });
 
+test("歌单名称与曲目规则和 Android 同口径", () => {
+  const { MUSIC_PLAYLIST_NAME_MAX, initialMusicPlaylists, validateMusicPlaylist, musicQueueMove, musicQueueRemove } = require("./model.js");
+  const existing = [{ id: "one", name: "通勤路上", trackIds: [] }];
+  assert.equal(MUSIC_PLAYLIST_NAME_MAX, 30);
+  assert.deepEqual(validateMusicPlaylist({ id: "two", name: "  散步时听  ", trackIds: ["a", "a", "b"] }, existing, ["a", "b"]),
+    { id: "two", name: "散步时听", trackIds: ["a", "b"] });
+  assert.throws(() => validateMusicPlaylist({ id: "two", name: "通勤路上", trackIds: [] }, existing, ["a"]), /同名/);
+  assert.throws(() => validateMusicPlaylist({ id: "two", name: " ", trackIds: [] }, existing, ["a"]), /名称/);
+  assert.throws(() => validateMusicPlaylist({ id: "two", name: "x".repeat(31), trackIds: [] }, existing, ["a"]), /30/);
+  assert.throws(() => validateMusicPlaylist({ id: "two", name: "新歌单", trackIds: ["missing"] }, existing, ["a"]), /不在曲库/);
+  assert.deepEqual(musicQueueMove(["a", "b", "c"], 0, 2), ["b", "c", "a"]);
+  assert.deepEqual(musicQueueRemove(["a", "b", "c"], 1), ["a", "c"]);
+  const samples = initialMusicPlaylists();
+  assert.equal(samples.length, 6);
+  assert.ok(samples.every(item => item.sample && item.trackIds.length === 4));
+});
+
 test("音乐队列编辑保留当前曲，收听记录只累计真实播放时间", () => {
   const { MUSIC_PLAY_MODES, musicQueueMove, musicQueueRemove, musicQueueClearUpcoming, musicQueueNextId, musicListenSeconds, musicListenRecordable, musicListeningSummary } = require("./model.js");
   assert.deepEqual(MUSIC_PLAY_MODES.map(mode => mode.id), ["sequential", "repeat-all", "repeat-one", "shuffle"]);

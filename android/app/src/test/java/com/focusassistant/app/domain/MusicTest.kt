@@ -17,6 +17,16 @@ class MusicTest {
     private fun at(value: String) = ZonedDateTime.parse(value).toInstant().toEpochMilli()
     private fun listen(id: String, track: String, at: String, seconds: Long? = 100) = MusicListen(id, track, at(at), seconds)
 
+    @Test fun playlistValidationMatchesBrowserRules() {
+        val existing = listOf(MusicPlaylist("one", "通勤路上", emptyList()))
+        val validated = MusicPlaylists.validate(MusicPlaylist("two", "  散步时听  ", listOf("a", "a", "b")), existing, setOf("a", "b"))
+        assertEquals(MusicPlaylist("two", "散步时听", listOf("a", "b")), validated)
+        assertTrue(runCatching { MusicPlaylists.validate(MusicPlaylist("two", "通勤路上", emptyList()), existing, setOf("a")) }.exceptionOrNull()?.message?.contains("同名") == true)
+        assertTrue(runCatching { MusicPlaylists.validate(MusicPlaylist("two", " ", emptyList()), existing, setOf("a")) }.isFailure)
+        assertTrue(runCatching { MusicPlaylists.validate(MusicPlaylist("two", "x".repeat(31), emptyList()), existing, setOf("a")) }.isFailure)
+        assertTrue(runCatching { MusicPlaylists.validate(MusicPlaylist("two", "新歌单", listOf("missing")), existing, setOf("a")) }.isFailure)
+    }
+
     @Test fun summaryFiltersPeriodsAndRanksByPlaysThenSecondsThenTitle() {
         val records = listOf(
             listen("1", "sunny", "2026-10-30T08:00:00Z"),

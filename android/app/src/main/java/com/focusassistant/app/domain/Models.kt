@@ -65,9 +65,10 @@ data class AppState(
     val jobOpportunities: List<JobOpportunity> = emptyList(),
     /** 自动投递规则与记录仅保存在本机，不进入完整备份。 */
     val autoApply: AutoApplyBook = AutoApplyBook(),
-    /** 音乐曲库、音频文件与真实收听事件仅保存在本机；现有 JSON 备份不打包，恢复时原样保留。 */
+    /** 音乐曲库、歌单、音频文件与真实收听事件仅保存在本机；现有 JSON 备份不打包，恢复时原样保留。 */
     val musicTracks: List<MusicTrack> = emptyList(),
-    val musicListens: List<MusicListen> = emptyList()
+    val musicListens: List<MusicListen> = emptyList(),
+    val musicPlaylists: List<MusicPlaylist> = emptyList()
 )
 data class TimerEvent(val kind: TimerEventKind, val projectTitle: String, val sessionId: String? = null)
 data class BackupData(val projects: List<Project>, val todos: List<Todo>, val sessions: List<FocusSession>, val progress: List<ProgressEntry>, val settings: AppSettings)

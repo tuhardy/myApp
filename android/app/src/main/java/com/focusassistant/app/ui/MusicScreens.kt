@@ -57,7 +57,6 @@ import java.time.temporal.TemporalAdjusters
 import kotlin.math.abs
 
 internal enum class MusicTab(val label: String) { RECOMMEND("推荐"), PLAYLISTS("歌单"), SONGS("歌曲"), HISTORY("回顾") }
-internal data class MusicPlaylist(val id: String, val name: String, val trackIds: List<String>)
 
 /** 只保存界面状态；真实曲库、歌单和收听记录不由这里伪造或写入。 */
 internal class MusicUiState {
@@ -87,6 +86,15 @@ internal val MusicLine = Color(0xFFDDE0E1)
 private val MusicSongLine = Color(0xFFE7E9E9)
 private val MusicCurrent = Color(0xFFF7F7F6)
 private val MusicWaveIdle = Color(0xFFC9CED0)
+
+internal data class MusicPlaylistActions(
+    val create: () -> Unit = {},
+    val edit: (MusicPlaylist) -> Unit = {},
+    val delete: (MusicPlaylist) -> Unit = {},
+    val save: (MusicPlaylist) -> Unit = {},
+    val play: (List<MusicTrack>, MusicTrack) -> Unit = { _, _ -> },
+    val addTrack: (MusicTrack) -> Unit = {}
+)
 
 private fun musicDurationText(seconds: Long): String {
     val minutes = (seconds.coerceAtLeast(0) + 30) / 60
@@ -137,7 +145,8 @@ internal fun MusicScreen(
     onSeek: (Long) -> Unit = {},
     onMode: () -> Unit = {},
     onQueue: () -> Unit = {},
-    onEdit: () -> Unit = {}
+    onEdit: () -> Unit = {},
+    playlistActions: MusicPlaylistActions = MusicPlaylistActions()
 ) {
     val current = tracks.find { it.id == state.selectedTrackId }
     if (state.playerOpen && current != null) {
@@ -150,7 +159,8 @@ internal fun MusicScreen(
     BackHandler(enabled = playlist != null) { state.playlistId = null }
     Column(Modifier.fillMaxSize().background(Color.White)) {
         if (playlist != null) {
-            PlaylistDetail(playlist, tracks, state.selectedTrackId, Modifier.weight(1f), onBack = { state.playlistId = null }, onSelect = onPlay)
+            PlaylistDetail(playlist, tracks, state.selectedTrackId, Modifier.weight(1f), playlistActions,
+                onBack = { state.playlistId = null })
         } else {
             MusicHeader(state, onAdd)
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(start = 23.dp, end = 23.dp, bottom = 20.dp)) {
@@ -160,14 +170,14 @@ internal fun MusicScreen(
                     }
                     MusicTab.PLAYLISTS -> item(key = "playlists") {
                         MusicSectionHeading("我的歌单", "${playlists.size} 个")
-                        if (playlists.isEmpty()) EmptyCard("还没有本机歌单", "新建歌单将在真实曲库接入后开放，不会用示例歌单填充。")
-                        else MusicPlaylistGrid(playlists, full = true) { state.playlistId = it.id }
-                        OutlinedButton(onClick = { onMessage("新建歌单将在真实曲库接入后开放，本轮仅展示界面。") },
+                        if (playlists.isEmpty()) EmptyCard("还没有本机歌单", "点击下面新建歌单，可从本机曲库选择歌曲，也可以先创建空歌单。")
+                        else MusicPlaylistGrid(playlists, tracks, full = true) { state.playlistId = it.id }
+                        OutlinedButton(onClick = playlistActions.create,
                             Modifier.fillMaxWidth().padding(top = 24.dp).heightIn(min = 52.dp),
                             shape = RoundedCornerShape(9.dp), border = BorderStroke(1.dp, TickIdle),
                             contentPadding = PaddingValues(12.dp)) {
                             Icon(Icons.Outlined.Add, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp))
-                            Text("新建歌单（界面演示）", fontSize = 12.sp)
+                            Text("新建歌单", fontSize = 12.sp)
                         }
                     }
                     MusicTab.SONGS -> item(key = "songs") {
@@ -178,7 +188,7 @@ internal fun MusicScreen(
                             if (tracks.isEmpty()) "选择右上角「＋」，从共享目录批量导入 B 站缓存音频。" else "换个歌名或歌手试试。")
                         else Column { filtered.forEachIndexed { index, track ->
                             SongRow(track, current?.id == track.id, showDivider = index < filtered.lastIndex,
-                                onClick = { onPlay(track) })
+                                onMore = { playlistActions.addTrack(track) }, onClick = { onPlay(track) })
                         } }
                     }
                     MusicTab.HISTORY -> item(key = "history") {
@@ -328,9 +338,9 @@ internal fun MusicImportDialog(candidates: List<MusicImportCandidate>, busy: Boo
 }
 
 @Composable
-private fun MusicImportField(label: String, value: String, enabled: Boolean, placeholder: String = "", onChange: (String) -> Unit) {
+private fun MusicImportField(label: String, value: String, enabled: Boolean, placeholder: String = "", modifier: Modifier = Modifier, onChange: (String) -> Unit) {
     Text(label, color = MusicMuted, fontSize = 10.sp, modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 4.dp))
-    BasicTextField(value, onChange, Modifier.padding(horizontal = 12.dp).fillMaxWidth().height(40.dp)
+    BasicTextField(value, onChange, modifier.padding(horizontal = 12.dp).fillMaxWidth().height(40.dp)
         .background(Color.White, RoundedCornerShape(7.dp)).border(1.dp, MusicLine, RoundedCornerShape(7.dp)).padding(horizontal = 10.dp),
         enabled = enabled, singleLine = true, textStyle = TextStyle(color = Ink, fontSize = 12.sp), cursorBrush = SolidColor(Accent),
         decorationBox = { inner ->
@@ -339,6 +349,109 @@ private fun MusicImportField(label: String, value: String, enabled: Boolean, pla
                 inner()
             }
         })
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun MusicPlaylistEditorDialog(existing: MusicPlaylist?, tracks: List<MusicTrack>, initialTrackId: String? = null,
+    busy: Boolean = false, onDismiss: () -> Unit, onConfirm: (String, List<String>) -> Unit) {
+    var name by remember(existing?.id) { mutableStateOf(existing?.name.orEmpty()) }
+    var query by remember(existing?.id) { mutableStateOf("") }
+    val selected = remember(existing?.id) {
+        mutableStateListOf<String>().also { ids ->
+            existing?.trackIds?.let(ids::addAll)
+            if (existing == null && initialTrackId != null && tracks.any { it.id == initialTrackId }) ids += initialTrackId
+        }
+    }
+    val nameFocus = remember { FocusRequester() }
+    ModalBottomSheet(onDismissRequest = { if (!busy) onDismiss() },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Color.White) {
+        LaunchedEffect(Unit) { if (existing == null) nameFocus.requestFocus() }
+        Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 22.dp)) {
+            Text(if (existing == null) "创建歌单" else "编辑歌单", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+            Text("可只创建空歌单；歌曲按点选顺序加入，重复点选会取消。", color = MusicMuted, fontSize = 11.sp,
+                lineHeight = 18.sp, modifier = Modifier.padding(top = 5.dp, bottom = 8.dp))
+            MusicImportField("歌单名称", name, !busy, "1–30 个字符", Modifier.focusRequester(nameFocus)) { if (it.length <= MusicPlaylists.MAX_NAME) name = it }
+            Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("选择歌曲", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Text("已选 ${selected.size} 首", color = AccentDark, fontSize = 11.sp)
+            }
+            BasicTextField(query, { query = it }, Modifier.fillMaxWidth().height(42.dp)
+                .background(MusicSurface, RoundedCornerShape(8.dp)).padding(horizontal = 12.dp),
+                singleLine = true, enabled = !busy, textStyle = TextStyle(color = Ink, fontSize = 13.sp), cursorBrush = SolidColor(Accent),
+                decorationBox = { inner ->
+                    Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Search, null, Modifier.size(17.dp), tint = MusicMuted)
+                        Spacer(Modifier.width(8.dp)); Box(Modifier.weight(1f)) {
+                            if (query.isEmpty()) Text("搜索歌名或歌手", color = MusicMuted, fontSize = 13.sp)
+                            inner()
+                        }
+                    }
+                })
+            val filtered = tracks.filter { query.trim().isEmpty() || "${it.title} ${it.artist}".contains(query.trim(), ignoreCase = true) }
+            LazyColumn(Modifier.heightIn(max = 360.dp).padding(top = 7.dp)) {
+                if (filtered.isEmpty()) item { EmptyCard(if (tracks.isEmpty()) "曲库还没有歌曲" else "没有匹配的歌曲",
+                    if (tracks.isEmpty()) "仍可先创建空歌单，导入歌曲后再添加。" else "换个关键词试试；当前选择会保留。") }
+                filtered.forEach { track ->
+                    item(key = track.id) {
+                        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = !busy) {
+                            if (!selected.remove(track.id)) selected += track.id
+                        }, verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(track.id in selected, { checked ->
+                                if (checked) { if (track.id !in selected) selected += track.id } else selected.remove(track.id)
+                            }, enabled = !busy)
+                            TrackCoverArt(track, Modifier.size(36.dp), radius = 5.dp)
+                            Column(Modifier.padding(start = 9.dp)) {
+                                Text(track.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(track.artist, color = MusicMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                OutlinedButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.weight(1f).height(46.dp),
+                    shape = RoundedCornerShape(9.dp)) { Text("取消") }
+                Button(onClick = { onConfirm(name, selected.toList()) }, enabled = !busy && name.isNotBlank(),
+                    modifier = Modifier.weight(1f).height(46.dp), shape = RoundedCornerShape(9.dp)) {
+                    Text(if (existing == null) "创建歌单" else "保存修改")
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun MusicPlaylistPickerDialog(track: MusicTrack, playlists: List<MusicPlaylist>, onDismiss: () -> Unit,
+    onCreate: () -> Unit, onSelect: (MusicPlaylist) -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color.White) {
+        Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 24.dp)) {
+            Text("添加到歌单", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+            Text(track.title, color = MusicMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp))
+            if (playlists.isEmpty()) EmptyCard("还没有歌单", "先新建一个歌单，这首歌曲会自动加入。")
+            else LazyColumn(Modifier.heightIn(max = 330.dp)) {
+                playlists.forEach { playlist ->
+                    val added = track.id in playlist.trackIds
+                    item(key = playlist.id) {
+                        Row(Modifier.fillMaxWidth().heightIn(min = 54.dp).clickable(enabled = !added) { onSelect(playlist) },
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(playlist.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                Text("${playlist.trackIds.size} 首", color = MusicMuted, fontSize = 11.sp)
+                            }
+                            Text(if (added) "已添加" else "添加", color = if (added) MusicMuted else AccentDark, fontSize = 12.sp)
+                        }
+                        HorizontalDivider(color = MusicSongLine)
+                    }
+                }
+            }
+            OutlinedButton(onClick = onCreate, Modifier.fillMaxWidth().padding(top = 14.dp).height(46.dp), shape = RoundedCornerShape(9.dp)) {
+                Icon(Icons.Outlined.Add, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("新建歌单并加入")
+            }
+        }
+    }
 }
 
 private fun musicFileSize(bytes: Long): String = when {
@@ -373,8 +486,8 @@ private fun RecommendationPanel(tracks: List<MusicTrack>, listens: List<MusicLis
     if (current == null) EmptyCard("还没有本机歌曲", "导入后可在这里播放应用私有目录中的真实音频。", Modifier.padding(top = 19.dp))
     else CurrentPlaybackCard(current, state.playing, onOpenPlayer, onToggle)
     MusicSectionHeading("我的歌单", action = "全部") { state.tab = MusicTab.PLAYLISTS }
-    if (playlists.isEmpty()) EmptyCard("还没有本机歌单", "不会用示例歌单替代尚未创建的记录。")
-    else MusicPlaylistGrid(playlists.take(3)) { state.playlistId = it.id }
+    if (playlists.isEmpty()) EmptyCard("还没有本机歌单", "在「歌单」页新建后，会显示在这里。")
+    else MusicPlaylistGrid(playlists.take(3), tracks) { state.playlistId = it.id }
     Spacer(Modifier.height(2.dp))
     MusicSectionHeading("最近播放", action = "全部歌曲") { state.tab = MusicTab.SONGS }
     val byId = tracks.associateBy { it.id }
@@ -405,8 +518,8 @@ private fun CurrentPlaybackCard(track: MusicTrack, playing: Boolean, onOpen: () 
 }
 
 @Composable
-private fun MusicSectionHeading(title: String, detail: String? = null, action: String? = null, onAction: (() -> Unit)? = null) {
-    Row(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun MusicSectionHeading(title: String, detail: String? = null, action: String? = null, modifier: Modifier = Modifier.fillMaxWidth(), onAction: (() -> Unit)? = null) {
+    Row(modifier.padding(top = 18.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).semantics { heading() })
         if (detail != null) Text(detail, color = MusicMuted, fontSize = 11.sp)
         if (action != null && onAction != null) TextButton(onClick = onAction, Modifier.height(36.dp),
@@ -415,13 +528,14 @@ private fun MusicSectionHeading(title: String, detail: String? = null, action: S
 }
 
 @Composable
-private fun MusicPlaylistGrid(playlists: List<MusicPlaylist>, full: Boolean = false, onOpen: (MusicPlaylist) -> Unit) {
+private fun MusicPlaylistGrid(playlists: List<MusicPlaylist>, tracks: List<MusicTrack>, full: Boolean = false, onOpen: (MusicPlaylist) -> Unit) {
+    val byId = tracks.associateBy { it.id }
     Column(Modifier.padding(top = if (full) 6.dp else 0.dp), verticalArrangement = Arrangement.spacedBy(if (full) 22.dp else 12.dp)) {
         playlists.chunked(3).forEach { row ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 row.forEach { playlist ->
                     Column(Modifier.weight(1f).clickable { onOpen(playlist) }.semantics { contentDescription = "歌单 ${playlist.name}，${playlist.trackIds.size} 首" }) {
-                        CoverArt(playlist.id, Modifier.fillMaxWidth().aspectRatio(1f))
+                        PlaylistCoverArt(playlist, playlist.trackIds.mapNotNull(byId::get), Modifier.fillMaxWidth().aspectRatio(1f))
                         Text(playlist.name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(top = 7.dp))
                         Text("${playlist.trackIds.size} 首", color = MusicMuted, fontSize = 10.sp)
@@ -434,7 +548,8 @@ private fun MusicPlaylistGrid(playlists: List<MusicPlaylist>, full: Boolean = fa
 }
 
 @Composable
-private fun PlaylistDetail(playlist: MusicPlaylist, tracks: List<MusicTrack>, selectedTrackId: String?, modifier: Modifier, onBack: () -> Unit, onSelect: (MusicTrack) -> Unit) {
+private fun PlaylistDetail(playlist: MusicPlaylist, tracks: List<MusicTrack>, selectedTrackId: String?, modifier: Modifier,
+    actions: MusicPlaylistActions, onBack: () -> Unit) {
     val byId = tracks.associateBy { it.id }
     val songs = playlist.trackIds.mapNotNull { byId[it] }
     LazyColumn(modifier, contentPadding = PaddingValues(start = 23.dp, end = 23.dp, top = 14.dp, bottom = 20.dp)) {
@@ -445,18 +560,20 @@ private fun PlaylistDetail(playlist: MusicPlaylist, tracks: List<MusicTrack>, se
                 }
                 Text("歌单", fontSize = 18.sp, lineHeight = 27.sp, letterSpacing = (-0.3).sp,
                     fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 12.dp).weight(1f))
-                Text("本机", color = MusicMuted, fontSize = 11.sp,
-                    modifier = Modifier.border(1.dp, Line, RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 3.dp))
+                TextButton(onClick = { actions.edit(playlist) }) { Text("编辑", fontSize = 12.sp) }
+                IconButton(onClick = { actions.delete(playlist) }, Modifier.size(44.dp)) {
+                    Icon(Icons.Outlined.DeleteOutline, "删除歌单", tint = MusicMuted, modifier = Modifier.size(19.dp))
+                }
             }
         }
         item {
             Column {
                 Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-                    CoverArt(playlist.id, Modifier.size(108.dp), radius = 9.dp)
+                    PlaylistCoverArt(playlist, songs, Modifier.size(108.dp), radius = 9.dp)
                     Column(Modifier.padding(start = 18.dp).weight(1f)) {
                         Text(playlist.name, fontSize = 23.sp, lineHeight = 31.sp, letterSpacing = (-0.5).sp, fontWeight = FontWeight.SemiBold)
                         Text("${songs.size} 首 · 本机歌单", color = MusicMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 5.dp))
-                        Button(onClick = { songs.firstOrNull()?.let(onSelect) }, enabled = songs.isNotEmpty(),
+                        Button(onClick = { songs.firstOrNull()?.let { actions.play(songs, it) } }, enabled = songs.isNotEmpty(),
                             modifier = Modifier.padding(top = 13.dp).height(40.dp), shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 7.dp)) {
                             Icon(Icons.Outlined.PlayArrow, null, Modifier.size(15.dp)); Spacer(Modifier.width(6.dp))
@@ -467,17 +584,70 @@ private fun PlaylistDetail(playlist: MusicPlaylist, tracks: List<MusicTrack>, se
                 HorizontalDivider(color = MusicLine)
             }
         }
-        item { MusicSectionHeading("歌单歌曲", if (songs.isEmpty()) "暂无歌曲" else "${songs.size} 首") }
-        if (songs.isEmpty()) item { EmptyCard("这个歌单还没有歌曲", "不会从全部歌曲或浏览器示例中自动补入。") }
-        else item { Column { songs.forEachIndexed { index, track ->
-            SongRow(track, track.id == selectedTrackId, showDivider = index < songs.lastIndex) { onSelect(track) }
-        } } }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                MusicSectionHeading("歌单歌曲", if (songs.isEmpty()) "暂无歌曲" else "${songs.size} 首", modifier = Modifier.weight(1f))
+                TextButton(onClick = { actions.edit(playlist) }, Modifier.height(36.dp), contentPadding = PaddingValues(0.dp)) {
+                    Icon(Icons.Outlined.Add, null, Modifier.size(15.dp)); Spacer(Modifier.width(3.dp)); Text("添加歌曲", fontSize = 11.sp)
+                }
+            }
+        }
+        if (songs.isEmpty()) item { EmptyCard("这个歌单还没有歌曲", "点击「添加歌曲」从本机曲库选择，不会自动补入其他歌曲。") }
+        else item {
+            Column {
+                songs.forEachIndexed { index, track ->
+                    PlaylistTrackRow(track, track.id == selectedTrackId, index, songs.size,
+                        onMove = { target -> actions.save(playlist.copy(trackIds = MusicQueue.move(playlist.trackIds, index, target))) },
+                        onRemove = { actions.save(playlist.copy(trackIds = MusicQueue.remove(playlist.trackIds, index))) },
+                        onClick = { actions.play(songs, track) })
+                    if (index < songs.lastIndex) HorizontalDivider(color = MusicSongLine)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaylistTrackRow(track: MusicTrack, selected: Boolean, index: Int, count: Int,
+    onMove: (Int) -> Unit, onRemove: () -> Unit, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 68.dp).background(if (selected) MusicCurrent else Color.Transparent)
+        .clickable(onClick = onClick).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        TrackCoverArt(track, Modifier.size(40.dp), radius = 6.dp)
+        Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+            Text(track.title, color = if (selected) AccentDark else Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(track.artist, color = MusicMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        IconButton(onClick = { onMove(index - 1) }, enabled = index > 0, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Outlined.KeyboardArrowUp, "上移 ${track.title}", Modifier.size(18.dp))
+        }
+        IconButton(onClick = { onMove(index + 1) }, enabled = index < count - 1, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Outlined.KeyboardArrowDown, "下移 ${track.title}", Modifier.size(18.dp))
+        }
+        IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Outlined.Close, "从歌单移除 ${track.title}", Modifier.size(17.dp), tint = MusicMuted)
+        }
+    }
+}
+
+@Composable
+private fun PlaylistCoverArt(playlist: MusicPlaylist, songs: List<MusicTrack>, modifier: Modifier, radius: Dp = 7.dp) {
+    val covers = songs.take(4)
+    if (covers.isEmpty()) { CoverArt(playlist.id, modifier, radius); return }
+    if (covers.size == 1) { TrackCoverArt(covers.first(), modifier, radius); return }
+    Column(modifier.clip(RoundedCornerShape(radius)).background(MusicSurface).clearAndSetSemantics { }) {
+        covers.chunked(2).forEach { row ->
+            Row(Modifier.weight(1f)) {
+                row.forEach { track -> TrackCoverArt(track, Modifier.weight(1f).fillMaxHeight(), radius = 0.dp) }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
     }
 }
 
 @Composable
 private fun SongRow(track: MusicTrack, selected: Boolean, rank: Int? = null, stats: Pair<Int, Long>? = null,
-    showDivider: Boolean = true, onClick: () -> Unit) {
+    showDivider: Boolean = true, onMore: (() -> Unit)? = null, onClick: () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().heightIn(min = if (rank == null) 60.dp else 68.dp)
             .background(if (selected) MusicCurrent else Color.Transparent)
@@ -498,6 +668,9 @@ private fun SongRow(track: MusicTrack, selected: Boolean, rank: Int? = null, sta
             else Column(Modifier.widthIn(min = 62.dp), horizontalAlignment = Alignment.End) {
                 Text("${stats.first} 次", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 Text(musicDurationText(stats.second), color = MusicMuted, fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp))
+            }
+            if (onMore != null) IconButton(onClick = onMore, Modifier.size(36.dp)) {
+                Icon(Icons.Outlined.MoreVert, "添加到歌单 ${track.title}", Modifier.size(18.dp), tint = MusicMuted)
             }
         }
         if (showDivider) HorizontalDivider(color = MusicSongLine)

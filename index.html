@@ -201,11 +201,12 @@
               <div class="music-player-secondary"><button type="button" id="music-mode">列表循环</button><button type="button" id="music-queue">播放队列 · 0 首</button></div>
             </section>
             <section class="music-playlist-detail" id="music-playlist-detail" aria-labelledby="music-playlist-title" hidden>
-              <header class="music-detail-header"><button class="icon-button back-button" id="music-playlist-back" type="button" aria-label="返回歌单列表"><svg class="icon"><use href="#i-arrow"/></svg></button><h2>歌单</h2><span class="sample-tag">示例</span></header>
+              <header class="music-detail-header"><button class="icon-button back-button" id="music-playlist-back" type="button" aria-label="返回歌单列表"><svg class="icon"><use href="#i-arrow"/></svg></button><h2>歌单</h2><div class="music-detail-header-actions"><span class="sample-tag" id="music-playlist-kind">示例</span><button type="button" class="music-text-button" id="music-playlist-edit">编辑</button><button type="button" class="music-text-button" id="music-playlist-delete">删除</button></div></header>
               <div class="music-detail-body">
-                <div class="music-detail-hero"><span class="music-cover tone-one" id="music-detail-cover"><svg aria-hidden="true"><use href="#i-cover-wave"/></svg></span><div><h3 id="music-playlist-title">通勤流行</h3><p id="music-playlist-count">18 首 · 示例歌单</p><button type="button" class="primary-button" id="music-play-all"><svg class="icon"><use href="#i-play"/></svg>播放全部</button></div></div>
-                <div class="section-heading music-section-heading"><h3>歌单歌曲</h3><small>部分示例内容</small></div>
+                <div class="music-detail-hero"><span class="music-cover tone-one" id="music-detail-cover"><svg aria-hidden="true"><use href="#i-cover-wave"/></svg></span><div><h3 id="music-playlist-title">通勤流行</h3><p id="music-playlist-count">4 首 · 示例歌单</p><button type="button" class="primary-button" id="music-play-all"><svg class="icon"><use href="#i-play"/></svg>播放全部</button></div></div>
+                <div class="section-heading music-section-heading"><h3>歌单歌曲</h3><button type="button" class="music-text-button" id="music-playlist-add">＋ 添加歌曲</button></div>
                 <div class="music-song-list" id="music-playlist-track-list"></div>
+                <p class="music-search-empty" id="music-playlist-empty" hidden>这个歌单还没有歌曲，点击「添加歌曲」开始整理。</p>
               </div>
             </section>
             <div class="music-body" id="music-tab-content">
@@ -216,11 +217,8 @@
                 </section>
 
                 <div class="section-heading music-section-heading"><h3>我的歌单</h3><button type="button" class="music-text-button" data-music-open="playlists">全部</button></div>
-                <div class="music-playlist-grid">
-                  <button type="button" class="music-playlist" data-music-playlist="通勤流行" data-music-count="18" data-music-offset="0"><span class="music-cover tone-one"><svg aria-hidden="true"><use href="#i-cover-wave"/></svg></span><strong>通勤流行</strong><small>18 首</small></button>
-                  <button type="button" class="music-playlist" data-music-playlist="深夜电台" data-music-count="12" data-music-offset="1"><span class="music-cover tone-two"><svg aria-hidden="true"><use href="#i-cover-bars"/></svg></span><strong>深夜电台</strong><small>12 首</small></button>
-                  <button type="button" class="music-playlist" data-music-playlist="中文珍藏" data-music-count="26" data-music-offset="2"><span class="music-cover tone-three"><svg aria-hidden="true"><use href="#i-cover-lines"/></svg></span><strong>中文珍藏</strong><small>26 首</small></button>
-                </div>
+                <div class="music-playlist-grid" id="music-playlist-recommend"></div>
+                <p class="music-search-empty" id="music-playlist-recommend-empty" hidden>还没有歌单，可在「歌单」页新建。</p>
 
                 <div class="section-heading music-section-heading music-recent-heading"><h3>最近播放</h3><button type="button" class="music-text-button" data-music-open="songs">全部歌曲</button></div>
                 <div class="music-song-list" id="music-recent-list"></div>
@@ -228,16 +226,10 @@
               </section>
 
               <section id="music-panel-playlists" data-music-panel="playlists" role="tabpanel" aria-labelledby="music-tab-playlists" hidden>
-                <div class="section-heading music-section-heading"><h3>我的歌单</h3><small>6 个 · 示例</small></div>
-                <div class="music-playlist-grid music-playlist-grid-full">
-                  <button type="button" class="music-playlist" data-music-playlist="通勤流行" data-music-count="18" data-music-offset="0"><span class="music-cover tone-one"><svg aria-hidden="true"><use href="#i-cover-wave"/></svg></span><strong>通勤流行</strong><small>18 首</small></button>
-                  <button type="button" class="music-playlist" data-music-playlist="深夜电台" data-music-count="12" data-music-offset="1"><span class="music-cover tone-two"><svg aria-hidden="true"><use href="#i-cover-bars"/></svg></span><strong>深夜电台</strong><small>12 首</small></button>
-                  <button type="button" class="music-playlist" data-music-playlist="中文珍藏" data-music-count="26" data-music-offset="2"><span class="music-cover tone-three"><svg aria-hidden="true"><use href="#i-cover-lines"/></svg></span><strong>中文珍藏</strong><small>26 首</small></button>
-                  <button type="button" class="music-playlist" data-music-playlist="轻快心情" data-music-count="15" data-music-offset="3"><span class="music-cover tone-four"><svg aria-hidden="true"><use href="#i-cover-wave"/></svg></span><strong>轻快心情</strong><small>15 首</small></button>
-                  <button type="button" class="music-playlist" data-music-playlist="独自散步" data-music-count="9" data-music-offset="4"><span class="music-cover tone-five"><svg aria-hidden="true"><use href="#i-cover-bars"/></svg></span><strong>独自散步</strong><small>9 首</small></button>
-                  <button type="button" class="music-playlist" data-music-playlist="怀旧金曲" data-music-count="21" data-music-offset="5"><span class="music-cover tone-six"><svg aria-hidden="true"><use href="#i-cover-lines"/></svg></span><strong>怀旧金曲</strong><small>21 首</small></button>
-                </div>
-                <button type="button" class="secondary-button music-wide-action" id="music-new-playlist">＋ 新建歌单（界面演示）</button>
+                <div class="section-heading music-section-heading"><h3>我的歌单</h3><small id="music-playlist-count-label">6 个 · 示例</small></div>
+                <div class="music-playlist-grid music-playlist-grid-full" id="music-playlist-grid"></div>
+                <p class="music-search-empty" id="music-playlist-list-empty" hidden>还没有歌单，点击下面新建；也可以先创建空歌单。</p>
+                <button type="button" class="secondary-button music-wide-action" id="music-new-playlist">＋ 新建歌单</button>
               </section>
 
               <section id="music-panel-songs" data-music-panel="songs" role="tabpanel" aria-labelledby="music-tab-songs" hidden>

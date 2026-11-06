@@ -68,6 +68,12 @@ class BackupCodecTest {
             }
         }
     }
+    @Test fun musicPlaylistJsonPreservesOrderAndBackupDoesNotContainLocalPlaylists() {
+        val playlist = MusicPlaylist("playlist", "通勤", listOf("b", "a"))
+        assertEquals(playlist, JsonCodec.readMusicPlaylist(JSONObject(JsonCodec.musicPlaylist(playlist).toString())))
+        assertFalse(BackupCodec.encode(state().copy(musicPlaylists = listOf(playlist))).contains("musicPlaylists"))
+    }
+
     @Test fun wishJsonRoundTripsAllAssetScopeAndReadsLegacyAccountWish() {
         val all = Wish("all", "旅行", 800_000, null, null, scope = WishScope.ALL)
         val encoded = JsonCodec.wish(all)

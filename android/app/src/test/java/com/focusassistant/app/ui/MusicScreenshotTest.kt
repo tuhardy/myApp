@@ -14,6 +14,8 @@ import androidx.compose.ui.test.performScrollTo
 import com.focusassistant.app.domain.MusicListen
 import com.focusassistant.app.domain.MusicPlayMode
 import com.focusassistant.app.domain.MusicPlaybackSnapshot
+import com.focusassistant.app.domain.MusicPlaylist
+import com.focusassistant.app.domain.MusicPlaylists
 import com.focusassistant.app.domain.MusicTrack
 import com.focusassistant.app.domain.Period
 import java.io.File
@@ -70,7 +72,8 @@ class MusicScreenshotTest {
                 MusicScreen(if (withData) tracks else emptyList(), if (withData) listens else emptyList(),
                     if (withData) playlists else emptyList(), state, today, messages::add,
                     onPlay = { track -> state.selectedTrackId = track.id; state.playing = true },
-                    onToggle = { state.playing = !state.playing })
+                    onToggle = { state.playing = !state.playing },
+                    playlistActions = MusicPlaylistActions(play = { _, track -> state.selectedTrackId = track.id; state.playing = true }))
             }
         }
     }
@@ -126,6 +129,24 @@ class MusicScreenshotTest {
         }
         compose.onNodeWithContentDescription("返回").performClick()
         compose.onNodeWithText("我的歌单", substring = true).assertExists()
+    }
+
+    @Test fun playlistEditorKeepsSelectionOrderAndShowsRealTracks() {
+        var saved: MusicPlaylist? = null
+        compose.setContent {
+            FocusTheme {
+                MusicPlaylistEditorDialog(MusicPlaylist("draft", "夜间专注", emptyList()), tracks,
+                    onDismiss = {}, onConfirm = { name, ids ->
+                        saved = MusicPlaylists.validate(MusicPlaylist("draft", name, ids), emptyList(), tracks.mapTo(mutableSetOf()) { it.id })
+                    })
+            }
+        }
+        compose.onNodeWithText("测试歌曲2").performClick()
+        compose.onNodeWithText("测试歌曲0").performClick()
+        compose.onNodeWithText("已选 2 首").assertExists()
+        capture("music-playlist-editor", dialog = true)
+        compose.onNodeWithText("保存修改").performClick()
+        compose.runOnIdle { assertEquals(listOf("track-2", "track-0"), saved?.trackIds) }
     }
 
     @Test fun historyExpandsRankingAndResetsWhenPeriodChanges() {
