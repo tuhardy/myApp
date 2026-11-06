@@ -157,21 +157,22 @@ h2 { font-size: 26px; line-height: 1.4; letter-spacing: -.9px; margin: 0; font-w
 .resume-session-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
 .resume-session-copy strong { font-size: 13px; font-weight: 600; }
 .resume-session-copy small { font-size: 11px; color: var(--muted); }
-#page-timer .page-header { margin-bottom: 12px; }
+#page-timer .page-header { margin-bottom: 8px; }
 #page-timer .overline { display: none; }
 #page-timer .focus-toolbar { margin: 0; }
-#page-timer .timing-mode-tabs { margin-top: 10px; }
+#page-timer .timing-mode-tabs { margin-top: 8px; }
 .timer-page-header { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .timer-page-header > .back-button { flex: 0 0 var(--touch-target); width: var(--touch-target); min-height: var(--touch-target); }
 .timer-page-header .header-actions { flex-shrink: 0; }
 .timer-page-title { flex: 1; min-width: 0; font-size: 18px; letter-spacing: 0; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
 .timer-page-title h2, .timer-page-title strong { display: block; max-width: 100%; font-size: 18px; letter-spacing: 0; font-weight: 600; overflow-wrap: anywhere; }
 .timer-page-title small { display: block; font-size: 11px; font-weight: 400; color: var(--muted); }
-/* 计时表盘：60 格分钟刻度，剩余弧段上的刻度点亮；弧端小钮随进度走，状态由 data-state 驱动。 */
-#page-timer { --dial: var(--accent); --dial-dark: var(--accent-dark); --dial-soft: var(--accent-soft); }
+/* 计时页固定一屏：顶部与操作区不缩放，表盘独占剩余高度。 */
+#page-timer { --dial: var(--accent); --dial-dark: var(--accent-dark); --dial-soft: var(--accent-soft); height: 100%; min-height: 0; padding: 14px 20px 12px; overflow: hidden; display: flex; flex-direction: column; }
+#page-timer > :not(.timer-area) { flex-shrink: 0; }
 #page-timer:is([data-dial="short"], [data-dial="long"]) { --dial: var(--rest-slate); --dial-dark: var(--rest-slate-dark); --dial-soft: var(--rest-slate-soft); }
-.timer-area { height: 266px; position: relative; display: grid; place-items: center; margin: 6px 0 0; }
-.timer-ring { width: min(258px, 100%); height: auto; aspect-ratio: 1; overflow: visible; }
+.timer-area { flex: 1 1 0; min-height: 150px; position: relative; display: grid; place-items: center; margin: 4px 0 0; }
+.timer-ring { display: block; width: auto; height: 100%; max-width: 100%; max-height: 258px; aspect-ratio: 1; overflow: visible; }
 .timer-ring circle { fill: none; }
 .ring-ticks { stroke: var(--tick-idle); stroke-width: 5; stroke-dasharray: 1.2 12.8325; stroke-dashoffset: .6; transform: rotate(-90deg); transform-origin: center; }
 .ring-ticks.major { stroke: var(--tick-idle-major); stroke-width: 11; stroke-dasharray: 2.4 67.7625; stroke-dashoffset: 1.2; }
@@ -205,11 +206,12 @@ h2 { font-size: 26px; line-height: 1.4; letter-spacing: -.9px; margin: 0; font-w
 .timer-time { font-family: var(--numeral); font-size: 62px; line-height: 1.05; letter-spacing: -.02em; font-weight: 300; font-variant-numeric: tabular-nums; transition: color .4s; }
 .timer-caption { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .arrow { width: 15px; color: var(--muted); }
-.focus-item-selector { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 14px; background: var(--white); text-align: left; }
+.focus-item-selector { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--white); text-align: left; }
 .focus-item-selector:hover { border-color: var(--accent); }
-.focus-item-details { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
-.focus-item-details strong { font-size: 13px; font-weight: 600; }
-.focus-item-mode, .focus-item-meta { font-size: 12px; color: var(--muted); line-height: 1.7; overflow-wrap: anywhere; }
+.focus-item-details { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.focus-item-details strong { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 13px; line-height: 1.45; font-weight: 600; }
+.focus-item-mode, .focus-item-meta { font-size: 12px; color: var(--muted); line-height: 1.5; overflow-wrap: anywhere; }
+.focus-item-details small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .focus-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0; }
 .focus-toolbar > * { min-width: var(--touch-target); max-width: 100%; overflow-wrap: anywhere; }
 .focus-item-list { display: flex; flex-direction: column; gap: 10px; }
@@ -220,17 +222,17 @@ h2 { font-size: 26px; line-height: 1.4; letter-spacing: -.9px; margin: 0; font-w
 .focus-item-select strong { font-weight: 600; }
 .focus-item-edit { flex: 0 0 var(--touch-target); width: var(--touch-target); height: var(--touch-target); display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 11px; background: var(--white); color: var(--muted); }
 .focus-item-edit .icon { width: 18px; height: 18px; }
-.focus-config-summary { margin: 0 0 14px; font-size: 11px; color: var(--muted); line-height: 1.8; text-align: center; overflow-wrap: anywhere; }
+.focus-config-summary { margin: 0; font-size: 11px; color: var(--muted); line-height: 1.5; text-align: center; overflow-wrap: anywhere; }
 .timer-finish, .secondary-button.timer-finish { width: 100%; margin-top: 10px; padding: 12px 16px; border: 1px solid var(--accent); border-radius: 13px; background: var(--white); color: var(--accent-dark); font-size: 12px; }
 .timer-finish:hover { background: var(--mint); }
-.rest-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; margin-top: 12px; }
+.rest-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; margin-top: 8px; }
 .rest-actions button { min-height: var(--touch-target); max-width: 100%; padding: 6px 16px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; transition: background .2s, color .2s, border-color .2s, transform .25s var(--spring); }
 .rest-actions button:hover { border-color: var(--dial); color: var(--dial-dark); }
 .rest-actions button[aria-pressed="true"] { border-color: transparent; background: var(--dial-soft); color: var(--dial-dark); font-weight: 600; }
 .rest-actions button:active { transform: scale(.95); }
-.timer-actions { margin-top: 17px; display: flex; gap: 10px; }
+.timer-actions { margin-top: 10px; display: flex; gap: 8px; }
 .timer-actions .timer-finish { flex: 1; width: auto; margin: 0; padding: 10px 8px; }
-.timer-actions + .focus-config-summary { margin-top: 10px; }
+.timer-actions + .focus-config-summary { margin-top: 4px; }
 .primary-button { background: var(--accent); color: var(--white); border-radius: 15px; min-height: 52px; font-size: 14px; font-weight: 600; display: flex; justify-content: center; align-items: center; gap: 10px; flex: 1; padding: 12px 20px; box-shadow: 0 12px 24px -16px var(--accent); transition: background .18s, transform .3s var(--spring), box-shadow .3s; }
 .primary-button:hover { background: var(--accent-dark); }
 .primary-button:active { transform: scale(.97); box-shadow: 0 6px 12px -10px var(--accent); }
@@ -239,9 +241,10 @@ h2 { font-size: 26px; line-height: 1.4; letter-spacing: -.9px; margin: 0; font-w
 .reset-button:hover { color: var(--accent-dark); border-color: #e8c4b5; }
 .reset-button .icon { width: 19px; transition: transform .5s var(--ease-out); }
 .reset-button:active .icon { transform: rotate(-140deg); }
-#page-timer .timer-actions .primary-button { background: var(--dial); box-shadow: 0 12px 24px -16px var(--dial); }
+#page-timer .timer-actions .primary-button { min-height: 48px; padding: 10px 16px; background: var(--dial); box-shadow: 0 12px 24px -16px var(--dial); }
 #page-timer .timer-actions .primary-button:hover { background: var(--dial-dark); }
-#page-timer .timing-mode-tabs { width: fit-content; margin: 12px auto 0; }
+#page-timer .reset-button { width: 48px; }
+#page-timer .timing-mode-tabs { width: fit-content; margin: 8px auto 0; }
 #page-timer .timing-mode-tabs button { flex: none; padding: 7px 22px; }
 .section-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin: 25px 0 13px; }
 h3 { font-size: 13px; font-weight: 600; margin: 0; }
@@ -272,6 +275,7 @@ h3 { font-size: 13px; font-weight: 600; margin: 0; }
 .today-hours span:nth-child(5) { left: 100%; transform: translateX(-100%); }
 .focus-footnote { margin: 18px 0 0; text-align: center; }
 .quiet-note { display: flex; justify-content: center; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; padding: 18px 0 0; }
+#page-timer .quiet-note { padding-top: 8px; line-height: 1.5; }
 .quiet-note .icon { width: 13px; height: 13px; }
 .bottom-nav { display: flex; flex-shrink: 0; background: var(--white); border-top: 1px solid var(--line); padding: 10px 12px 4px; }
 .bottom-nav button { flex: 1; display: flex; align-items: center; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
@@ -1508,6 +1512,11 @@ button.diary-photo:hover { filter: brightness(.96); }
   .asset-breakdown-item strong { font-size: clamp(9px, 3vw, 12px); }
   .asset-card .asset-foot { gap: 6px; }
   .asset-card .asset-foot .secondary-button { padding-inline: 4px; font-size: 10px; }
+}
+@media (max-width: 480px) and (max-height: 650px) {
+  #page-timer { padding-top: 8px; padding-bottom: 8px; }
+  #page-timer .timer-area { min-height: 130px; }
+  #page-timer .quiet-note, #page-timer .focus-config-summary { display: none; }
 }
 @media (max-height: 650px) { .music-player-cover { --cover-height: 32dvh; } .music-player-screen > h2 { margin-top: 10px; font-size: 24px; } .music-player-secondary { margin-top: 2px; } }
 @media (max-height: 480px) { .music-player-screen { overflow-y: auto; } .music-player-cover { --cover-height: 180px; } }

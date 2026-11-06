@@ -429,30 +429,42 @@ internal fun TimerScreen(
     val elapsedMillis = timer?.elapsedMs(nowElapsed) ?: 0L
     val elapsedSeconds = elapsedMillis / UiLimits.MILLIS_PER_SECOND
     val shownSeconds = if (mode == TimerMode.COUNTUP) elapsedSeconds else timer?.remainingSeconds(nowElapsed) ?: targetSeconds ?: 0L
-    ScreenBody {
-        PageTitle(if (resting) phaseName(timer!!.phase) else "专注计时", onBack, fontSize = 18.sp) {
+    // 计时页是一屏操作界面：顶部与操作区固定，只有表盘随剩余高度缩放。
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, "返回") }
+            Text(if (resting) phaseName(timer!!.phase) else "专注计时", fontSize = 18.sp, lineHeight = 27.sp,
+                fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             IconButton(onClick = onStatistics) { Icon(Icons.Outlined.TrendingUp, "专注统计") }
             if (project != null) IconButton(onClick = onSettings) { Icon(Icons.Outlined.Settings, "项目计时设置") }
         }
         if (project == null && timer == null) {
-            EmptyMessage("先选择一个学习项目", "在专注首页创建或选择项目，即可开始计时。也可以先给自己一段休息。")
-            Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("返回项目") }
+            Column(Modifier.fillMaxWidth().weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                EmptyMessage("先选择一个学习项目", "在专注首页创建或选择项目，即可开始计时。也可以先给自己一段休息。")
+                Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("返回项目") }
+            }
         } else {
-            Column(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 if (!resting) Text((timer?.category ?: project?.category).orEmpty(), color = Muted, fontSize = 11.sp, letterSpacing = 2.sp)
                 Text(if (resting) "休息一下，再继续" else timer?.projectTitle ?: project!!.title,
-                    fontSize = 18.sp, lineHeight = 27.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
+                    fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             // 计时中收起模式切换与时长入口，避免分心；只有待开始时可调整。
             if (!resting && project != null && timer == null) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                     TimerMode.entries.forEach { value ->
-                        FilterChip(selected = mode == value, onClick = { if (mode != value) onMode(value) }, label = { Text(modeName(value)) }, modifier = Modifier.padding(horizontal = 4.dp))
+                        FilterChip(selected = mode == value, onClick = { if (mode != value) onMode(value) }, label = { Text(modeName(value)) },
+                            modifier = Modifier.padding(horizontal = 4.dp).heightIn(min = 44.dp))
                     }
                 }
                 // 直接打开时长设置，不必先进入完整的项目设置。
-                OutlinedButton(onClick = onDuration, modifier = Modifier.fillMaxWidth()) {
-                    Text(targetText(targetMinutes), modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
+                OutlinedButton(onClick = onDuration, modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp)) {
+                    Text(targetText(targetMinutes), modifier = Modifier.weight(1f), textAlign = TextAlign.Start, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(if (targetMinutes == null) "设置" else "调整", color = Accent, fontSize = 13.sp)
                 }
             }
@@ -479,9 +491,9 @@ internal fun TimerScreen(
                     else "还差 ${(remainingMillis + 59_999) / 60_000} 分钟达到目标"
                 else -> "预计 ${clockLabel(System.currentTimeMillis() + remainingMillis)} 结束"
             }
-            Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().weight(1f).padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
                 TimerDial(visible, dialState, dialColor, reduceMotion) {
-                    Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.size(5.dp).clip(RoundedCornerShape(50)).background(if (timer == null) Color(0xFFB4ADA7) else dialColor))
                             Text(when {
@@ -498,41 +510,52 @@ internal fun TimerScreen(
                         Text(clockText(shownSeconds), fontSize = if (shownSeconds >= 3600) 44.sp else 62.sp,
                             fontWeight = FontWeight.Light, letterSpacing = (-1.24).sp, color = Ink,
                             style = NumeralStyle, modifier = Modifier.alpha(blink))
-                        Text(caption, color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
+                        Text(caption, color = Muted, fontSize = 12.sp, lineHeight = 16.sp, textAlign = TextAlign.Center,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
             if (timer == null) {
-                Button(onClick = onStart, enabled = project != null, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), shape = RoundedCornerShape(15.dp)) {
+                Button(onClick = onStart, enabled = project != null, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), shape = RoundedCornerShape(15.dp)) {
                     Icon(Icons.Outlined.PlayArrow, null)
                     Spacer(Modifier.width(8.dp))
                     Text("开始专注")
                 }
             } else {
-                Button(onClick = if (timer.status == TimerStatus.PAUSED) onResume else onPause, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), shape = RoundedCornerShape(15.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = if (resting) RestSlate else Accent)) {
-                    Icon(if (timer.status == TimerStatus.PAUSED) Icons.Outlined.PlayArrow else Icons.Outlined.Pause, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(if (timer.status == TimerStatus.PAUSED) "继续计时" else "暂停")
-                }
-                // 倒计时未到零也可以提前结束，但要确认；已到零由计时循环自动保存。
-                val early = !resting && mode == TimerMode.COUNTDOWN && timer.targetReached(nowElapsed) != true
-                if (resting || mode == TimerMode.COUNTUP || early) {
-                    OutlinedButton(onClick = if (early) onFinishEarly else onFinish,
-                        enabled = resting || elapsedMillis >= TimerEngine.MIN_SESSION_MS, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (resting) "结束休息" else "结束并保存专注")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = if (timer.status == TimerStatus.PAUSED) onResume else onPause,
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(15.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = if (resting) RestSlate else Accent)) {
+                        Icon(if (timer.status == TimerStatus.PAUSED) Icons.Outlined.PlayArrow else Icons.Outlined.Pause, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (timer.status == TimerStatus.PAUSED) "继续计时" else "暂停")
+                    }
+                    // 倒计时未到零也可以提前结束，但要确认；已到零由计时循环自动保存。
+                    val early = !resting && mode == TimerMode.COUNTDOWN && timer.targetReached(nowElapsed) != true
+                    if (resting || mode == TimerMode.COUNTUP || early) {
+                        OutlinedButton(onClick = if (early) onFinishEarly else onFinish,
+                            enabled = resting || elapsedMillis >= TimerEngine.MIN_SESSION_MS,
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                            Text(if (resting) "结束休息" else "结束并保存专注", maxLines = 1)
+                        }
                     }
                 }
-                TextButton(onClick = onDiscard, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(if (resting) "放弃本次休息" else "放弃本次专注", color = Muted) }
-                if (!resting && mode == TimerMode.COUNTDOWN) Caption("倒计时到零自动保存；提前结束会按已专注时长保存，放弃则不生成记录。")
+                TextButton(onClick = onDiscard, modifier = Modifier.align(Alignment.CenterHorizontally).heightIn(min = 40.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)) {
+                    Text(if (resting) "放弃本次休息" else "放弃本次专注", color = Muted)
+                }
             }
         }
-        HorizontalDivider()
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedButton(onClick = onShortBreak, modifier = Modifier.weight(1f)) { Text("短休息") }
-            OutlinedButton(onClick = onLongBreak, modifier = Modifier.weight(1f)) { Text("长休息") }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onShortBreak, modifier = Modifier.weight(1f).heightIn(min = 44.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("短休息") }
+            OutlinedButton(onClick = onLongBreak, modifier = Modifier.weight(1f).heightIn(min = 44.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("长休息") }
         }
-        Caption("休息和暂停不计入专注统计。返回首页不会停止计时。")
+        Text("休息和暂停不计入专注统计。返回首页不会停止计时。", color = Muted, fontSize = 11.sp, lineHeight = 16.sp,
+            textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
     }
 }
 
@@ -554,7 +577,7 @@ private fun TimerDial(visible: Float, state: DialState, color: Color, reduceMoti
         rememberInfiniteTransition(label = "dial-pulse").animateFloat(0f, 1f,
             infiniteRepeatable(tween(VisualLimits.PULSE_MS, easing = FastOutSlowInEasing), RepeatMode.Restart), label = "dial-pulse-value").value
     } else -1f
-    Box(Modifier.sizeIn(maxWidth = 280.dp, maxHeight = 280.dp).fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
+    Box(Modifier.sizeIn(maxWidth = 260.dp, maxHeight = 260.dp).fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
             val outer = size.minDimension / 2f - 2.dp.toPx()
             for (index in 0 until VisualLimits.DIAL_TICKS) {

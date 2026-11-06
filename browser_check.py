@@ -134,6 +134,18 @@ def choose_focus_item(page, title):
     page.get_by_role("button", name=f"进入项目：{title}", exact=True).click()
 
 
+def assert_timer_single_page(page):
+    """计时页和它的滚动父容器都不能产生纵向溢出，主操作必须留在页面内。"""
+    expect(page.locator("#page-timer")).to_be_visible()
+    for selector in ("#phone-content", "#page-timer"):
+        assert page.locator(selector).evaluate("el => el.scrollHeight <= el.clientHeight + 1"), selector
+    page_box = page.locator("#page-timer").bounding_box()
+    for selector in ("#timer-toggle", ".rest-actions"):
+        box = page.locator(selector).bounding_box()
+        assert box["y"] >= page_box["y"] - 1, selector
+        assert box["y"] + box["height"] <= page_box["y"] + page_box["height"] + 1, selector
+
+
 def expand_project(page, title):
     button = page.get_by_role("button", name=f"展开项目详情：{title}", exact=True)
     if button.get_attribute("aria-expanded") != "true":
@@ -224,12 +236,18 @@ def check_independent_countup(browser, errors):
     page.screenshot(path=str(SCREENSHOT_DIRECTORY / "mobile-project-expanded-long-title.png"))
     choose_focus_item(page, title)
     assert page.locator("#phone-content").evaluate("el => el.scrollWidth <= el.clientWidth")
-    page.set_viewport_size(DESKTOP_VIEWPORT)
+    page.set_viewport_size({"width": MOBILE_WIDTHS[0], "height": 568})
+    assert_timer_single_page(page)
+    page.screenshot(path=str(SCREENSHOT_DIRECTORY / "mobile-timer-single-page-idle.png"))
     page.locator("#timer-toggle").click()
     expect(page.locator("#timer-finish")).not_to_be_visible()
     page.clock.fast_forward(20_000)
     expect(page.locator("#timer-time")).to_have_text("00:20")
+    assert_timer_single_page(page)
     page.locator("#timer-toggle").click()
+    assert_timer_single_page(page)
+    page.screenshot(path=str(SCREENSHOT_DIRECTORY / "mobile-timer-single-page-paused.png"))
+    page.set_viewport_size(DESKTOP_VIEWPORT)
     page.clock.fast_forward(ONE_MINUTE_MS)
     expect(page.locator("#timer-time")).to_have_text("00:20")
     page.locator("#timer-toggle").click()
