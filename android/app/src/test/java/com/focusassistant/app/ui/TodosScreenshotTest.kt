@@ -294,15 +294,22 @@ class TodosScreenshotTest {
         var saved: Todo? = null
         renderEditor(null) { saved = it }
         capture("todos-create", dialog = true)
-        compose.onNode(hasSetTextAction() and hasText("想做什么？")).performTextReplacement("分八步整理书房")
-        compose.onNode(hasText("拆成小步", substring = true) and hasClickAction()).performScrollTo().performClick()
+        compose.onNodeWithText("0 / ${Validation.MAX_STEPS}").assertExists()
+        compose.onNode(hasSetTextAction() and hasContentDescription("第 1 步")).assertExists()
+        compose.onNodeWithText("先填写当前步").assertIsDisplayed().assertIsNotEnabled()
+        val title = compose.onNode(hasSetTextAction() and hasText("想做什么？")).performTextReplacement("分八步整理书房")
+        title.performImeAction()
+        val blank = compose.onNode(hasSetTextAction() and hasContentDescription("第 1 步")).assertIsFocused()
+        blank.performImeAction()
+        compose.onAllNodes(hasSetTextAction() and hasContentDescription("第 ", substring = true)).assertCountEquals(1)
         repeat(Validation.MAX_STEPS) { index ->
-            compose.onNodeWithText("加一步").performScrollTo().performClick()
-            compose.onNode(hasSetTextAction() and hasContentDescription("第 ${index + 1} 步"))
+            val field = compose.onNode(hasSetTextAction() and hasContentDescription("第 ${index + 1} 步"))
                 .performScrollTo().performTextReplacement("新建的第 ${index + 1} 步")
+            if (index < Validation.MAX_STEPS - 1) field.performImeAction()
         }
+        compose.onNodeWithText("${Validation.MAX_STEPS} / ${Validation.MAX_STEPS}").assertExists()
         compose.onNodeWithText("添加待办").assertIsDisplayed()
-        compose.onNodeWithText("加一步").assertDoesNotExist()
+        compose.onNodeWithText("最多 ${Validation.MAX_STEPS} 步").assertIsNotEnabled()
         capture("todos-create-eight-steps", dialog = true)
         compose.onNodeWithText("添加待办").performClick()
         compose.runOnIdle {
@@ -347,16 +354,16 @@ class TodosScreenshotTest {
     @Test fun blankStepsAreSkippedAndTitleErrorStaysByTitle() {
         var saved: Todo? = null
         renderEditor(null, todos = sampleTodos()) { saved = it }
+        compose.onNodeWithText("已暂存草稿", substring = true).assertDoesNotExist()
         compose.onNodeWithText("添加待办").performClick()
         compose.onNodeWithText("任务名称不能为空", substring = true).assertIsDisplayed()
         compose.runOnIdle { assertEquals(null, saved) }
         compose.onNode(hasSetTextAction() and hasText("想做什么？")).performTextReplacement(sampleTodos().first().title)
         compose.onNodeWithText("清单里已有同名待办", substring = true).assertExists()
         compose.onNodeWithText("已暂存草稿", substring = true).assertExists()
-        compose.onNode(hasText("拆成小步") and hasClickAction()).performScrollTo().performClick()
-        compose.onNodeWithText("加一步").performScrollTo().performClick()
         compose.onNode(hasSetTextAction() and hasContentDescription("第 1 步")).performTextReplacement("先做这一步")
-        compose.onNodeWithText("加一步").performScrollTo().performClick()
+        compose.onNodeWithText("添加第 2 步").assertIsDisplayed().performClick()
+        compose.onNodeWithText("先填写当前步").assertIsDisplayed().assertIsNotEnabled()
         capture("todos-create-blank-step", dialog = true)
         compose.onNodeWithText("添加待办").performClick()
         compose.runOnIdle {
@@ -372,6 +379,7 @@ class TodosScreenshotTest {
         }
         var saved: Todo? = null
         renderEditor(todo) { saved = it }
+        compose.onNode(hasText("小步") and hasClickAction()).performScrollTo().performClick()
         compose.onNode(hasSetTextAction() and hasText(todo.steps[1].title)).performScrollTo().performTextReplacement("")
         compose.onNodeWithText("保存修改").performClick()
         compose.onNodeWithText("第 2 步", substring = true).performScrollTo().assertIsDisplayed()
@@ -561,8 +569,9 @@ class TodosScreenshotTest {
         }
         var saved: Todo? = null
         renderEditor(todo) { saved = it }
-        compose.onAllNodes(hasText("加一步")).assertCountEquals(0)
+        compose.onAllNodes(hasText("添加第", substring = true)).assertCountEquals(0)
         compose.onAllNodes(hasContentDescription("删除第", substring = true)).assertCountEquals(0)
+        compose.onNode(hasText("小步") and hasClickAction()).performScrollTo().performClick()
         compose.onNode(hasSetTextAction() and hasText(todo.steps.first().title))
             .performScrollTo().performTextReplacement("修改后的步骤名称")
         compose.onNodeWithText("保存修改").performClick()
@@ -624,8 +633,6 @@ class TodosScreenshotTest {
             }
         }
         compose.onNode(hasSetTextAction() and hasText("想做什么？")).performTextReplacement("未保存的待办草稿")
-        compose.onNode(hasText("拆成小步", substring = true) and hasClickAction()).performScrollTo().performClick()
-        compose.onNodeWithText("加一步").performScrollTo().performClick()
         compose.onNode(hasSetTextAction() and hasContentDescription("第 1 步")).performScrollTo().performTextReplacement("尚未保存的小步")
         compose.onNodeWithText("取消").performClick()
         compose.onNodeWithText("测试重新打开草稿").performClick()

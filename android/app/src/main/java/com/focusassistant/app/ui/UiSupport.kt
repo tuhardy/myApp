@@ -23,6 +23,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -40,13 +42,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -495,7 +493,13 @@ internal object TodoDrafts {
     /** 打开前调用：已有草稿且内容与原样不同，面板才提示「接着上次没写完的」。 */
     fun restored(todo: Todo?): Boolean = drafts[todo?.id]?.let { !TodoEditing.sameContent(it.value, fresh(todo)) } == true
     fun open(todo: Todo?): TodoDraft {
-        val draft = drafts[todo?.id] ?: TodoDraft(fresh(todo), todo?.steps?.isNotEmpty() == true)
+        val draft = drafts[todo?.id] ?: run {
+            val value = fresh(todo).let { fresh ->
+                if (todo?.done == true || fresh.steps.isNotEmpty()) fresh
+                else fresh.copy(steps = fresh.steps + TodoStep(UUID.randomUUID().toString(), ""))
+            }
+            TodoDraft(value, todo?.done != true)
+        }
         return sync(draft, todo).also { put(todo?.id, it) }
     }
     fun sync(draft: TodoDraft, current: Todo?): TodoDraft {
@@ -552,10 +556,15 @@ internal fun TodoEditorDialog(
         error = null
     }
     fun addStep() {
-        if (busy || locked || draft.value.steps.size >= Validation.MAX_STEPS) return
+        if (busy || locked || !TodoEditing.canAddStep(draft.value.steps)) return
         val step = TodoStep(UUID.randomUUID().toString(), "")
         edit { it.copy(value = it.value.copy(steps = it.value.steps + step), stepsOpen = true) }
         focusStep = step.id
+    }
+    fun revealFirstStep() {
+        val first = draft.value.steps.firstOrNull() ?: return
+        if (!draft.stepsOpen) edit { it.copy(stepsOpen = true) }
+        focusStep = first.id
     }
     LaunchedEffect(todo) {
         draft = TodoDrafts.sync(draft, todo)
@@ -616,8 +625,8 @@ internal fun TodoEditorDialog(
             HorizontalDivider(color = Line)
             Column(
                 Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp).padding(top = 12.dp, bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                    .padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 // 下划线输入框：去掉外框，聚焦时线变暖橙，下方是同名提醒与字数。
                 TextField(
@@ -641,12 +650,37 @@ internal fun TodoEditorDialog(
                         }
                     },
                     modifier = Modifier.fillMaxWidth().focusRequester(titleFocus),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() })
+                    keyboardOptions = KeyboardOptions(imeAction = if (draft.value.steps.isEmpty()) ImeAction.Done else ImeAction.Next),
+                    keyboardActions = KeyboardActions(
+                        onDone = { focusManager.clearFocus() },
+                        onNext = { revealFirstStep() }
+                    )
                 )
                 error?.takeIf { it.stepId == null }?.let { ErrorNote(it) }
-                Text("分类", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-                Row(Modifier.fillMaxWidth().padding(top = 0.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("分类", color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                    // 「重要」与分类标题同行；选中变暖橙，读屏仍是复选框。
+                    val important = draft.value.important
+                    Row(
+                        Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(22.dp))
+                            .background(if (important) AccentSoft else Color.White)
+                            .border(1.dp, if (important) Accent else Line, RoundedCornerShape(22.dp))
+                            .toggleable(
+                                value = important, enabled = !busy, role = Role.Checkbox,
+                                onValueChange = { value -> edit { it.copy(value = it.value.copy(important = value)) } }
+                            ).padding(start = 10.dp, end = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Checkbox(checked = important, onCheckedChange = null, enabled = !busy, modifier = Modifier.size(24.dp),
+                            colors = CheckboxDefaults.colors(checkedColor = Accent, uncheckedColor = Muted))
+                        Text("重要", fontSize = 13.sp, color = if (important) AccentDark else Ink)
+                        Text("放在最前面", fontSize = 11.sp, color = Muted)
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     UiLimits.CATEGORIES.forEach { category ->
                         FilterChip(
                             selected = draft.value.category == category, enabled = !busy,
@@ -660,110 +694,117 @@ internal fun TodoEditorDialog(
                         )
                     }
                 }
-                // 「重要」与分类同一套胶囊样式，选中变暖橙；读屏仍是复选框。
-                val important = draft.value.important
-                Row(
-                    Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(22.dp))
-                        .background(if (important) AccentSoft else Color.White)
-                        .border(1.dp, if (important) Accent else Line, RoundedCornerShape(22.dp))
-                        .toggleable(
-                            value = important, enabled = !busy, role = Role.Checkbox,
-                            onValueChange = { value -> edit { it.copy(value = it.value.copy(important = value)) } }
-                        ).padding(start = 10.dp, end = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Checkbox(checked = important, onCheckedChange = null, enabled = !busy, modifier = Modifier.size(24.dp),
-                        colors = CheckboxDefaults.colors(checkedColor = Accent, uncheckedColor = Muted))
-                    Text("重要", fontSize = 13.sp, color = if (important) AccentDark else Ink)
-                    Text("放在最前面", fontSize = 11.sp, color = Muted)
-                }
-                HorizontalDivider(color = Line)
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(enabled = !busy) {
                         edit { it.copy(stepsOpen = !it.stepsOpen) }
                     }, verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(if (draft.stepsOpen) "▾" else "▸", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(end = 6.dp))
-                    Text("拆成小步", modifier = Modifier.weight(1f), fontSize = 13.sp)
-                    Text(if (draft.value.steps.isEmpty()) "可选" else "${draft.value.steps.size} 步", color = Muted, fontSize = 12.sp)
+                    Icon(
+                        if (draft.stepsOpen) Icons.Outlined.KeyboardArrowDown else Icons.Outlined.KeyboardArrowRight,
+                        contentDescription = null, tint = Muted,
+                        modifier = Modifier.padding(end = 6.dp).size(18.dp)
+                    )
+                    Text("小步", modifier = Modifier.weight(1f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("${TodoEditing.filledSteps(draft.value.steps).size} / ${Validation.MAX_STEPS}",
+                        color = Muted, fontSize = 11.sp, style = NumeralStyle)
                 }
                 if (draft.stepsOpen) {
-                    draft.value.steps.forEachIndexed { index, step ->
-                        key(step.id) {
-                            val requester = remember { FocusRequester() }
-                            val bringIntoView = remember { BringIntoViewRequester() }
-                            var focused by remember { mutableStateOf(false) }
-                            LaunchedEffect(focusStep) {
-                                if (focusStep == step.id) {
-                                    withFrameNanos { }
-                                    requester.requestFocus()
-                                    focusStep = null
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("回车添加，空白不保存", color = Muted, fontSize = 11.sp,
+                            lineHeight = 16.sp, modifier = Modifier.padding(start = 18.dp))
+                        draft.value.steps.forEachIndexed { index, step ->
+                            key(step.id) {
+                                val requester = remember { FocusRequester() }
+                                val bringIntoView = remember { BringIntoViewRequester() }
+                                var focused by remember { mutableStateOf(false) }
+                                LaunchedEffect(focusStep) {
+                                    if (focusStep == step.id) {
+                                        withFrameNanos { }
+                                        requester.requestFocus()
+                                        focusStep = null
+                                    }
                                 }
-                            }
-                            LaunchedEffect(focused, imeBottom) {
-                                if (focused) bringIntoView.bringIntoView()
-                            }
-                            Row(
-                                Modifier.fillMaxWidth().heightIn(min = 48.dp).bringIntoViewRequester(bringIntoView),
-                                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                BasicTextField(
-                                    value = step.title, enabled = !busy, singleLine = true,
-                                    onValueChange = { value ->
-                                        if (value.length <= Validation.MAX_STEP_TITLE) edit { d ->
-                                            d.copy(value = d.value.copy(steps = d.value.steps.map { if (it.id == step.id) it.copy(title = value) else it }))
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f).heightIn(min = 48.dp).focusRequester(requester)
-                                        .onFocusChanged { focused = it.isFocused }
-                                        .semantics { contentDescription = "第 ${index + 1} 步" },
-                                    textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp),
-                                    cursorBrush = SolidColor(Accent),
-                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                                    keyboardActions = KeyboardActions(onNext = {
-                                        val next = draft.value.steps.getOrNull(index + 1)
-                                        if (next != null) focusStep = next.id
-                                        else if (!locked && draft.value.steps.size < Validation.MAX_STEPS) addStep()
-                                        else focusManager.clearFocus()
-                                    }),
-                                    decorationBox = { input ->
+                                LaunchedEffect(focused, imeBottom) {
+                                    if (focused) bringIntoView.bringIntoView()
+                                }
+                                Row(
+                                    Modifier.fillMaxWidth().heightIn(min = 48.dp).bringIntoViewRequester(bringIntoView),
+                                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Box(
+                                        Modifier.width(26.dp).height(48.dp).drawBehind {
+                                            if (index < draft.value.steps.lastIndex) {
+                                                val x = size.width / 2
+                                                drawLine(Line, start = Offset(x, 38.dp.toPx()),
+                                                    end = Offset(x, size.height + 4.dp.toPx()), strokeWidth = 1.dp.toPx())
+                                            }
+                                        }.clearAndSetSemantics {}, contentAlignment = Alignment.Center
+                                    ) {
                                         Box(
-                                            Modifier.fillMaxWidth().heightIn(min = 48.dp).border(1.dp, Line, RoundedCornerShape(10.dp))
-                                                .padding(10.dp), contentAlignment = Alignment.CenterStart
+                                            Modifier.size(24.dp).clip(RoundedCornerShape(12.dp))
+                                                .background(if (focused) AccentSoft else Color.White)
+                                                .border(1.dp, if (focused) Accent else Line, RoundedCornerShape(12.dp)),
+                                            contentAlignment = Alignment.Center
                                         ) {
-                                            input()
+                                            Text("${index + 1}", color = if (focused) AccentDark else Muted, fontSize = 11.sp,
+                                                fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Normal, style = NumeralStyle)
                                         }
                                     }
-                                )
-                                if (!locked) Box(
-                                    Modifier.size(width = 44.dp, height = 48.dp).clip(RoundedCornerShape(9.dp))
-                                        .clickable(enabled = !busy, role = Role.Button) {
-                                            edit { d -> d.copy(value = d.value.copy(steps = d.value.steps.filterNot { it.id == step.id })) }
-                                        }.semantics { contentDescription = "删除第 ${index + 1} 步" },
-                                    contentAlignment = Alignment.Center
-                                ) { Text("×", color = Muted, fontSize = 14.sp) }
-                            }
-                            error?.takeIf { it.stepId == step.id }?.let { ErrorNote(it) }
-                        }
-                    }
-                    if (locked) Text("已完成的步骤仅可改名。需要重做时，请在详情中选择「重新打开」。", color = Muted, fontSize = 12.sp)
-                    else {
-                        val full = draft.value.steps.size >= Validation.MAX_STEPS
-                        Row(
-                            Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp))
-                                .drawBehind {
-                                    val stroke = 1.dp.toPx()
-                                    drawRoundRect(Color(0xFFC9C9C9), topLeft = Offset(stroke / 2, stroke / 2),
-                                        size = Size(size.width - stroke, size.height - stroke), cornerRadius = CornerRadius(12.dp.toPx()),
-                                        style = Stroke(stroke, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))))
+                                    BasicTextField(
+                                        value = step.title, enabled = !busy, singleLine = true,
+                                        onValueChange = { value ->
+                                            if (value.length <= Validation.MAX_STEP_TITLE) edit { d ->
+                                                d.copy(value = d.value.copy(steps = d.value.steps.map { if (it.id == step.id) it.copy(title = value) else it }))
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f).heightIn(min = 48.dp).focusRequester(requester)
+                                            .onFocusChanged { focused = it.isFocused }
+                                            .semantics { contentDescription = "第 ${index + 1} 步" },
+                                        textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp),
+                                        cursorBrush = SolidColor(Accent),
+                                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                                        keyboardActions = KeyboardActions(onNext = {
+                                            if (step.title.isBlank()) requester.requestFocus()
+                                            else {
+                                                val next = draft.value.steps.getOrNull(index + 1)
+                                                if (next != null) focusStep = next.id
+                                                else if (!locked) addStep()
+                                                else requester.requestFocus()
+                                            }
+                                        }),
+                                        decorationBox = { input ->
+                                            Box(
+                                                Modifier.fillMaxWidth().heightIn(min = 48.dp).drawBehind {
+                                                    val stroke = (if (focused) 2.5f else 1.5f).dp.toPx()
+                                                    drawLine(if (focused) Accent else Line, start = Offset(0f, size.height - stroke / 2),
+                                                        end = Offset(size.width, size.height - stroke / 2), strokeWidth = stroke)
+                                                }.padding(horizontal = 4.dp, vertical = 10.dp), contentAlignment = Alignment.CenterStart
+                                            ) {
+                                                if (step.title.isEmpty()) Text(
+                                                    if (index == 0) "第一步要做什么？（可选）" else "第 ${index + 1} 步，写一个具体动作",
+                                                    color = Muted, fontSize = 14.sp
+                                                )
+                                                input()
+                                            }
+                                        }
+                                    )
+                                    if (!locked) Box(
+                                        Modifier.size(44.dp).clip(RoundedCornerShape(9.dp))
+                                            .clickable(enabled = !busy, role = Role.Button) {
+                                                edit { d ->
+                                                    val remaining = d.value.steps.filterNot { it.id == step.id }
+                                                    val steps = if (remaining.isNotEmpty()) remaining
+                                                    else listOf(TodoStep(UUID.randomUUID().toString(), ""))
+                                                    d.copy(value = d.value.copy(steps = steps))
+                                                }
+                                            }.semantics { contentDescription = "删除第 ${index + 1} 步" },
+                                        contentAlignment = Alignment.Center
+                                    ) { Text("×", color = Muted, fontSize = 16.sp) }
                                 }
-                                .clickable(enabled = !busy && !full, role = Role.Button, onClick = ::addStep)
-                                .padding(horizontal = 14.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (!full) Icon(Icons.Outlined.Add, null, tint = AccentDark, modifier = Modifier.padding(end = 4.dp).size(14.dp))
-                            Text(if (full) "最多 ${Validation.MAX_STEPS} 步" else "加一步", color = if (full) Muted else AccentDark, fontSize = 12.sp)
+                                error?.takeIf { it.stepId == step.id }?.let { ErrorNote(it) }
+                            }
                         }
+                        if (locked) Text("已完成的步骤仅可改名。需要重做时，请在详情中选择「重新打开」。", color = Muted, fontSize = 12.sp)
                     }
                 }
                 if (todo != null) {
@@ -775,15 +816,38 @@ internal fun TodoEditorDialog(
                     }
                 }
             }
+            // 添加小步固定在滚动区外、键盘上方；当前步为空时保留位置并置灰。
+            val showStepAdd = !locked && draft.stepsOpen
+            if (showStepAdd || changed) HorizontalDivider(color = Line)
+            if (showStepAdd) {
+                val trailingBlank = draft.value.steps.lastOrNull()?.title?.isBlank() == true
+                val full = draft.value.steps.size >= Validation.MAX_STEPS
+                val canAdd = TodoEditing.canAddStep(draft.value.steps)
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = if (changed) 2.dp else 8.dp)
+                        .heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp))
+                        .background(if (canAdd && !busy) AccentSoft else SoftSurface)
+                        .clickable(enabled = !busy && canAdd, role = Role.Button, onClick = ::addStep)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center
+                ) {
+                    if (!trailingBlank && !full) Icon(Icons.Outlined.Add, null, tint = AccentDark,
+                        modifier = Modifier.padding(end = 4.dp).size(14.dp))
+                    Text(when {
+                        trailingBlank -> "先填写当前步"
+                        full -> "最多 ${Validation.MAX_STEPS} 步"
+                        else -> "添加第 ${draft.value.steps.size + 1} 步"
+                    }, color = if (canAdd && !busy) AccentDark else Muted, fontSize = 12.sp)
+                }
+            }
             // 草稿提示只在有改动时出现；恢复出来的旧草稿可一键清空重写或撤回修改。
             if (changed) {
-                HorizontalDivider(color = Line)
-                Row(Modifier.fillMaxWidth().heightIn(min = 36.dp).padding(horizontal = 16.dp),
+                Row(Modifier.fillMaxWidth().heightIn(min = 30.dp).padding(start = 16.dp, end = 16.dp, bottom = 6.dp),
                     horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                     if (!restored) Text("已暂存草稿，关闭不会丢。", color = Muted, fontSize = 11.sp)
                     else {
                         Text("接着上次没写完的 · ", color = Muted, fontSize = 11.sp)
-                        TextButton(enabled = !busy, contentPadding = PaddingValues(horizontal = 4.dp), modifier = Modifier.heightIn(min = 36.dp),
+                        TextButton(enabled = !busy, contentPadding = PaddingValues(horizontal = 4.dp), modifier = Modifier.heightIn(min = 30.dp),
                             onClick = {
                                 TodoDrafts.remove(todo?.id)
                                 draft = TodoDrafts.open(todo)

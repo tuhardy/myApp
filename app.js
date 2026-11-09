@@ -2162,41 +2162,66 @@
     return button;
   }
 
-  /** 小步编辑：加一步、改名、删一步。用 DOM 节点直接承载，不拼 HTML 字符串。 */
+  /** 小步编辑：空白末行是输入占位；回车或整行按钮连续追加，并保留键盘焦点。 */
   function buildStepEditor(draft, locked, onChange) {
     const wrapper = element("details", "step-editor");
     wrapper.open = draft.stepsOpen ?? draft.steps.length > 0;
     const summary = element("summary", "step-editor-title");
+    const hint = element("p", "step-editor-hint", "回车添加，空白不保存");
     const list = element("div", "step-editor-list");
-    const add = taskButton("＋ 加一步", "add-step", () => {
-      if (draft.steps.length >= LIMITS.maxTaskSteps) return;
-      draft.steps.push({ id: `step-new-${state.nextStepId++}`, title: "", done: false });
+    const addBar = $("todo-step-add-bar");
+    const newBlankStep = () => ({ id: `step-new-${state.nextStepId++}`, title: "", done: false });
+    if (!locked && !draft.steps.length) draft.steps.push(newBlankStep());
+    const addBlankStep = () => {
+      if (locked || !FocusModel.canAddTaskStep(draft.steps)) return null;
+      draft.steps.push(newBlankStep());
       draw();
-      list.lastElementChild?.querySelector("input")?.focus();
+      const input = list.lastElementChild?.querySelector("input");
+      input?.focus();
+      input?.scrollIntoView({ block: "nearest" });
       onChange();
-    });
+      return input;
+    };
+    const add = taskButton("", "add-step", addBlankStep);
+    const syncControls = () => {
+      const filled = FocusModel.filledTaskSteps(draft.steps).length;
+      const last = draft.steps[draft.steps.length - 1];
+      const trailingBlank = Boolean(last && !last.title.trim());
+      const full = draft.steps.length >= LIMITS.maxTaskSteps;
+      summary.replaceChildren(element("span", "", "小步"),
+        element("span", "step-editor-count", `${filled} / ${LIMITS.maxTaskSteps}`));
+      addBar.hidden = locked || !wrapper.open;
+      add.disabled = !FocusModel.canAddTaskStep(draft.steps);
+      add.textContent = trailingBlank ? "先填写当前步" : full ? `最多 ${LIMITS.maxTaskSteps} 步` : `＋ 添加第 ${draft.steps.length + 1} 步`;
+    };
     const draw = () => {
       list.replaceChildren(...draft.steps.map((step, index) => {
         const row = element("div", "step-editor-row");
         row.dataset.stepIndex = String(index);
+        const rail = element("span", "step-editor-rail");
+        rail.setAttribute("aria-hidden", "true");
+        rail.append(element("span", "step-editor-number", String(index + 1)));
         const input = element("input");
         input.type = "text";
         input.value = step.title;
         input.maxLength = LIMITS.maxTaskStepTitle;
         input.enterKeyHint = "next";
+        input.placeholder = index === 0 ? "第一步要做什么？（可选）" : `第 ${index + 1} 步，写一个具体动作`;
         input.setAttribute("aria-label", `第 ${index + 1} 步`);
-        input.addEventListener("input", () => { step.title = input.value; onChange(); });
+        input.addEventListener("input", () => { step.title = input.value; syncControls(); onChange(); });
         input.addEventListener("keydown", event => {
           if (event.key !== "Enter" || event.isComposing) return;
           event.preventDefault();
+          if (!step.title.trim()) return input.focus();
           const next = row.nextElementSibling?.querySelector("input");
           if (next) next.focus();
-          else if (!add.disabled && !locked) add.click();
+          else if (!locked) addBlankStep();
         });
-        row.append(input);
+        row.append(rail, input);
         if (!locked) {
           const remove = taskButton("×", "step-remove", () => {
             draft.steps.splice(index, 1);
+            if (!draft.steps.length) draft.steps.push(newBlankStep());
             draw();
             (list.children[Math.min(index, list.children.length - 1)]?.querySelector("input") || add).focus();
             onChange();
@@ -2206,16 +2231,18 @@
         }
         return row;
       }));
-      add.disabled = draft.steps.length >= LIMITS.maxTaskSteps;
-      add.textContent = add.disabled ? `最多 ${LIMITS.maxTaskSteps} 步` : "＋ 加一步";
-      summary.replaceChildren(element("span", "", "拆成小步"),
-        element("span", "step-editor-count", draft.steps.length ? `${draft.steps.length} 步` : "可选"));
+      syncControls();
     };
-    wrapper.addEventListener("toggle", () => { draft.stepsOpen = wrapper.open; });
+    wrapper.addEventListener("toggle", () => { draft.stepsOpen = wrapper.open; syncControls(); });
     draw();
     wrapper.append(summary, list);
-    if (!locked) wrapper.append(add);
-    else wrapper.append(element("p", "data-note", "已完成的步骤仅可改名。需要重做时，请在详情中选择「重新打开」。"));
+    if (!locked) {
+      wrapper.insertBefore(hint, list);
+      addBar.replaceChildren(add);
+    } else {
+      addBar.replaceChildren();
+      wrapper.append(element("p", "data-note", "已完成的步骤仅可改名。需要重做时，请在详情中选择「重新打开」。"));
+    }
     return wrapper;
   }
 
@@ -2226,13 +2253,12 @@
 
   function freshTaskDraft(task) {
     return { title: task?.title || "", category: task?.category || state.lastTaskCategory || CATEGORIES[0],
-      important: task?.important || false, steps: (task?.steps || []).map(step => ({ ...step })), stepsOpen: !!task?.steps?.length };
+      important: task?.important || false, steps: (task?.steps || []).map(step => ({ ...step })), stepsOpen: !task?.done };
   }
 
-  /** 只比用户能改的字段：标题、分类、重要、小步 id 与名称。 */
+  /** 空白输入行不算改动；其余只比标题、分类、重要、小步 id 与名称。 */
   function sameTaskContent(a, b) {
-    const steps = list => JSON.stringify((list || []).map(step => [step.id, String(step.title).trim()]));
-    return a.title.trim() === b.title.trim() && a.category === b.category && !!a.important === !!b.important && steps(a.steps) === steps(b.steps);
+    return FocusModel.sameTaskDraftContent(a, b);
   }
 
   /** 先于 validateTask 找出能指到具体输入框的问题；返回 null 时交给模型校验。 */
@@ -2323,7 +2349,19 @@
     checkbox.addEventListener("change", () => { draft.important = checkbox.checked; update(); });
     important.append(checkbox, element("span", "", "重要"), element("span", "todo-important-hint", "放在最前面"));
     const stepEditor = buildStepEditor(draft, locked, update);
-    body.append(categoryLabel, categories, important, stepEditor);
+    const firstStepInput = stepEditor.querySelector("input");
+    titleInput.enterKeyHint = firstStepInput ? "next" : "done";
+    titleInput.addEventListener("keydown", event => {
+      const target = stepEditor.querySelector("input");
+      if (event.key !== "Enter" || event.isComposing || !target) return;
+      event.preventDefault();
+      stepEditor.open = true;
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: "nearest" });
+    });
+    const categoryHeading = element("div", "todo-category-heading");
+    categoryHeading.append(categoryLabel, important);
+    body.append(categoryHeading, categories, stepEditor);
     if (task) {
       const actions = element("div", "todo-editor-actions");
       actions.append(taskButton("删除待办", "text-button danger-button", () => { closeTaskSheet(); deleteTask(task.id); }));

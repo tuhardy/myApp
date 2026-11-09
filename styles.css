@@ -470,41 +470,54 @@ h3 { font-size: 13px; font-weight: 600; margin: 0; }
 #save-todo-sheet { background: var(--accent); color: var(--white); }
 #save-todo-sheet:hover { background: var(--accent-dark); }
 #save-todo-sheet.is-empty { background: var(--accent-soft); color: var(--accent-dark); }
-#todo-sheet-body { flex: 0 1 auto; min-height: 0; min-width: 0; padding: 4px 20px 20px; overflow-y: auto; overscroll-behavior: contain; scroll-padding-block: 16px; }
+#todo-sheet-body { flex: 0 1 auto; min-height: 0; min-width: 0; padding: 4px 20px 12px; overflow-y: auto; overscroll-behavior: contain; scroll-padding-block: 12px; }
+.todo-step-add-bar { flex-shrink: 0; padding: 8px 20px; border-top: 1px solid var(--line); background: var(--white); }
+.todo-step-add-bar[hidden] { display: none; }
 .todo-draft-note[hidden] { display: none; }
-.todo-draft-note { flex-shrink: 0; margin: 0; padding: 9px 16px max(9px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; text-align: center; background: var(--white); }
-#todo-sheet .field { margin: 14px 0; }
+.todo-draft-note { flex-shrink: 0; margin: 0; padding: 6px 16px max(6px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; text-align: center; background: var(--white); }
+.todo-step-add-bar:not([hidden]) + .todo-draft-note { padding-top: 2px; border-top: 0; }
+#todo-sheet .field { margin: 10px 0; }
 #todo-sheet .todo-title-field { position: relative; margin-bottom: 4px; }
 #todo-sheet .todo-title-field input { font-size: 17px; padding: 10px 48px 10px 0; border: 0; border-bottom: 1.5px solid var(--line); border-radius: 0; outline: none; transition: border-color .15s; }
 #todo-sheet .todo-title-field input:focus { border-bottom-color: var(--accent); }
 .todo-title-count { position: absolute; right: 0; bottom: 14px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .todo-title-hint { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
 .todo-title-hint:empty { display: none; }
-.todo-field-label { margin: 18px 0 0; color: var(--muted); font-size: 12px; }
+.todo-field-label { margin: 0; color: var(--muted); font-size: 12px; }
 #todo-sheet .todo-error { margin: 8px 0 4px; color: var(--accent-dark); background: var(--accent-soft); font-size: 12px; line-height: 1.6; }
 .todo-draft-reset { padding: 0 2px; min-height: 0; font-size: 11px; color: var(--accent-dark); text-decoration: underline; }
-.todo-category-choices { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 14px; }
+.todo-category-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
+.todo-category-choices { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
 .category-choice { flex: 1 1 70px; padding: 8px; font-size: 12px; border: 1px solid var(--line); border-radius: 11px; }
 .category-choice.selected, .category-choice[aria-pressed="true"] { color: var(--accent-dark); border-color: var(--accent); background: var(--accent-soft); }
-.todo-important { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: 22px; font-size: 13px; color: var(--ink); cursor: pointer; }
+.todo-important { display: inline-flex; flex-shrink: 0; align-items: center; gap: 7px; min-height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 22px; font-size: 13px; color: var(--ink); cursor: pointer; }
 .todo-important:has(input:checked) { color: var(--accent-dark); border-color: var(--accent); background: var(--accent-soft); }
 .todo-important:has(input:focus-visible) { outline: 3px solid var(--accent-dark); outline-offset: 2px; }
 .todo-important input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
 .todo-important-hint { color: var(--muted); font-size: 11px; }
-#todo-sheet .step-editor { margin-top: 16px; border-top: 1px solid var(--line); }
-#todo-sheet .step-editor summary { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 14px 0; color: var(--ink); font-size: 13px; cursor: pointer; list-style: none; }
+#todo-sheet .step-editor { margin-top: 8px; }
+#todo-sheet .step-editor summary { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 8px 0 2px; color: var(--ink); font-size: 13px; font-weight: 600; cursor: pointer; list-style: none; }
 #todo-sheet .step-editor summary::-webkit-details-marker { display: none; }
 #todo-sheet .step-editor summary::before { content: ""; width: 6px; height: 6px; margin: 0 2px; border: solid var(--muted); border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); transition: transform .15s; }
 #todo-sheet .step-editor[open] summary::before { transform: rotate(45deg); }
-.step-editor-count { margin-left: auto; color: var(--muted); font-size: 12px; }
+.step-editor-count { margin-left: auto; color: var(--muted); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
 #todo-sheet .step-editor summary:focus-visible { outline: 3px solid var(--accent-dark); outline-offset: 2px; }
-#todo-sheet .step-editor-list { display: flex; flex-direction: column; gap: 8px; }
-#todo-sheet .step-editor-row { display: flex; gap: 6px; align-items: center; min-width: 0; }
-#todo-sheet .step-editor-row input { flex: 1; min-width: 0; width: 100%; min-height: 48px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 14px; color: var(--ink); background: var(--white); }
-#todo-sheet .step-remove { flex: 0 0 44px; width: 44px; min-height: 48px; padding: 0; border-radius: 9px; color: var(--muted); font-size: 14px; }
-#todo-sheet .step-remove:hover { background: var(--surface); }
-#todo-sheet .add-step { margin-top: 10px; min-height: 48px; font-size: 12px; padding: 8px 14px; border: 1px dashed #c9c9c9; border-radius: 12px; color: var(--accent-dark); }
-.todo-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.step-editor-hint { margin: 0 0 4px 18px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+#todo-sheet .step-editor-list { display: flex; flex-direction: column; gap: 4px; }
+#todo-sheet .step-editor-row { display: flex; gap: 8px; align-items: stretch; min-width: 0; }
+.step-editor-rail { position: relative; flex: 0 0 26px; display: flex; justify-content: center; }
+.step-editor-number { position: relative; z-index: 1; display: grid; place-items: center; width: 24px; height: 24px; margin-top: 12px; border: 1px solid var(--line); border-radius: 50%; background: var(--white); color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; transition: color .15s, border-color .15s, background .15s; }
+#todo-sheet .step-editor-row:not(:last-child) .step-editor-rail::after { content: ""; position: absolute; top: 38px; bottom: -4px; left: 50%; width: 1px; background: var(--line); }
+#todo-sheet .step-editor-row input { flex: 1; min-width: 0; width: 100%; min-height: 48px; padding: 10px 4px; border: 0; border-bottom: 1.5px solid var(--line); border-radius: 0; outline: none; font-size: 14px; color: var(--ink); background: var(--white); transition: border-color .15s, box-shadow .15s; }
+#todo-sheet .step-editor-row input::placeholder { color: var(--muted); }
+#todo-sheet .step-editor-row input:focus { border-bottom-color: var(--accent); box-shadow: 0 1px 0 var(--accent); }
+#todo-sheet .step-editor-row:focus-within .step-editor-number { color: var(--accent-dark); border-color: var(--accent); background: var(--accent-soft); font-weight: 650; }
+#todo-sheet .step-remove { flex: 0 0 44px; align-self: center; width: 44px; min-height: 44px; padding: 0; border-radius: 9px; color: var(--muted); font-size: 16px; }
+#todo-sheet .step-remove:hover { color: var(--accent-dark); background: var(--surface); }
+#todo-sheet .add-step { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 48px; font-size: 12px; padding: 8px 14px; border: 1px solid transparent; border-radius: 12px; color: var(--accent-dark); background: var(--accent-soft); }
+#todo-sheet .add-step:disabled { color: var(--muted); background: var(--surface); }
+#todo-sheet .add-step:not(:disabled):hover { border-color: var(--accent); }
+.todo-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .todo-editor-actions button { min-height: 48px; max-width: 100%; overflow-wrap: anywhere; }
 @media (max-width: 360px) { #todo-sheet-body { padding-left: 14px; padding-right: 14px; } .todo-sheet-heading { padding-inline: 8px; } .task-tabs button { font-size: 11px; } }
 @media (max-height: 420px) { #todo-sheet { border-radius: 12px 12px 0 0; } .todo-sheet-heading { padding-block: 3px; } .todo-draft-note { padding-top: 5px; padding-bottom: max(5px, env(safe-area-inset-bottom)); } }

@@ -49,10 +49,17 @@ object TodoEditing {
         return draft.copy(title = draft.title.trim(), steps = if (locked) steps else steps.filter { it.title.isNotEmpty() })
     }
 
-    /** 只比用户能改的字段：标题、分类、重要、小步 id 与名称。 */
+    /** 编辑器的空白输入行只是占位，不计入数量、草稿差异或保存内容。 */
+    fun filledSteps(steps: List<TodoStep>): List<TodoStep> = steps.filter { it.title.isNotBlank() }
+
+    /** 最后一行仍为空时先填写它，避免回车或按钮制造连续空行。 */
+    fun canAddStep(steps: List<TodoStep>): Boolean =
+        steps.size < Validation.MAX_STEPS && steps.lastOrNull()?.title?.isNotBlank() != false
+
+    /** 只比用户能改的字段：标题、分类、重要、非空小步 id 与名称。 */
     fun sameContent(a: Todo, b: Todo): Boolean =
         a.title.trim() == b.title.trim() && a.category == b.category && a.important == b.important &&
-            a.steps.map { it.id to it.title.trim() } == b.steps.map { it.id to it.title.trim() }
+            filledSteps(a.steps).map { it.id to it.title.trim() } == filledSteps(b.steps).map { it.id to it.title.trim() }
 
     /** 同名只提醒不阻止，只与其它待完成、未放下的事比。 */
     fun hasDuplicate(todos: List<Todo>, id: String, title: String): Boolean {

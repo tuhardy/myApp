@@ -159,6 +159,27 @@
     });
   }
 
+  /** 编辑器的空白输入行只是占位，不计入数量、草稿差异或保存内容。 */
+  function filledTaskSteps(input) {
+    return (Array.isArray(input) ? input : []).filter(step => String(step?.title ?? "").trim());
+  }
+
+  /** 最后一行仍为空时先填写它，避免回车或按钮制造连续空行。 */
+  function canAddTaskStep(input) {
+    const list = Array.isArray(input) ? input : [];
+    if (list.length >= LIMITS.maxTaskSteps) return false;
+    const last = list[list.length - 1];
+    return !last || Boolean(String(last?.title ?? "").trim());
+  }
+
+  /** 待办编辑只比较用户可改内容；完成状态与小步进度由清单操作维护。 */
+  function sameTaskDraftContent(a, b) {
+    const steps = list => filledTaskSteps(list).map(step => [String(step?.id ?? ""), String(step?.title ?? "").trim()]);
+    return String(a?.title ?? "").trim() === String(b?.title ?? "").trim()
+      && a?.category === b?.category && Boolean(a?.important) === Boolean(b?.important)
+      && JSON.stringify(steps(a?.steps)) === JSON.stringify(steps(b?.steps));
+  }
+
   /**
    * L：一件事在清单里待了多久。fresh 今天放进来，resting 还新鲜，
    * stale 躺得久了。已完成的事不参与发酵。
@@ -1882,7 +1903,7 @@
   }
 
   const api = Object.freeze({
-    LIMITS, MODES, CATEGORIES, USAGE, USAGE_PERIODS, sampleUsageSegments, sampleUsageSegmentsForDate, focusSpans, usageDaySummary, usagePeriodSummary, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, daysBetween, formatTime, Timer,
+    LIMITS, MODES, CATEGORIES, USAGE, USAGE_PERIODS, sampleUsageSegments, sampleUsageSegmentsForDate, focusSpans, usageDaySummary, usagePeriodSummary, initialTasks, initialFocusItems, integerInRange, validateTask, validateSteps, filledTaskSteps, canAddTaskStep, sameTaskDraftContent, validateFocusItem, taskSummary, groupTasks, taskAge, taskProgress, nextStep, daysBetween, formatTime, Timer,
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
     validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary,
     allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,

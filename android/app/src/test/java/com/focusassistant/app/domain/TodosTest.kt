@@ -407,12 +407,26 @@ class TodoEditingTest {
         assertEquals(2, TodoEditing.prepare(draft, locked = true).steps.size)
     }
 
-    @Test fun sameContentIgnoresWhitespaceAndProgressButNotEdits() {
-        assertTrue(TodoEditing.sameContent(pending, pending.copy(title = " 一件事 ", steps = pending.steps.map { it.copy(done = !it.done) })))
+    @Test fun sameContentIgnoresWhitespaceBlankPlaceholdersAndProgressButNotEdits() {
+        val blank = TodoStep("blank", "  ")
+        assertTrue(TodoEditing.sameContent(pending, pending.copy(title = " 一件事 ",
+            steps = pending.steps.map { it.copy(done = !it.done) } + blank)))
+        assertTrue(TodoEditing.sameContent(pending, pending.copy(steps = listOf(blank) + pending.steps)))
         assertFalse(TodoEditing.sameContent(pending, pending.copy(category = "生活")))
         assertFalse(TodoEditing.sameContent(pending, pending.copy(important = true)))
         assertFalse(TodoEditing.sameContent(pending, pending.copy(steps = pending.steps.take(1))))
         assertFalse(TodoEditing.sameContent(pending, pending.copy(steps = pending.steps.map { if (it.id == "b") it.copy(title = "改") else it })))
+        assertFalse(TodoEditing.sameContent(pending, pending.copy(steps = pending.steps.map { if (it.id == "b") it.copy(id = "other") else it })))
+    }
+
+    @Test fun blankLastStepMustBeFilledBeforeAddingAnother() {
+        val blank = TodoStep("blank", "  ")
+        val filled = TodoStep("filled", " 写提纲 ")
+        assertEquals(listOf(filled), TodoEditing.filledSteps(listOf(blank, filled)))
+        assertTrue(TodoEditing.canAddStep(emptyList()))
+        assertFalse(TodoEditing.canAddStep(listOf(blank)))
+        assertTrue(TodoEditing.canAddStep(listOf(filled)))
+        assertFalse(TodoEditing.canAddStep(List(Validation.MAX_STEPS) { TodoStep("s$it", "步") }))
     }
 
     @Test fun duplicateHintOnlyCountsOtherLivePendingTodos() {

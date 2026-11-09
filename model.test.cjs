@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { Timer, LIMITS, MODES, USAGE, CATEGORIES, initialTasks, taskSummary, groupTasks, validateTask, validateSteps, taskAge, taskProgress, nextStep, daysBetween, formatTime } = require("./model.js");
+const { Timer, LIMITS, MODES, USAGE, CATEGORIES, initialTasks, taskSummary, groupTasks, validateTask, validateSteps, filledTaskSteps, canAddTaskStep, sameTaskDraftContent, taskAge, taskProgress, nextStep, daysBetween, formatTime } = require("./model.js");
 const { sampleUsageSegments, sampleUsageSegmentsForDate, focusSpans, usageDaySummary, usagePeriodSummary, USAGE_PERIODS } = require("./model.js");
 const { localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv } = require("./model.js");
 const { completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks } = require("./model.js");
@@ -454,6 +454,21 @@ test("小步校验：可以没有，有则要有名字且不超上限", () => {
   assert.throws(() => validateSteps([{ id: "a", title: "   " }]));
   assert.throws(() => validateSteps([{ id: "a", title: "x".repeat(LIMITS.maxTaskStepTitle + 1) }]));
   assert.throws(() => validateSteps(Array.from({ length: LIMITS.maxTaskSteps + 1 }, (_, i) => ({ id: `s${i}`, title: "步" }))));
+});
+
+test("小步编辑：空白占位不算修改，末行为空时不重复追加", () => {
+  const blank = { id: "blank", title: "  ", done: false };
+  const first = { id: "first", title: " 写提纲 ", done: false };
+  assert.deepEqual(filledTaskSteps([blank, first]), [first]);
+  assert.equal(canAddTaskStep([]), true);
+  assert.equal(canAddTaskStep([blank]), false);
+  assert.equal(canAddTaskStep([first]), true);
+  assert.equal(canAddTaskStep(Array.from({ length: LIMITS.maxTaskSteps }, (_, i) => ({ id: `s${i}`, title: "步" }))), false);
+  const original = { title: " 事项 ", category: "工作", important: false, steps: [first] };
+  assert.equal(sameTaskDraftContent(original, { ...original, title: "事项", steps: [{ ...first, title: "写提纲", done: true }, blank] }), true);
+  assert.equal(sameTaskDraftContent(original, { ...original, steps: [{ ...first, title: "改名" }] }), false);
+  assert.equal(sameTaskDraftContent(original, { ...original, steps: [{ ...first, id: "other" }] }), false);
+  assert.equal(sameTaskDraftContent(original, { ...original, important: true }), false);
 });
 
 test("L：躺得越久阶段越靠后，完成的事不发酵", () => {
