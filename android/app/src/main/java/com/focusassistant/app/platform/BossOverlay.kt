@@ -27,7 +27,8 @@ internal class BossOverlay(
     private val onStop: () -> Unit,
     private val onCapture: () -> Unit,
     private val onQuickHide: () -> Unit,
-    private val onToggleMask: () -> Unit
+    private val onToggleMask: () -> Unit,
+    private val onError: (Throwable) -> Unit
 ) {
     private val windowManager = service.getSystemService(WindowManager::class.java)
     private val orange = ContextCompat.getColor(service, R.color.focus_orange)
@@ -121,16 +122,22 @@ internal class BossOverlay(
         val slop = ViewConfiguration.get(service).scaledTouchSlop
         var downX = 0f; var downY = 0f; var startX = 0; var startY = 0; var moved = false
         bubble.setOnTouchListener { view, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { downX = event.rawX; downY = event.rawY; startX = params.x; startY = params.y; moved = false; true }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = event.rawX - downX; val dy = event.rawY - downY
-                    if (!moved && hypot(dx, dy) > slop) moved = true
-                    if (moved) { params.x = startX + dx.toInt(); params.y = startY + dy.toInt(); root?.let { windowManager.updateViewLayout(it, params) } }
-                    true
+            try {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> { downX = event.rawX; downY = event.rawY; startX = params.x; startY = params.y; moved = false; true }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = event.rawX - downX; val dy = event.rawY - downY
+                        if (!moved && hypot(dx, dy) > slop) moved = true
+                        if (moved) { params.x = startX + dx.toInt(); params.y = startY + dy.toInt(); root?.let { windowManager.updateViewLayout(it, params) } }
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> { if (!moved) view.performClick(); true }
+                    else -> false
                 }
-                MotionEvent.ACTION_UP -> { if (!moved) view.performClick(); true }
-                else -> false
+            } catch (error: Throwable) {
+                // 窗口被系统移除等异常不能带崩无障碍服务，否则系统会直接停用服务。
+                onError(error)
+                false
             }
         }
         bubble.setOnClickListener { panel.visibility = if (panel.visibility == View.VISIBLE) View.GONE else View.VISIBLE }

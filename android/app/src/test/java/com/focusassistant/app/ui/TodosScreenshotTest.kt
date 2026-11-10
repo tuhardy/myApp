@@ -297,14 +297,14 @@ class TodosScreenshotTest {
         compose.onNodeWithText("0 / ${Validation.MAX_STEPS}").assertExists()
         compose.onNode(hasSetTextAction() and hasContentDescription("第 1 步")).assertExists()
         compose.onNodeWithText("先填写当前步").assertIsDisplayed().assertIsNotEnabled()
-        val title = compose.onNode(hasSetTextAction() and hasText("想做什么？")).performTextReplacement("分八步整理书房")
-        title.performImeAction()
+        compose.onNode(hasSetTextAction() and hasText("想做什么？")).performTextReplacement("分八步整理书房")
+        compose.onNode(hasSetTextAction() and hasText("分八步整理书房")).performImeAction()
         val blank = compose.onNode(hasSetTextAction() and hasContentDescription("第 1 步")).assertIsFocused()
         blank.performImeAction()
         compose.onAllNodes(hasSetTextAction() and hasContentDescription("第 ", substring = true)).assertCountEquals(1)
         repeat(Validation.MAX_STEPS) { index ->
-            val field = compose.onNode(hasSetTextAction() and hasContentDescription("第 ${index + 1} 步"))
-                .performScrollTo().performTextReplacement("新建的第 ${index + 1} 步")
+            val field = compose.onNode(hasSetTextAction() and hasContentDescription("第 ${index + 1} 步")).performScrollTo()
+            field.performTextReplacement("新建的第 ${index + 1} 步")
             if (index < Validation.MAX_STEPS - 1) field.performImeAction()
         }
         compose.onNodeWithText("${Validation.MAX_STEPS} / ${Validation.MAX_STEPS}").assertExists()

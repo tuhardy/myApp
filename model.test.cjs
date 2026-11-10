@@ -35,6 +35,7 @@ test("自动投递规则与 Android 同口径：薪资、关键词、黑名单�
   assert.equal(AUTO_APPLY_LIMITS.maxDailyLimit, 100);
   assert.equal(salaryLowerK("15-25K·13薪"), 15);
   assert.equal(salaryLowerK("1-1.5万"), 10);
+  assert.equal(salaryLowerK("7000-12000元"), 7);
   assert.equal(salaryLowerK("200-300元/天"), null);
   assert.deepEqual(parseKeywordList(" Java 开发，Kotlin;Kotlin "), ["Java 开发", "Kotlin"]);
   assert.equal(autoApplyDecision(card, base, [], day).apply, true);

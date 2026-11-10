@@ -29,6 +29,8 @@ class AutoApplyTest {
     @Test fun parsesSalaryLowerBound() {
         assertEquals(15, AutoApplyRules.salaryLowerK("15-25K·13薪"))
         assertEquals(10, AutoApplyRules.salaryLowerK("1-1.5万"))
+        assertEquals(7, AutoApplyRules.salaryLowerK("7000-12000元"))
+        assertTrue(AutoApplyRules.isSalaryText("7000-12000元"))
         assertNull(AutoApplyRules.salaryLowerK("200-300元/天"))
         assertNull(AutoApplyRules.salaryLowerK("面议"))
         assertTrue(AutoApplyRules.isSalaryText("面议"))
@@ -87,8 +89,18 @@ class AutoApplyTest {
         assertEquals(AutoApplyResult.CONTACTED, step.record?.result)
         assertEquals(1, step.run.contacted)
         val firstRecord = step.record!!
+        // 旧聊天页或过渡中的 OTHER 都不能触发第二次返回。
+        assertEquals(AutoApplyAction.Wait, AutoApplyEngine.step(step.run, obs(BossScreen.CHAT, noon + 10000), filters,
+            listOf(firstRecord), zone, newId).action)
+        assertEquals(AutoApplyAction.Wait, AutoApplyEngine.step(step.run, obs(BossScreen.OTHER, noon + 10000), filters,
+            listOf(firstRecord), zone, newId).action)
+        val backFromDetail = AutoApplyEngine.step(step.run, obs(BossScreen.JOB_DETAIL, noon + 11000), filters, listOf(firstRecord), zone, newId)
+        assertEquals(AutoApplyAction.Back, backFromDetail.action)
+        assertEquals(2, backFromDetail.run.backs)
+        assertEquals(AutoApplyAction.Wait, AutoApplyEngine.step(backFromDetail.run, obs(BossScreen.JOB_DETAIL, noon + 11500), filters,
+            listOf(firstRecord), zone, newId).action)
 
-        val back = AutoApplyEngine.step(step.run, obs(BossScreen.JOB_LIST, noon + 12000, cards), filters, listOf(firstRecord), zone, newId)
+        val back = AutoApplyEngine.step(backFromDetail.run, obs(BossScreen.JOB_LIST, noon + 12000, cards), filters, listOf(firstRecord), zone, newId)
         assertEquals(AutoApplyAction.OpenCard(2), back.action)
         assertEquals(AutoApplyPhase.OPENING, back.run.phase)
         step = AutoApplyEngine.step(back.run, obs(BossScreen.JOB_DETAIL, noon + 15000), filters, listOf(firstRecord), zone, newId)
@@ -162,6 +174,30 @@ class AutoApplyTest {
     }
 
     private fun text(path: List<Int>, value: String, id: String = "") = UiNode(path, viewId = id, className = "android.widget.TextView", text = value)
+
+    @Test fun splitsWrappedJobCardsAndProcessesEveryCardBeforeScrolling() {
+        fun job(path: List<Int>, position: String, company: String) = UiNode(path, clickable = true, children = listOf(
+            text(path + 0, position, "com.hpbr.bosszhipin:id/tv_position_name"),
+            text(path + 1, "15-25K", "com.hpbr.bosszhipin:id/tv_salary_statue"),
+            text(path + 2, company, "com.hpbr.bosszhipin:id/tv_company_name")))
+        val wrapper = UiNode(listOf(0, 0), children = listOf(
+            job(listOf(0, 0, 0), "Android 一", "公司一"),
+            job(listOf(0, 0, 1), "Android 二", "公司二"),
+            job(listOf(0, 0, 2), "Android 三", "公司三")))
+        val root = UiNode(emptyList(), children = listOf(UiNode(listOf(0), scrollable = true, children = listOf(wrapper))))
+        val reading = BossScreenReader.read(root, noon)
+        assertEquals(listOf("Android 一", "Android 二", "Android 三"), reading.observation.cards.map { it.position })
+        assertEquals(listOf(listOf(0, 0, 0), listOf(0, 0, 1), listOf(0, 0, 2)), reading.cardPaths)
+
+        var run = AutoApplyEngine.start(AutoApplyMode.LIVE, noon)
+        repeat(3) { index ->
+            val step = AutoApplyEngine.step(run, obs(BossScreen.JOB_LIST, cards = reading.observation.cards), AutoApplySettings(), emptyList(), zone, newId)
+            assertEquals(AutoApplyAction.OpenCard(index), step.action)
+            run = step.run.copy(phase = AutoApplyPhase.SCANNING, target = null)
+        }
+        assertEquals(AutoApplyAction.ScrollList,
+            AutoApplyEngine.step(run, obs(BossScreen.JOB_LIST, cards = reading.observation.cards), AutoApplySettings(), emptyList(), zone, newId).action)
+    }
 
     @Test fun readsJobListDetailChatAndVerifyFixtures() {
         val item = UiNode(listOf(0, 0), clickable = true, children = listOf(
@@ -298,6 +334,8 @@ class AutoApplyTest {
         assertEquals(AutoApplyResult.RESUME_SENT, step.record?.result)
         assertEquals(contacted.jobKey, step.record?.jobKey)
         assertEquals(1, step.run.sent)
+        assertEquals(ResumeAction.Wait, ResumeEngine.step(step.run, BossObservation(BossScreen.CHAT, now = noon + 13000), resumeSettings,
+            records + step.record!!, zone, newId).action)
         // 发过之后同一会话不再处理。
         val again = ResumeEngine.step(step.run, messages(noon + 15000, Conversation("示例科技", true)), resumeSettings, records + step.record!!, zone, newId)
         assertEquals(ResumeAction.ScrollList, again.action)
@@ -540,6 +578,31 @@ class AutoApplyTest {
         assertEquals(BossScreen.OTHER, ZhaopinScreenReader.read(UiNode(emptyList()), noon).observation.screen)
     }
 
+    @Test fun zhaopinAppliedDetailDoesNotFallBackToJobList() {
+        // 真机 8.15.12：投递后回到详情，按钮是「继续沟通」；详情自身也有可滚动容器和完整职位字段。
+        fun detail(action: String) = UiNode(emptyList(), children = listOf(
+            UiNode(listOf(0), viewId = "com.zhaopin.social:id/rv_list", scrollable = true, children = listOf(
+                UiNode(listOf(0, 0), children = listOf(
+                    text(listOf(0, 0, 0), "Android 开发工程师", "com.zhaopin.social:id/tv_job_name_new"),
+                    text(listOf(0, 0, 1), "1-1.5万", "com.zhaopin.social:id/tv_salary_new"),
+                    text(listOf(0, 0, 2), "客户公司：示例科技", "com.zhaopin.social:id/tv_company_new"))))),
+            UiNode(listOf(1), viewId = "com.zhaopin.social:id/layout_button_deliver", children = listOf(
+                UiNode(listOf(1, 0), viewId = "com.zhaopin.social:id/tv_before_deliver", clickable = true, text = action)))))
+
+        val reading = ZhaopinScreenReader.read(detail("继续沟通"), noon)
+        assertEquals(BossScreen.JOB_DETAIL, reading.observation.screen)
+        assertTrue(reading.observation.alreadyContacted)
+        assertTrue(reading.observation.cards.isEmpty())
+        // 即使未来按钮换词，固定详情结构也不能再掉进职位列表兜底。
+        assertEquals(BossScreen.JOB_DETAIL, ZhaopinScreenReader.read(detail("未知状态"), noon).observation.screen)
+
+        val returning = ZhaopinRun(mode = AutoApplyMode.LIVE, phase = ZhaopinPhase.RETURNING,
+            phaseSince = noon, backs = 1, backFrom = BossScreen.CHAT)
+        val back = ZhaopinApplyEngine.step(returning, reading.observation, AutoApplySettings(), emptyList(), zone, newId)
+        assertEquals(ZhaopinAction.Back, back.action)
+        assertEquals(2, back.run.backs)
+    }
+
     @Test fun zhaopinApplyPathSurvivesSkippedChildrenAndPrefersClickable() {
         // 下标 0 的子树在屏幕外被跳过；按钮的可点击容器原始下标为 2，children 里排第 1。
         val detail = UiNode(emptyList(), children = listOf(
@@ -561,6 +624,28 @@ class AutoApplyTest {
         // 整条都不可点：退回可点击祖先（这里是可点的列表项之外没有，保持原路径）。
         val none = UiNode(emptyList(), children = listOf(UiNode(listOf(0), scrollable = true, children = listOf(card(0, false)))))
         assertEquals(listOf(listOf(0, 0)), ZhaopinScreenReader.read(none, noon).cardPaths)
+    }
+
+    @Test fun zhaopinSplitsWrappedCardsWhenOneSalaryUsesYuan() {
+        // 真机 8.15.12：第一张是 7000-12000元，第二张是 1.3-1.7万。
+        // 旧规则只认出第二张薪资，把共同父容器当成一张卡，并拼出第一张职位/公司 + 第二张薪资。
+        fun job(path: List<Int>, position: String, salary: String, company: String): UiNode {
+            val clickable = path + 0
+            return UiNode(path, children = listOf(UiNode(clickable, clickable = true, children = listOf(
+                text(clickable + 0, position, "com.zhaopin.social:id/tv_position_name"),
+                text(clickable + 1, salary, "com.zhaopin.social:id/tv_position_salary"),
+                text(clickable + 2, company, "com.zhaopin.social:id/tv_company_name")))))
+        }
+        val wrapper = UiNode(listOf(0, 0), children = listOf(
+            job(listOf(0, 0, 0), "WW-售前工程师 (合肥/杭州)", "7000-12000元", "北京万维盈创科技"),
+            job(listOf(0, 0, 1), "售前工程师", "1.3-1.7万", "广州掌动智能")))
+        val root = UiNode(emptyList(), children = listOf(UiNode(listOf(0), scrollable = true, children = listOf(wrapper))))
+
+        val reading = ZhaopinScreenReader.read(root, noon)
+        assertEquals(listOf(
+            JobCard("WW-售前工程师 (合肥/杭州)", "北京万维盈创科技", "7000-12000元"),
+            JobCard("售前工程师", "广州掌动智能", "1.3-1.7万")), reading.observation.cards)
+        assertEquals(listOf(listOf(0, 0, 0, 0), listOf(0, 0, 1, 0)), reading.cardPaths)
     }
 
     @Test fun zhaopinPickerMatchesRealDialog() {
@@ -618,6 +703,10 @@ class AutoApplyTest {
         assertEquals(JobPlatform.ZHAOPIN, step.record?.platform)
         assertEquals("简历：张三-Android", step.record?.note)
         assertEquals(1, step.run.applied)
+        // 成功提示尚未消失时不能连续返回，否则提示消失后会一次退出多层页面。
+        val successStill = ZhaopinApplyEngine.step(step.run, zp(BossScreen.APPLY_DONE, at = noon + 1000), settings, listOfNotNull(step.record), zone, newId)
+        assertEquals(ZhaopinAction.Wait, successStill.action)
+        assertEquals(1, successStill.run.backs)
         assertEquals(ZhaopinPhase.SCANNING, ZhaopinApplyEngine.step(step.run, zp(BossScreen.JOB_LIST), settings, listOfNotNull(step.record), zone, newId).run.phase)
     }
 
@@ -667,11 +756,31 @@ class AutoApplyTest {
         assertEquals("智联默认简历", defaultDone.record?.note)
         assertEquals(1, defaultDone.run.applied)
         assertEquals(ZhaopinAction.Back, defaultDone.action)
+        // 返回已发出但沟通页还没切换时只等待，不能把第二次返回叠加进去。
+        val chatStill = ZhaopinApplyEngine.step(defaultDone.run, zp(BossScreen.CHAT, at = noon + 1000), settings, listOfNotNull(defaultDone.record), zone, newId)
+        assertEquals(ZhaopinAction.Wait, chatStill.action)
+        assertEquals(1, chatStill.run.backs)
+        // 第一次返回只收键盘时，输入法窗口关闭是明确进展，允许第二次返回退出沟通页。
+        val keyboardClosed = ZhaopinApplyEngine.step(defaultDone.run.copy(backWithIme = true), zp(BossScreen.CHAT, at = noon + 1000), settings,
+            listOfNotNull(defaultDone.record), zone, newId)
+        assertEquals(ZhaopinAction.Back, keyboardClosed.action)
+        assertEquals(2, keyboardClosed.run.backs)
+        val stuckReturn = ZhaopinApplyEngine.step(defaultDone.run, zp(BossScreen.CHAT, at = noon + AutoApplyEngine.STEP_TIMEOUT_MS + 1), settings,
+            listOfNotNull(defaultDone.record), zone, newId)
+        assertEquals(ZhaopinPhase.STOPPED, stuckReturn.run.phase)
+        assertTrue(stuckReturn.run.stopReason!!.contains("返回后界面未按预期变化"))
+        // 页面切换中的 OTHER 也不能盲点返回。
+        assertEquals(ZhaopinAction.Wait, ZhaopinApplyEngine.step(defaultDone.run, zp(BossScreen.OTHER, at = noon + 1000), settings,
+            listOfNotNull(defaultDone.record), zone, newId).action)
         // 真机链路：沟通页先回岗位详情，再回职位列表，随后立即处理下一项。
         val backFromDetail = ZhaopinApplyEngine.step(defaultDone.run, zp(BossScreen.JOB_DETAIL), settings, listOfNotNull(defaultDone.record), zone, newId)
         assertEquals(ZhaopinAction.Back, backFromDetail.action)
         assertNull(backFromDetail.record)
         assertEquals(1, backFromDetail.run.applied)
+        val detailStill = ZhaopinApplyEngine.step(backFromDetail.run, zp(BossScreen.JOB_DETAIL, at = noon + 1000), settings,
+            listOfNotNull(defaultDone.record), zone, newId)
+        assertEquals(ZhaopinAction.Wait, detailStill.action)
+        assertEquals(2, detailStill.run.backs)
         val nextCard = card.copy(position = "下一岗位", company = "下一公司")
         val next = ZhaopinApplyEngine.step(backFromDetail.run, zp(BossScreen.JOB_LIST, cards = listOf(nextCard)), settings, listOfNotNull(defaultDone.record), zone, newId)
         assertEquals(ZhaopinAction.OpenCard(0), next.action)

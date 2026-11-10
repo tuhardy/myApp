@@ -1378,7 +1378,7 @@
   // 自动投递规则与 Android domain/AutoApply.kt 同口径；原型只用来模拟试运行，不操作任何 App。
   const AUTO_PRESET_NAME_MAX = 20;
   const AUTO_APPLY_LIMITS = Object.freeze({ maxPresets: 10, maxPresetName: AUTO_PRESET_NAME_MAX,  defaultDailyLimit: 30, maxDailyLimit: 100, defaultStepDelaySeconds: 1, minStepDelaySeconds: 1, maxStepDelaySeconds: 30, maxKeywords: 30, maxKeyword: 30, maxCity: 20, maxGreeting: 300, maxSalaryK: 1000, maxResumes: 10, maxResumeName: 80 });
-  const AUTO_APPLY_SALARY = /^\s*(\d+(?:\.\d+)?)\s*(?:[-~]\s*(\d+(?:\.\d+)?))?\s*([Kk]|万|元\/(?:天|时|小时|月))/;
+  const AUTO_APPLY_SALARY = /^\s*(\d+(?:\.\d+)?)\s*(?:[-~]\s*(\d+(?:\.\d+)?))?\s*([Kk]|万|元\/(?:天|时|小时|月)|元)/;
 
   function defaultAutoApplySettings() {
     return { includeKeywords: [], excludeKeywords: [], minSalaryK: null, city: "", companyBlacklist: [], dailyLimit: AUTO_APPLY_LIMITS.defaultDailyLimit, stepDelaySeconds: AUTO_APPLY_LIMITS.defaultStepDelaySeconds, greeting: "", riskAccepted: false, resumes: [], presets: [], activePresetId: null,
@@ -1437,7 +1437,7 @@
     const low = Number(match[1]);
     if (match[3] === "K" || match[3] === "k") return Math.trunc(low);
     if (match[3] === "万") return Math.trunc(low * 10);
-    if (match[3] === "元/月") return Math.trunc(low / 1000);
+    if (match[3] === "元/月" || match[3] === "元") return Math.trunc(low / 1000);
     return null;
   }
 

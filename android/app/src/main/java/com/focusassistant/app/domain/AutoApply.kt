@@ -122,9 +122,9 @@ object AutoApplyRules {
     const val MAX_RESUMES = 10
     const val MAX_RESUME_NAME = 80
 
-    private val salaryRange = Regex("""^\s*(\d+(?:\.\d+)?)\s*(?:[-~]\s*(\d+(?:\.\d+)?))?\s*([Kk]|万|元/(?:天|时|小时|月))""")
+    private val salaryRange = Regex("""^\s*(\d+(?:\.\d+)?)\s*(?:[-~]\s*(\d+(?:\.\d+)?))?\s*([Kk]|万|元/(?:天|时|小时|月)|元)""")
 
-    /** BOSS 列表里的薪资文字，例如「15-25K·13薪」「1-1.5万」「200-300元/天」「面议」。 */
+    /** 列表里的薪资文字，例如「15-25K·13薪」「1-1.5万」「7000-12000元」「200-300元/天」「面议」。 */
     fun isSalaryText(text: String): Boolean = text.trim() == "面议" || salaryRange.containsMatchIn(text)
 
     /** 返回月薪下限（K）；日薪、时薪和面议无法换算，返回 null。 */
@@ -134,7 +134,7 @@ object AutoApplyRules {
         return when (match.groupValues[3]) {
             "K", "k" -> low.toInt()
             "万" -> (low * 10).toInt()
-            "元/月" -> (low / 1000).toInt()
+            "元/月", "元" -> (low / 1000).toInt()
             else -> null
         }
     }
@@ -363,7 +363,9 @@ data class BossObservation(
     /** 简历选择列表或确认框里出现的附件文件名。 */
     val resumeOptions: List<String> = emptyList(),
     val hasConfirm: Boolean = false,
-    val hasMessagesTab: Boolean = false
+    val hasMessagesTab: Boolean = false,
+    /** 只记录系统输入法窗口是否存在，不读取输入法内容。 */
+    val inputMethodVisible: Boolean = false
 )
 
 data class BossReading(
@@ -431,7 +433,7 @@ object BossScreenReader {
         }
         val list = nodes.filter { it.scrollable }.maxByOrNull { it.children.size }
         if (list != null) {
-            val parsed = list.children.mapNotNull { child -> parseCard(child)?.let { child.path to it } }
+            val parsed = extractJobCards(list)
             if (parsed.isNotEmpty()) {
                 return BossReading(obs(BossScreen.JOB_LIST, parsed.map { it.second }),
                     cardPaths = parsed.map { cardClickPath(root, it.first) }, listPath = list.path, messagesTabPath = tab)
@@ -463,6 +465,21 @@ object BossScreenReader {
         return JobCard(position, company, texts[salaryIndex].text.trim(), byId(cityIds).orEmpty())
     }
 
+}
+
+/**
+ * 展开职位列表里的包装容器。部分版本把多张卡片放在一个不可滚动的内容容器里，
+ * 不能只解析列表的直接子节点，否则整组会被 parseCard 折叠成第一张卡。
+ * 一个节点包含多张卡时继续向下拆；已经识别为单张卡后不再深入，避免重复计数。
+ */
+internal fun extractJobCards(list: UiNode): List<Pair<List<Int>, JobCard>> {
+    fun visit(node: UiNode): List<Pair<List<Int>, JobCard>> {
+        val salaries = node.walk().count { AutoApplyRules.isSalaryText(it.text) }
+        val card = BossScreenReader.parseCard(node)
+        if (card != null && salaries <= 1) return listOf(node.path to card)
+        return node.children.flatMap(::visit)
+    }
+    return list.children.flatMap(::visit)
 }
 
 /** 文字本身常不可点，向上找最近的可点击祖先。 */
@@ -519,8 +536,10 @@ object ZhaopinScreenReader {
     private val doneWords = listOf("投递成功", "申请成功", "已成功投递", "简历已投递")
     private val pickerTitles = listOf("选择简历", "请选择简历", "选择投递简历", "选择要投递的简历")
     private val applyLabels = listOf("申请职位", "投递简历", "立即申请", "立即投递")
-    private val appliedLabels = listOf("已申请", "已投递")
+    private val appliedLabels = listOf("已申请", "已投递", "继续沟通")
     private val confirmLabels = listOf("确认投递", "确定投递", "确认申请", "确定申请")
+    /** 智联职位详情的固定底部投递区域；避免详情内的职位字段被列表兜底规则误认成职位卡片。 */
+    private val detailIds = listOf("/layout_button_deliver", "/tv_before_deliver")
     /** 简历选择弹窗里的提交按钮只写「投递」「发送」；只在弹窗内认，避免详情页的同名按钮被当成确认框。 */
     private val pickerConfirmLabels = confirmLabels + listOf("确定", "确认", "投递", "发送", "立即投递")
     /** 弹窗里的更新时间、勾选说明不是简历名，排除后避免被当成候选整名比对。 */
@@ -561,12 +580,13 @@ object ZhaopinScreenReader {
         // 同名文字可能先出现在不可点的标题或说明里，优先取自身或祖先可点击的那一个。
         val applyNodes = nodes.filter { it.label.trim() in applyLabels }
         val apply = applyNodes.firstOrNull { hasClickable(root, it.path) } ?: applyNodes.firstOrNull()
-        if (applied != null || apply != null) {
+        val hasDetailContainer = nodes.any { node -> detailIds.any { node.viewId.endsWith(it) } }
+        if (applied != null || apply != null || hasDetailContainer) {
             return BossReading(obs(BossScreen.JOB_DETAIL, applied = applied != null), contactPath = apply?.let { clickablePath(root, it.path) })
         }
         val list = nodes.filter { it.scrollable }.maxByOrNull { it.children.size }
         if (list != null) {
-            val parsed = list.children.mapNotNull { child -> BossScreenReader.parseCard(child)?.let { child.path to it } }
+            val parsed = extractJobCards(list)
             if (parsed.isNotEmpty()) {
                 return BossReading(obs(BossScreen.JOB_LIST, parsed.map { it.second }),
                     cardPaths = parsed.map { cardClickPath(root, it.first) }, listPath = list.path)
@@ -605,6 +625,8 @@ data class AutoApplyRun(
     val idleScrolls: Int = 0,
     val refreshes: Int = 0,
     val backs: Int = 0,
+    val backFrom: BossScreen? = null,
+    val backWithIme: Boolean = false,
     val contacted: Int = 0,
     val stopReason: String? = null,
     val preview: List<AutoApplyPreview> = emptyList()
@@ -627,7 +649,7 @@ object AutoApplyEngine {
     fun resume(run: AutoApplyRun, now: Long): AutoApplyRun = when (run.phase) {
         AutoApplyPhase.STOPPED -> run
         AutoApplyPhase.SCANNING -> run.copy(phaseSince = now, idleScrolls = 0)
-        else -> run.copy(phase = AutoApplyPhase.RETURNING, phaseSince = now, target = null, backs = 0)
+        else -> run.copy(phase = AutoApplyPhase.RETURNING, phaseSince = now, target = null, backs = 0, backFrom = null, backWithIme = false)
     }
 
     fun step(run: AutoApplyRun, obs: BossObservation, settings: AutoApplySettings, records: List<AutoApplyRecord>, zone: ZoneId, newId: () -> String): AutoApplyStep {
@@ -644,7 +666,8 @@ object AutoApplyEngine {
         fun record(result: AutoApplyResult, note: String = ""): AutoApplyRecord? = run.target?.let {
             AutoApplyRecord(newId(), AutoApplyRules.jobKey(it), it.company, it.position, it.salary, now, result, note, AutoApplyRules.activePresetName(settings))
         }
-        fun returning(contacted: Int = run.contacted) = run.copy(phase = AutoApplyPhase.RETURNING, phaseSince = now, backs = 0, contacted = contacted)
+        fun returning(contacted: Int = run.contacted) = run.copy(phase = AutoApplyPhase.RETURNING, phaseSince = now,
+            backs = 1, backFrom = obs.screen, backWithIme = obs.inputMethodVisible, contacted = contacted)
         val name = run.target?.let { "「${it.position} · ${it.company}」" }.orEmpty()
         return when (run.phase) {
             AutoApplyPhase.SCANNING -> scan(run, obs, settings, records, zone)
@@ -664,9 +687,13 @@ object AutoApplyEngine {
                 BossScreen.CHAT -> AutoApplyStep(returning(run.contacted + 1), AutoApplyAction.Back, record(AutoApplyResult.CONTACTED, "自定义招呼语"), "已发起沟通$name")
                 else -> waitOrTimeout()
             }
-            AutoApplyPhase.RETURNING -> when (obs.screen) {
-                BossScreen.JOB_LIST -> scan(run.copy(phase = AutoApplyPhase.SCANNING, phaseSince = now, target = null, backs = 0), obs, settings, records, zone)
-                else -> if (run.backs >= MAX_BACKS) halt("无法返回职位列表，已停止") else AutoApplyStep(run.copy(backs = run.backs + 1), AutoApplyAction.Back)
+            AutoApplyPhase.RETURNING -> when {
+                obs.screen == BossScreen.JOB_LIST -> scan(run.copy(phase = AutoApplyPhase.SCANNING, phaseSince = now, target = null,
+                    backs = 0, backFrom = null, backWithIme = false), obs, settings, records, zone)
+                obs.screen == BossScreen.OTHER ||
+                    (run.backFrom == obs.screen && !(run.backWithIme && !obs.inputMethodVisible)) -> waitOrTimeout()
+                run.backs >= MAX_BACKS -> halt("无法返回职位列表，已停止")
+                else -> AutoApplyStep(run.copy(backs = run.backs + 1, backFrom = obs.screen, backWithIme = obs.inputMethodVisible, phaseSince = now), AutoApplyAction.Back)
             }
             AutoApplyPhase.STOPPED -> AutoApplyStep(run)
         }
@@ -746,6 +773,8 @@ data class ResumeRun(
     val seen: Set<String> = emptySet(),
     val idleScrolls: Int = 0,
     val backs: Int = 0,
+    val backFrom: BossScreen? = null,
+    val backWithIme: Boolean = false,
     val tabTapped: Boolean = false,
     val sent: Int = 0,
     /** 试运行确实识别到了消息列表，可据此记录校准版本。 */
@@ -773,7 +802,8 @@ object ResumeEngine {
         return when (run.phase) {
             ResumePhase.STOPPED -> ResumeStep(run)
             ResumePhase.FINDING -> ResumeStep(run.copy(phaseSince = now, idleScrolls = 0))
-            else -> ResumeStep(run.copy(phase = ResumePhase.RETURNING, phaseSince = now, company = "", target = null, resumeName = "", backs = 0),
+            else -> ResumeStep(run.copy(phase = ResumePhase.RETURNING, phaseSince = now, company = "", target = null, resumeName = "",
+                backs = 0, backFrom = null, backWithIme = false),
                 log = if (uncertain) "暂停前可能已发送给「${run.company}」，本次不再处理，请到 BOSS 核对" else null)
         }
     }
@@ -790,7 +820,8 @@ object ResumeEngine {
         }
         fun waitOrTimeout() = if (now - run.phaseSince > AutoApplyEngine.STEP_TIMEOUT_MS) halt("界面未按预期变化，已停止；BOSS 界面可能已更新，需要重新校准") else ResumeStep(run)
         fun returning(log: String?, record: AutoApplyRecord? = null, sent: Int = run.sent) =
-            ResumeStep(run.copy(phase = ResumePhase.RETURNING, phaseSince = now, backs = 0, sent = sent), ResumeAction.Back, record, log)
+            ResumeStep(run.copy(phase = ResumePhase.RETURNING, phaseSince = now, backs = 1,
+                backFrom = obs.screen, backWithIme = obs.inputMethodVisible, sent = sent), ResumeAction.Back, record, log)
         val name = run.target?.let { "「${it.position} · ${it.company}」" }.orEmpty()
         fun sentRecord(note: String) = run.target!!.let {
             AutoApplyRecord(newId(), it.jobKey, it.company, it.position, it.salary, now, AutoApplyResult.RESUME_SENT, note.take(200))
@@ -833,9 +864,13 @@ object ResumeEngine {
                 BossScreen.CHAT -> returning("已发送简历$name", sentRecord("简历：${run.resumeName}"), run.sent + 1)
                 else -> waitOrTimeout()
             }
-            ResumePhase.RETURNING -> when (obs.screen) {
-                BossScreen.MESSAGE_LIST -> find(run.copy(phase = ResumePhase.FINDING, phaseSince = now, company = "", target = null, resumeName = "", backs = 0), obs, settings, records, zone)
-                else -> if (run.backs >= AutoApplyEngine.MAX_BACKS) halt("无法返回消息列表，已停止") else ResumeStep(run.copy(backs = run.backs + 1), ResumeAction.Back)
+            ResumePhase.RETURNING -> when {
+                obs.screen == BossScreen.MESSAGE_LIST -> find(run.copy(phase = ResumePhase.FINDING, phaseSince = now, company = "", target = null, resumeName = "",
+                    backs = 0, backFrom = null, backWithIme = false), obs, settings, records, zone)
+                obs.screen == BossScreen.OTHER ||
+                    (run.backFrom == obs.screen && !(run.backWithIme && !obs.inputMethodVisible)) -> waitOrTimeout()
+                run.backs >= AutoApplyEngine.MAX_BACKS -> halt("无法返回消息列表，已停止")
+                else -> ResumeStep(run.copy(backs = run.backs + 1, backFrom = obs.screen, backWithIme = obs.inputMethodVisible, phaseSince = now), ResumeAction.Back)
             }
             ResumePhase.STOPPED -> ResumeStep(run)
         }
@@ -910,6 +945,10 @@ data class ZhaopinRun(
     val idleScrolls: Int = 0,
     val refreshes: Int = 0,
     val backs: Int = 0,
+    /** 已发出返回键时所在的界面；界面未变化前不得叠加下一次返回。 */
+    val backFrom: BossScreen? = null,
+    /** 发出返回时输入法是否显示；返回后输入法关闭也算一次明确的界面变化。 */
+    val backWithIme: Boolean = false,
     val applied: Int = 0,
     val stopReason: String? = null,
     val preview: List<AutoApplyPreview> = emptyList()
@@ -933,7 +972,7 @@ object ZhaopinApplyEngine {
         return when (run.phase) {
             ZhaopinPhase.STOPPED -> ZhaopinStep(run)
             ZhaopinPhase.SCANNING -> ZhaopinStep(run.copy(phaseSince = now, idleScrolls = 0))
-            else -> ZhaopinStep(run.copy(phase = ZhaopinPhase.RETURNING, phaseSince = now, target = null, resumeName = "", backs = 0),
+            else -> ZhaopinStep(run.copy(phase = ZhaopinPhase.RETURNING, phaseSince = now, target = null, resumeName = "", backs = 0, backFrom = null, backWithIme = false),
                 log = if (uncertain) "暂停前可能已投递$name，本次不再处理，请到智联核对" else null)
         }
     }
@@ -953,7 +992,8 @@ object ZhaopinApplyEngine {
             AutoApplyRecord(newId(), AutoApplyRules.jobKey(it), it.company, it.position, it.salary, now, result, note.take(200),
                 AutoApplyRules.activePresetName(settings), JobPlatform.ZHAOPIN)
         }
-        fun returning(applied: Int = run.applied) = run.copy(phase = ZhaopinPhase.RETURNING, phaseSince = now, backs = 0, applied = applied)
+        fun returning(applied: Int = run.applied) = run.copy(phase = ZhaopinPhase.RETURNING, phaseSince = now,
+            backs = 1, backFrom = obs.screen, backWithIme = obs.inputMethodVisible, applied = applied)
         val name = run.target?.let { "「${it.position} · ${it.company}」" }.orEmpty()
         fun done() = ZhaopinStep(returning(run.applied + 1), ZhaopinAction.Back,
             record(AutoApplyResult.APPLIED, if (run.resumeName.isBlank()) "智联默认简历" else "简历：${run.resumeName}"), "已投递$name")
@@ -1000,9 +1040,16 @@ object ZhaopinApplyEngine {
                 else -> waitOrTimeout()
             }
             ZhaopinPhase.CONFIRMING -> if (finished()) done() else waitOrTimeout()
-            ZhaopinPhase.RETURNING -> when (obs.screen) {
-                BossScreen.JOB_LIST -> scan(run.copy(phase = ZhaopinPhase.SCANNING, phaseSince = now, target = null, resumeName = "", backs = 0), obs, settings, records, zone)
-                else -> if (run.backs >= AutoApplyEngine.MAX_BACKS) halt("无法返回职位列表，已停止") else ZhaopinStep(run.copy(backs = run.backs + 1), ZhaopinAction.Back)
+            ZhaopinPhase.RETURNING -> when {
+                obs.screen == BossScreen.JOB_LIST -> scan(run.copy(phase = ZhaopinPhase.SCANNING, phaseSince = now, target = null, resumeName = "", backs = 0, backFrom = null, backWithIme = false), obs, settings, records, zone)
+                // 返回键已被系统接受不代表页面已经切换。成功提示、聊天页和详情页切换较慢时，
+                // 同一界面重复按返回会叠加并越过职位列表；OTHER 更不能盲点，等待识别或超时停止。
+                obs.screen == BossScreen.OTHER ||
+                    (run.backFrom == obs.screen && !(run.backWithIme && !obs.inputMethodVisible)) ->
+                    if (now - run.phaseSince > AutoApplyEngine.STEP_TIMEOUT_MS) halt("返回后界面未按预期变化，已停止；请手动返回智联职位列表")
+                    else ZhaopinStep(run)
+                run.backs >= AutoApplyEngine.MAX_BACKS -> halt("无法返回职位列表，已停止")
+                else -> ZhaopinStep(run.copy(backs = run.backs + 1, backFrom = obs.screen, backWithIme = obs.inputMethodVisible, phaseSince = now), ZhaopinAction.Back)
             }
             ZhaopinPhase.STOPPED -> ZhaopinStep(run)
         }

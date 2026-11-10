@@ -20,6 +20,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -231,7 +232,10 @@ class BossAutomationService : AccessibilityService() {
         val roots = targetRoots()
         if (roots.isEmpty()) return null
         val readings = roots.map { it to PlatformReader.read(platform, BossUiMap.snapshot(it, masked), System.currentTimeMillis()) }
-        return readings.firstOrNull { it.second.observation.screen != BossScreen.OTHER } ?: readings.first()
+        val selected = readings.firstOrNull { it.second.observation.screen != BossScreen.OTHER } ?: readings.first()
+        // 第一次返回有时只关闭输入法，页面类型不变；把这个明确变化交给状态机，不读取输入法内容。
+        val inputMethodVisible = runCatching { windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD } }.getOrDefault(false)
+        return selected.first to selected.second.copy(observation = selected.second.observation.copy(inputMethodVisible = inputMethodVisible))
     }
 
     private fun handleEvent(event: AccessibilityEvent) {
@@ -310,7 +314,7 @@ class BossAutomationService : AccessibilityService() {
         masked = next.live && settings.hideTargetPage
         lastScreen = null
         overlay = BossOverlay(this, onToggle = { guarded(::togglePause) }, onStop = { guarded { halt(if (task == BossTask.DIAGNOSE) "诊断已结束" else "已手动停止") } },
-            onCapture = { guarded(::capture) }, onQuickHide = { guarded(::quickHide) }, onToggleMask = { guarded(::toggleMask) })
+            onCapture = { guarded(::capture) }, onQuickHide = { guarded(::quickHide) }, onToggleMask = { guarded(::toggleMask) }, onError = ::fail)
         runCatching { overlay?.show(next == BossTask.DIAGNOSE, masked, settings.showOverlay) }.onFailure { BossAutomation.log("悬浮窗未能显示，可从通知控制") }
         refreshOverlay()
         if (next != BossTask.DIAGNOSE) loop = scope.launch { tickLoop(settings.stepDelayMs) }
@@ -483,6 +487,7 @@ class BossAutomationService : AccessibilityService() {
             }
             return halt(step.run.stopReason ?: "已停止")
         }
+        if (task == null || paused != null) return
         if (!perform(root, reading, step.action)) {
             val failed = AutoApplyEngine.fail(step.run, "找不到要点击的界面元素，已停止；BOSS 界面可能已更新", System.currentTimeMillis()) { UUID.randomUUID().toString() }
             failed.record?.let { repository.addAutoApplyRecord(it) }
@@ -508,6 +513,7 @@ class BossAutomationService : AccessibilityService() {
             }
             return halt(step.run.stopReason ?: "已停止")
         }
+        if (task == null || paused != null) return
         if (!performResume(root, reading, step.action)) {
             halt(ResumeEngine.fail(step.run, "找不到要点击的界面元素，已停止；BOSS 界面可能已更新", System.currentTimeMillis()).run.stopReason ?: "已停止")
         }
@@ -519,6 +525,11 @@ class BossAutomationService : AccessibilityService() {
         val step = ZhaopinApplyEngine.step(current, reading.observation, state.autoApply.settings, state.autoApply.records, zone) { UUID.randomUUID().toString() }
         zhaopinRun = step.run
         step.log?.let(BossAutomation::log)
+        if (step.action == ZhaopinAction.Back) {
+            BossAutomation.log("返回职位列表：从 ${reading.observation.screen} 发起第 ${step.run.backs} 次返回，等待界面变化")
+        } else if (step.action != ZhaopinAction.Wait) {
+            BossAutomation.log("执行智联动作：${current.phase} · ${step.action}")
+        }
         step.record?.let { record ->
             repository.addAutoApplyRecord(record)
             notify(BossTask.LIVE, "已处理 ${step.run.applied} 项")
@@ -531,6 +542,7 @@ class BossAutomationService : AccessibilityService() {
             }
             return halt(step.run.stopReason ?: "已停止")
         }
+        if (task == null || paused != null) return
         if (!performZhaopinWithRetry(root, reading, step.action)) {
             val failed = ZhaopinApplyEngine.fail(step.run, ZhaopinApplyEngine.failReason(step.action), System.currentTimeMillis()) { UUID.randomUUID().toString() }
             failed.record?.let { repository.addAutoApplyRecord(it) }
@@ -660,7 +672,10 @@ class BossAutomationService : AccessibilityService() {
                 if (!typed) return false
                 // 输入后发送按钮才出现，等界面刷新再重新读取一次。
                 delay(SEND_SETTLE_MS)
+                // 延时期间用户可能已暂停或停止；旧步骤不得继续点击发送。
+                if (task == null || paused != null) return true
                 val (fresh, again) = readTarget() ?: return false
+                if (task == null || paused != null) return true
                 val send = again.sendPath?.let { BossUiMap.find(fresh, it) } ?: return false
                 var node: AccessibilityNodeInfo = send
                 while (!node.isClickable) node = node.parent ?: return false
