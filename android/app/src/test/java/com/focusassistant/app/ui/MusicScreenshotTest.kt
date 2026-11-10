@@ -3,6 +3,7 @@ package com.focusassistant.app.ui
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasContentDescription
@@ -11,6 +12,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import com.focusassistant.app.domain.MusicListen
 import com.focusassistant.app.domain.MusicPlayMode
 import com.focusassistant.app.domain.MusicPlaybackSnapshot
@@ -129,6 +131,40 @@ class MusicScreenshotTest {
         }
         compose.onNodeWithContentDescription("返回").performClick()
         compose.onNodeWithText("我的歌单", substring = true).assertExists()
+    }
+
+    @Test fun queuePinsCurrentAndCollapsesPlayedTracks() {
+        val playback = MusicPlaybackSnapshot("track-2", true, 42_000, 202_000,
+            tracks.map { it.id }, MusicPlayMode.REPEAT_ALL, connected = true)
+        var moved: Pair<Int, Int>? = null
+        var played: Int? = null
+        compose.setContent {
+            FocusTheme {
+                MusicQueueDialog(tracks, playback, onDismiss = {}, onMove = { from, to -> moved = from to to },
+                    onRemove = {}, onClear = {}, onPlay = { played = it })
+            }
+        }
+        compose.onNodeWithText("接下来播放 · 9 首").assertIsDisplayed()
+        compose.onNodeWithText("测试歌曲0").assertDoesNotExist()
+        capture("music-queue", dialog = true)
+        compose.onNodeWithText("已播放 2 首").performClick()
+        compose.onNodeWithText("测试歌曲0").assertIsDisplayed()
+        compose.onNodeWithContentDescription("测试歌曲3 的更多操作").performClick()
+        compose.onNodeWithText("下移").performClick()
+        compose.runOnIdle { assertEquals(0 to 1, moved) }
+
+        moved = null
+        compose.onNodeWithText("已播放 2 首").performClick()
+        compose.onNodeWithText("测试歌曲3").performTouchInput {
+            down(center)
+            advanceEventTime(500)
+            moveBy(Offset(0f, 60f))
+            up()
+        }
+        compose.runOnIdle {
+            assertEquals(0 to 1, moved)
+            assertTrue("拖拽松手不应触发播放", played == null)
+        }
     }
 
     @Test fun playlistEditorKeepsSelectionOrderAndShowsRealTracks() {

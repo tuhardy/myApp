@@ -1567,9 +1567,13 @@ test("歌单名称与曲目规则和 Android 同口径", () => {
 });
 
 test("音乐队列编辑保留当前曲，收听记录只累计真实播放时间", () => {
-  const { MUSIC_PLAY_MODES, musicQueueMove, musicQueueRemove, musicQueueClearUpcoming, musicQueueNextId, musicListenSeconds, musicListenRecordable, musicListeningSummary } = require("./model.js");
+  const { MUSIC_PLAY_MODES, musicQueueMove, musicQueueSections, musicQueueMoveUpcoming, musicQueueRemove, musicQueueClearUpcoming, musicQueueNextId, musicListenSeconds, musicListenRecordable, musicListeningSummary } = require("./model.js");
   assert.deepEqual(MUSIC_PLAY_MODES.map(mode => mode.id), ["sequential", "repeat-all", "repeat-one", "shuffle"]);
   const ids = ["a", "b", "c"];
+  assert.deepEqual(musicQueueSections(ids, "b"), { playedIds: ["a"], currentId: "b", upcomingIds: ["c"] });
+  assert.deepEqual(musicQueueSections(ids, null), { playedIds: [], currentId: null, upcomingIds: ids });
+  assert.deepEqual(musicQueueMoveUpcoming(ids, "a", 0, 1), ["a", "c", "b"]);
+  assert.deepEqual(musicQueueMoveUpcoming(ids, "b", 0, 1), ids);
   assert.deepEqual(musicQueueMove(ids, 1, 0), ["b", "a", "c"]);
   assert.deepEqual(musicQueueMove(ids, -1, 2), ids);
   assert.deepEqual(musicQueueRemove(ids, 1), ["a", "c"]);

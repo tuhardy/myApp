@@ -142,6 +142,10 @@ class MusicTest {
 
     @Test fun playbackQueueEditingAndListeningThresholdRules() {
         val ids = listOf("a", "b", "c")
+        assertEquals(MusicQueueSections(listOf("a"), "b", listOf("c")), MusicQueue.sections(ids, "b"))
+        assertEquals(MusicQueueSections(emptyList(), null, ids), MusicQueue.sections(ids, null))
+        assertEquals(listOf("a", "c", "b"), MusicQueue.moveUpcoming(ids, "a", 0, 1))
+        assertEquals(ids, MusicQueue.moveUpcoming(ids, "b", 0, 1))
         assertEquals(listOf("b", "a", "c"), MusicQueue.move(ids, 1, 0))
         assertEquals(ids, MusicQueue.move(ids, -1, 2))
         assertEquals(listOf("a", "c"), MusicQueue.remove(ids, 1))

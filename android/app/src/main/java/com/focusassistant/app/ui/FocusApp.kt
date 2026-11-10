@@ -801,8 +801,9 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
                 musicPlayer.setMode(mode)
                 ui.close()
             }
-            "music-queue" -> MusicQueueDialog(state.musicTracks, ui.music.playback.queueIds, ui.music.selectedTrackId,
-                onDismiss = { ui.close() }, onMove = musicPlayer::move, onRemove = musicPlayer::remove, onClear = musicPlayer::clearUpcoming)
+            "music-queue" -> MusicQueueDialog(state.musicTracks, ui.music.playback,
+                onDismiss = { ui.close() }, onMove = musicPlayer::moveUpcoming, onRemove = musicPlayer::remove,
+                onClear = musicPlayer::clearUpcoming, onPlay = musicPlayer::playQueueIndex)
             "music-edit" -> {
                 val track = state.musicTracks.find { it.id == ui.dialogId }
                 if (track == null) InformationDialog("歌曲已不在曲库中", listOf("请返回歌曲页重新选择。"), { ui.close() })

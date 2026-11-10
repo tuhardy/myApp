@@ -5,7 +5,7 @@
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusBreakdown, monthActivity, exportFocusCsv,
     initialFocusItems, validateFocusItem, focusHourDistribution, initialProgressEntries, validateProgress,
     latestProjectProgress, allTimeFocusSummary, allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,
-    MUSIC_TRACKS, MUSIC_PLAY_MODES, initialMusicPlaylists, validateMusicPlaylist, musicQueueMove, musicQueueRemove, musicQueueClearUpcoming, musicQueueNextId, musicListenSeconds, musicListenRecordable,
+    MUSIC_TRACKS, MUSIC_PLAY_MODES, initialMusicPlaylists, validateMusicPlaylist, musicQueueMove, musicQueueSections, musicQueueMoveUpcoming, musicQueueRemove, musicQueueClearUpcoming, musicQueueNextId, musicListenSeconds, musicListenRecordable,
     parseBilibiliMusicEntry, bilibiliMusicCandidateTitle, BILIBILI_MUSIC_CACHE_DEPTH, bilibiliMusicCacheCid, importedBilibiliMusicCids, bilibiliMusicSourceCid, bilibiliMusicCacheRoots,
     initialMusicListens, musicListeningSummary, musicListeningTrend, compareMusicListening } = FocusModel;
   const UI = Object.freeze({ tickMs: 250, toastMs: 3400, ringRadius: 118, tickRadius: 134, initialGoalMinutes: 240, gaugeTicks: 20, goalTicks: 40, minutesPerHour: 60, finishRevealMs: 900,
@@ -23,7 +23,7 @@
     finishHoldMs: 680, finishCollapseMs: 240, historyPage: 20, newDraft: "new" });
   const DURATION_PRESETS = [15, 25, 45, 60];
   const DURATION_STEP = 5;
-  const MODAL_VARIANTS = ["todo-guide-sheet", "focus-item-sheet", "usage-zoom-sheet", "asset-sheet", "music-playlist-sheet"];
+  const MODAL_VARIANTS = ["todo-guide-sheet", "focus-item-sheet", "usage-zoom-sheet", "asset-sheet", "music-playlist-sheet", "music-queue-sheet"];
   const PAGES = ["focus", "timer", "statistics", "tasks", "diary", "music", "usage", "profile", "job-assist"];
   const MUSIC_TABS = ["recommend", "playlists", "songs", "history"];
   const MUSIC_HISTORY_PERIODS = ["day", "week", "month", "year"];
@@ -53,7 +53,7 @@
     reminders: false, nextTaskId: 1, nextRecordId: 1, nextStepId: 1,
     musicTab: "recommend", musicPlaying: true, musicSearch: "", musicTrack: { id: "sunny", title: "晴天", artist: "周杰伦", duration: "4:29" },
     musicImportedTracks: [], musicImportDraft: null, musicDirectoryHandle: null, nextMusicTrackId: 1,
-    musicPlayMode: "repeat-all", musicQueueIds: MUSIC_TRACKS.map(track => track.id), musicPlayerOpen: false, nextMusicListenId: 1,
+    musicPlayMode: "repeat-all", musicQueueIds: MUSIC_TRACKS.map(track => track.id), musicPlayerOpen: false, musicQueuePlayedOpen: false, nextMusicListenId: 1,
     musicPlaylist: null, musicPlaylists: initialMusicPlaylists(), nextMusicPlaylistId: 1, musicHistoryPeriod: "week", musicHistoryAnchor: new Date(), musicHistoryPickerOpen: false, musicHistoryPickerCursor: null,
     musicListens: initialMusicListens(), musicRankLimit: UI.musicRankPageSize, musicTrendBins: [], musicTrendSelection: null,
     openProjects: new Set(), progressEntries: [], progressDrafts: new Map(), nextProgressId: 1,
@@ -111,7 +111,7 @@
     $("modal-title").textContent = title;
     $("modal-content").replaceChildren(content);
     if (!$("modal").open) $("modal").showModal();
-    if (["todo-guide-sheet", "usage-zoom-sheet"].includes(variant)) {
+    if (["todo-guide-sheet", "usage-zoom-sheet", "music-queue-sheet"].includes(variant)) {
       $("close-modal").focus({ preventScroll: true });
       $("modal").scrollTop = 0;
     } else $("modal-content").querySelector("input, textarea, select, button")?.focus();
@@ -182,13 +182,7 @@
     renderMusic();
   }
 
-  function buildMusicSongRow(track, subtitle = track.artist, onMore = null, onPlay = null) {
-    const button = element("button", "music-song-row");
-    button.type = "button";
-    button.dataset.musicTrack = track.title;
-    button.dataset.musicTrackId = track.id;
-    button.dataset.musicArtist = track.artist;
-    button.dataset.musicDuration = track.duration;
+  function buildMusicTrackCover(track) {
     const cover = element("span", `music-cover ${track.tone || "tone-one"}`);
     if (track.coverUrl) {
       const image = document.createElement("img");
@@ -196,9 +190,19 @@
       image.alt = "";
       cover.append(image);
     } else cover.append(icon(track.art || "cover-wave"));
+    return cover;
+  }
+
+  function buildMusicSongRow(track, subtitle = track.artist, onMore = null, onPlay = null) {
+    const button = element("button", "music-song-row");
+    button.type = "button";
+    button.dataset.musicTrack = track.title;
+    button.dataset.musicTrackId = track.id;
+    button.dataset.musicArtist = track.artist;
+    button.dataset.musicDuration = track.duration;
     const copy = element("span", "music-song-copy");
     copy.append(element("strong", "", track.title), element("small", "", subtitle));
-    button.append(cover, copy, element("span", "music-song-duration", track.duration));
+    button.append(buildMusicTrackCover(track), copy, element("span", "music-song-duration", track.duration));
     button.addEventListener("click", () => onPlay ? onPlay() : selectMusicTrack(button));
     if (!onMore) return button;
     const wrap = element("div", "music-song-row-wrap");
@@ -208,6 +212,174 @@
     more.addEventListener("click", onMore);
     wrap.append(button, more);
     return wrap;
+  }
+
+  function buildMusicRowMenu(track, items) {
+    const wrap = element("span", "music-row-menu");
+    wrap.dataset.musicNoDrag = "true";
+    const toggle = element("button", "music-row-menu-toggle", "···");
+    toggle.type = "button";
+    toggle.setAttribute("aria-label", `${track.title} 的更多操作`);
+    toggle.setAttribute("aria-expanded", "false");
+    const menu = element("span", "music-row-menu-popover");
+    menu.hidden = true;
+    items.forEach(item => {
+      const button = element("button", "", item.label);
+      button.type = "button";
+      button.disabled = Boolean(item.disabled);
+      button.setAttribute("aria-label", `${item.label} ${track.title}`);
+      button.addEventListener("click", () => item.action());
+      menu.append(button);
+    });
+    toggle.addEventListener("click", event => {
+      event.stopPropagation();
+      const opening = menu.hidden;
+      document.querySelectorAll(".music-row-menu-popover").forEach(other => { other.hidden = true; });
+      document.querySelectorAll(".music-row-menu-toggle").forEach(other => other.setAttribute("aria-expanded", "false"));
+      menu.hidden = !opening;
+      toggle.setAttribute("aria-expanded", String(opening));
+    });
+    wrap.append(toggle, menu);
+    return wrap;
+  }
+
+  function attachMusicReorder(row, list, scrollHost, onMove) {
+    row.classList.add("music-reorder-item");
+    let pointerId = null;
+    let start = null;
+    let timer = 0;
+    let active = false;
+    let suppressClick = false;
+    let originY = 0;
+    let pointerY = 0;
+    let from = -1;
+    let target = -1;
+    let rows = [];
+    let rects = [];
+    let initialScroll = 0;
+    let frame = 0;
+    let touchInput = false;
+
+    const cleanup = commit => {
+      clearTimeout(timer);
+      cancelAnimationFrame(frame);
+      rows.forEach(item => {
+        item.style.transform = "";
+        item.classList.remove("music-dragging", "music-drop-before", "music-drop-after");
+      });
+      list.classList.remove("is-reordering");
+      row.style.touchAction = "";
+      if (active && commit && target !== from) onMove(from, target);
+      active = false;
+      pointerId = null;
+      start = null;
+    };
+
+    const paint = () => {
+      if (!active) return;
+      const scrollDelta = initialScroll - scrollHost.scrollTop;
+      const visibleRects = rects.map(rect => ({ ...rect, top: rect.top + scrollDelta }));
+      let next = visibleRects.length - 1;
+      for (let index = 0; index < visibleRects.length; index += 1) {
+        if (pointerY < visibleRects[index].top + visibleRects[index].height / 2) { next = index; break; }
+      }
+      target = next;
+      const draggedHeight = rects[from].height;
+      rows.forEach((item, index) => {
+        item.classList.remove("music-drop-before", "music-drop-after");
+        if (index === from) item.style.transform = `translateY(${pointerY - originY}px)`;
+        else if (from < target && index > from && index <= target) item.style.transform = `translateY(${-draggedHeight}px)`;
+        else if (from > target && index >= target && index < from) item.style.transform = `translateY(${draggedHeight}px)`;
+        else item.style.transform = "";
+      });
+      rows[target]?.classList.add(target === rows.length - 1 && from < target ? "music-drop-after" : "music-drop-before");
+    };
+
+    const autoScroll = () => {
+      if (!active) return;
+      const bounds = scrollHost.getBoundingClientRect();
+      if (pointerY < bounds.top + 48) scrollHost.scrollTop = Math.max(0, scrollHost.scrollTop - 12);
+      else if (pointerY > bounds.bottom - 48) scrollHost.scrollTop += 12;
+      paint();
+      frame = requestAnimationFrame(autoScroll);
+    };
+
+    const begin = (id, x, y, touch) => {
+      pointerId = id;
+      touchInput = touch;
+      start = { x, y };
+      pointerY = y;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        rows = [...list.querySelectorAll(":scope > .music-reorder-item")].filter(item => !item.hidden);
+        from = rows.indexOf(row);
+        if (from < 0 || rows.length < 2) { cleanup(false); return; }
+        active = true;
+        target = from;
+        originY = pointerY;
+        initialScroll = scrollHost.scrollTop;
+        rects = rows.map(item => {
+          const rect = item.getBoundingClientRect();
+          return { top: rect.top, height: rect.height };
+        });
+        row.classList.add("music-dragging");
+        row.style.touchAction = "none";
+        list.classList.add("is-reordering");
+        if (!touchInput) {
+          try { row.setPointerCapture(pointerId); } catch { /* 指针已结束时由 pointerup 清理。 */ }
+        }
+        if (navigator.vibrate) navigator.vibrate(12);
+        frame = requestAnimationFrame(autoScroll);
+      }, 260);
+    };
+    const move = (id, x, y, event) => {
+      if (id !== pointerId) return;
+      pointerY = y;
+      if (!active) {
+        if (start && Math.hypot(x - start.x, y - start.y) > 8) cleanup(false);
+        return;
+      }
+      event.preventDefault();
+      paint();
+    };
+    const end = (id, event) => {
+      if (id !== pointerId) return;
+      suppressClick = active;
+      if (active) event.preventDefault();
+      cleanup(true);
+    };
+    row.addEventListener("pointerdown", event => {
+      if (event.pointerType === "touch" || !event.isPrimary || event.button !== 0 || event.target.closest("[data-music-no-drag]")) return;
+      begin(event.pointerId, event.clientX, event.clientY, false);
+    });
+    row.addEventListener("pointermove", event => {
+      if (!touchInput) move(event.pointerId, event.clientX, event.clientY, event);
+    });
+    row.addEventListener("pointerup", event => { if (!touchInput) end(event.pointerId, event); });
+    row.addEventListener("pointercancel", event => { if (!touchInput && event.pointerId === pointerId) cleanup(false); });
+    row.addEventListener("touchstart", event => {
+      if (event.touches.length !== 1 || event.target.closest("[data-music-no-drag]")) return;
+      const touch = event.touches[0];
+      begin(touch.identifier, touch.clientX, touch.clientY, true);
+    }, { passive: true });
+    row.addEventListener("touchmove", event => {
+      if (!touchInput) return;
+      const touch = [...event.touches].find(item => item.identifier === pointerId);
+      if (touch) move(touch.identifier, touch.clientX, touch.clientY, event);
+    }, { passive: false });
+    row.addEventListener("touchend", event => {
+      if (!touchInput) return;
+      const touch = [...event.changedTouches].find(item => item.identifier === pointerId);
+      if (touch) end(touch.identifier, event);
+    }, { passive: false });
+    row.addEventListener("touchcancel", () => { if (touchInput) cleanup(false); });
+    row.addEventListener("contextmenu", event => { if (active) event.preventDefault(); });
+    row.addEventListener("click", event => {
+      if (!suppressClick) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      suppressClick = false;
+    }, true);
   }
 
   function accumulateMusicListening() {
@@ -770,21 +942,18 @@
     renderMusic();
   }
 
-  function buildMusicPlaylistTrackRow(playlist, track, index, tracks) {
+  function buildMusicPlaylistTrackRow(playlist, track, index, tracks, list) {
     const wrap = element("div", "music-song-row-wrap music-playlist-track-row");
     wrap.append(buildMusicSongRow(track, track.artist, null, () => playMusicPlaylist(playlist, track)));
-    const actions = element("span", "music-playlist-track-actions");
-    [["↑", "上移", index === 0, musicQueueMove(playlist.trackIds, index, index - 1)],
-      ["↓", "下移", index === tracks.length - 1, musicQueueMove(playlist.trackIds, index, index + 1)],
-      ["×", "移除", false, musicQueueRemove(playlist.trackIds, index)]].forEach(([label, name, disabled, trackIds]) => {
-      const button = element("button", "", label);
-      button.type = "button";
-      button.disabled = disabled;
-      button.setAttribute("aria-label", `${name} ${track.title}`);
-      button.addEventListener("click", () => updateMusicPlaylist(playlist, trackIds));
-      actions.append(button);
+    const move = target => updateMusicPlaylist(playlist, musicQueueMove(playlist.trackIds, index, target));
+    wrap.append(buildMusicRowMenu(track, [
+      { label: "上移", disabled: index === 0, action: () => move(index - 1) },
+      { label: "下移", disabled: index === tracks.length - 1, action: () => move(index + 1) },
+      { label: "从歌单移除", action: () => updateMusicPlaylist(playlist, musicQueueRemove(playlist.trackIds, index)) },
+    ]));
+    attachMusicReorder(wrap, list, $("phone-content"), (from, to) => {
+      updateMusicPlaylist(playlist, musicQueueMove(playlist.trackIds, from, to));
     });
-    wrap.append(actions);
     return wrap;
   }
 
@@ -797,8 +966,9 @@
     $("music-playlist-kind").textContent = playlist.sample ? "示例" : "本次创建";
     paintMusicPlaylistCover($("music-detail-cover"), playlist);
     $("music-play-all").disabled = tracks.length === 0;
-    $("music-playlist-track-list").replaceChildren(...tracks.map((track, index) => buildMusicPlaylistTrackRow(playlist, track, index, tracks)));
+    $("music-playlist-track-list").replaceChildren(...tracks.map((track, index) => buildMusicPlaylistTrackRow(playlist, track, index, tracks, $("music-playlist-track-list"))));
     $("music-playlist-empty").hidden = tracks.length > 0;
+    $("music-playlist-sort-hint").hidden = tracks.length < 2;
   }
 
   function openMusicPlaylist(button) {
@@ -1027,6 +1197,17 @@
     $("music-player-duration").textContent = musicClockText(duration);
     range.setAttribute("aria-valuetext", `${musicClockText(position)}，共 ${musicClockText(duration)}`);
     $("music-mini-progress-fill").style.width = `${duration > 0 ? Math.min(100, position / duration * 100) : 0}%`;
+    const queueMeter = document.querySelector(".music-queue-current-meter");
+    if (queueMeter) {
+      const percent = duration > 0 ? Math.min(100, position / duration * 100) : 0;
+      queueMeter.setAttribute("aria-valuemin", "0");
+      queueMeter.setAttribute("aria-valuemax", String(Math.round(duration)));
+      queueMeter.setAttribute("aria-valuenow", String(Math.round(position)));
+      queueMeter.setAttribute("aria-valuetext", `${musicClockText(position)}，共 ${musicClockText(duration)}`);
+      queueMeter.querySelector(".music-queue-current-meter-fill").style.width = `${percent}%`;
+      document.querySelector(".music-queue-current-position").textContent = musicClockText(position);
+      document.querySelector(".music-queue-current-duration").textContent = musicClockText(duration);
+    }
   }
 
   function renderMusic() {
@@ -1068,6 +1249,12 @@
     updateMusicCover("music-mini-cover", track);
     updateMusicCover("music-player-cover", track, "music-player-cover");
     renderMusicProgress();
+    const queueEditor = document.querySelector(".music-queue-editor");
+    if (queueEditor && queueEditor.dataset.currentId !== (track.id || "")) showMusicQueueDialog();
+    else if (queueEditor) {
+      const status = queueEditor.querySelector(".music-queue-current-status small");
+      if (status) status.textContent = state.musicPlaying ? "正在播放" : "已暂停";
+    }
     document.querySelectorAll("[data-music-track]").forEach(button => {
       button.classList.toggle("current", state.musicTrack.id
         ? button.dataset.musicTrackId === state.musicTrack.id
@@ -1184,37 +1371,109 @@
 
   function showMusicQueueDialog() {
     const content = element("div", "music-queue-editor");
-    const tracks = musicLibraryTracks();
-    state.musicQueueIds.forEach((id, index) => {
-      const track = tracks.find(item => item.id === id);
-      if (!track) return;
-      const row = element("div", `music-queue-row${id === state.musicTrack.id ? " current" : ""}`);
-      const copy = element("span", "music-queue-copy");
-      copy.append(element("strong", "", track.title), element("small", "", id === state.musicTrack.id ? "当前播放" : track.artist));
-      const actions = element("span", "music-queue-actions");
-      [["↑", "上移", index === 0, () => state.musicQueueIds = musicQueueMove(state.musicQueueIds, index, index - 1)],
-        ["↓", "下移", index === state.musicQueueIds.length - 1, () => state.musicQueueIds = musicQueueMove(state.musicQueueIds, index, index + 1)],
-        ["×", "移除", false, () => removeMusicQueueIndex(index)]].forEach(([label, name, disabled, action]) => {
-        const button = element("button", "", label);
-        button.type = "button";
-        button.disabled = disabled;
-        button.setAttribute("aria-label", `${name} ${track.title}`);
-        button.addEventListener("click", () => { action(); renderMusic(); showMusicQueueDialog(); });
-        actions.append(button);
-      });
-      row.append(copy, actions);
-      content.append(row);
-    });
-    if (!state.musicQueueIds.length) content.append(element("p", "modal-copy", "队列已清空，从歌曲页选择一首即可重新播放。"));
-    const clear = element("button", "secondary-button", "清空待播（保留当前曲）");
+    content.dataset.currentId = state.musicTrack.id || "";
+    const byId = new Map(musicLibraryTracks().map(track => [track.id, track]));
+    const sections = musicQueueSections(state.musicQueueIds, state.musicTrack.id);
+    const refresh = () => { renderMusic(); showMusicQueueDialog(); };
+    const remove = id => {
+      const index = state.musicQueueIds.indexOf(id);
+      if (index >= 0) removeMusicQueueIndex(index);
+      refresh();
+    };
+    const move = (from, to) => {
+      state.musicQueueIds = musicQueueMoveUpcoming(state.musicQueueIds, state.musicTrack.id, from, to);
+      refresh();
+    };
+
+    if (sections.currentId && byId.has(sections.currentId)) {
+      const track = byId.get(sections.currentId);
+      const section = element("section", "music-queue-current-section");
+      section.append(element("h3", "music-queue-section-label", "正在播放"));
+      const row = element("div", "music-queue-current");
+      const copy = element("span", "music-queue-current-copy");
+      copy.append(element("strong", "", track.title), element("small", "", track.artist));
+      const status = element("span", "music-queue-current-status");
+      const mark = element("span", "music-queue-playing-mark");
+      mark.setAttribute("aria-hidden", "true");
+      mark.append(element("i"), element("i"), element("i"));
+      status.append(mark, element("small", "", state.musicPlaying ? "正在播放" : "已暂停"));
+      row.append(buildMusicTrackCover(track), copy, status, buildMusicRowMenu(track, [
+        { label: "从队列移除", action: () => remove(track.id) },
+      ]));
+      const meter = element("div", "music-queue-current-meter");
+      meter.setAttribute("role", "progressbar");
+      meter.setAttribute("aria-label", "当前歌曲播放进度");
+      meter.append(element("span", "music-queue-current-meter-fill"));
+      const times = element("div", "music-queue-current-times");
+      times.append(element("span", "music-queue-current-position", "0:00"), element("span", "music-queue-current-duration", track.duration));
+      section.append(row, meter, times);
+      content.append(section);
+    }
+
+    const upcomingSection = element("section", "music-queue-upcoming-section");
+    const heading = element("div", "music-queue-section-heading");
+    heading.append(element("h3", "", `接下来播放 · ${sections.upcomingIds.length} 首`));
+    const clear = element("button", "music-text-button", "清空待播");
+    clear.type = "button";
     clear.disabled = state.musicQueueIds.length < 2;
+    clear.setAttribute("aria-label", "清空待播并保留当前曲");
     clear.addEventListener("click", () => {
       state.musicQueueIds = musicQueueClearUpcoming(state.musicQueueIds, state.musicTrack.id);
-      renderMusic();
-      showMusicQueueDialog();
+      refresh();
     });
-    content.append(clear);
-    showModal("播放队列", content);
+    heading.append(clear);
+    upcomingSection.append(heading);
+    const upcomingList = element("div", "music-song-list music-queue-list music-reorder-list");
+    sections.upcomingIds.forEach((id, index) => {
+      const track = byId.get(id);
+      if (!track) return;
+      const row = element("div", "music-song-row-wrap music-queue-row");
+      row.append(buildMusicSongRow(track, track.artist, null, () => {
+        playMusicTrack(track, true);
+        showMusicQueueDialog();
+      }));
+      row.append(buildMusicRowMenu(track, [
+        { label: "上移", disabled: index === 0, action: () => move(index, index - 1) },
+        { label: "下移", disabled: index === sections.upcomingIds.length - 1, action: () => move(index, index + 1) },
+        { label: "从队列移除", action: () => remove(id) },
+      ]));
+      attachMusicReorder(row, upcomingList, upcomingList, move);
+      upcomingList.append(row);
+    });
+    upcomingSection.append(upcomingList);
+    if (!sections.upcomingIds.length) upcomingSection.append(element("p", "music-queue-empty", sections.currentId ? "当前歌曲之后没有待播歌曲。" : "队列已清空，从歌曲页选择一首即可重新播放。"));
+    if (sections.upcomingIds.length > 1) upcomingSection.append(element("p", "music-sort-hint", "长按歌曲拖动排序，更多操作在「···」中"));
+    if (state.musicPlayMode === "shuffle") upcomingSection.append(element("p", "music-queue-mode-note", "随机模式已打乱待播顺序，仍可继续拖动调整。"));
+    content.append(upcomingSection);
+
+    if (sections.playedIds.length) {
+      const playedSection = element("section", "music-queue-played-section");
+      const toggle = element("button", "music-queue-played-toggle");
+      toggle.type = "button";
+      toggle.setAttribute("aria-expanded", String(state.musicQueuePlayedOpen));
+      toggle.append(element("span", "", `已播放 ${sections.playedIds.length} 首`), element("small", "", state.musicQueuePlayedOpen ? "收起" : "展开"));
+      toggle.addEventListener("click", () => {
+        state.musicQueuePlayedOpen = !state.musicQueuePlayedOpen;
+        showMusicQueueDialog();
+      });
+      const list = element("div", "music-song-list music-queue-list music-queue-played-list");
+      list.hidden = !state.musicQueuePlayedOpen;
+      sections.playedIds.forEach(id => {
+        const track = byId.get(id);
+        if (!track) return;
+        const row = element("div", "music-song-row-wrap music-queue-row");
+        row.append(buildMusicSongRow(track, track.artist, null, () => {
+          playMusicTrack(track, true);
+          showMusicQueueDialog();
+        }));
+        row.append(buildMusicRowMenu(track, [{ label: "从队列移除", action: () => remove(id) }]));
+        list.append(row);
+      });
+      playedSection.append(toggle, list);
+      content.append(playedSection);
+    }
+    showModal("播放队列", content, "music-queue-sheet");
+    renderMusicProgress();
   }
 
   function removeMusicQueueIndex(index) {
@@ -5982,7 +6241,10 @@
   $("music-player-previous").addEventListener("click", () => stepMusic(-1));
   $("music-player-next").addEventListener("click", () => stepMusic(1));
   $("music-mode").addEventListener("click", showMusicModeDialog);
-  $("music-queue").addEventListener("click", showMusicQueueDialog);
+  $("music-queue").addEventListener("click", () => {
+    state.musicQueuePlayedOpen = false;
+    showMusicQueueDialog();
+  });
   $("music-edit").addEventListener("click", showMusicEditDialog);
   $("music-player-progress").addEventListener("input", event => {
     musicProgressDragging = true;

@@ -1606,9 +1606,11 @@ def check_music_ui(browser, errors):
     expect(page.locator("#music-playlist-track-list .music-song-row")).to_have_count(2)
     page.locator("#music-play-all").click()
     expect(page.locator("#music-queue")).to_have_text("播放队列 · 2 首")
+    page.get_by_role("button", name="晴天 的更多操作", exact=True).click()
     page.get_by_role("button", name="下移 晴天", exact=True).click()
     expect(page.locator("#music-playlist-track-list .music-song-row").first).to_have_attribute("data-music-track", "小幸运")
-    page.get_by_role("button", name="移除 小幸运", exact=True).click()
+    page.get_by_role("button", name="小幸运 的更多操作", exact=True).click()
+    page.get_by_role("button", name="从歌单移除 小幸运", exact=True).click()
     expect(page.locator("#music-playlist-track-list .music-song-row")).to_have_count(1)
     page.locator("#music-playlist-back").click()
     page.locator("#music-new-playlist").click()
@@ -1692,7 +1694,6 @@ def check_music_ui(browser, errors):
     expect(page.locator('#music-history-picker [data-date="2026-09-26"]')).to_have_attribute("data-level", "4")
     expect(page.locator('#music-history-picker [data-date="2026-09-27"]')).to_be_disabled()
     page.locator("#music-history-date-jump").fill("2026-09-27")
-    page.locator("#music-history-date-jump").dispatch_event("change")
     expect(page.locator("#music-history-picker")).to_be_visible()
     expect(page.locator("#music-history-date-jump")).to_have_value("2026-09-26")
     expect(page.locator("#music-history-range-label")).to_have_text("2026年9月26日")
@@ -1710,7 +1711,6 @@ def check_music_ui(browser, errors):
     expect(page.locator("#music-history-picker")).to_be_hidden()
     page.locator("#music-history-anchor").click()
     page.locator("#music-history-date-jump").fill("2026-09-25")
-    page.locator("#music-history-date-jump").dispatch_event("change")
     expect(page.locator("#music-history-range-label")).to_have_text("2026年9月25日")
     expect(page.locator("#music-history-plays")).to_have_text("8")
     expect(page.locator("#music-history-picker")).to_be_hidden()
@@ -1732,7 +1732,7 @@ def check_music_ui(browser, errors):
     page.locator("#music-history-anchor").click()
     expect(page.locator("#music-history-picker-grid .picker-head strong")).to_have_text("2015–2026 年")
     page.locator("#music-history-picker .picker-head .back-button").click()
-    expect(page.locator("#music-history-picker-grid .picker-head strong")).to_have_text("2004–2015 年")
+    expect(page.locator("#music-history-picker-grid .picker-head strong")).to_have_text("2003–2014 年")
     page.locator('#music-history-picker .picker-head button[aria-label="更晚的年份"]').click()
     page.locator('#music-history-picker [data-year="2025"]').click()
     expect(page.locator("#music-history-range-label")).to_have_text("2025年")
@@ -1762,9 +1762,14 @@ def check_music_ui(browser, errors):
     page.get_by_role("button", name="随机播放", exact=True).click()
     expect(page.locator("#music-mode")).to_have_text("随机播放")
     page.locator("#music-queue").click()
-    expect(page.locator("#modal .music-queue-row")).to_have_count(24)
-    page.locator("#modal .music-queue-actions button").nth(1).click()
-    expect(page.locator("#modal .music-queue-row")).to_have_count(24)
+    expect(page.locator("#modal .music-queue-current")).to_have_count(1)
+    expect(page.locator("#modal .music-queue-row")).to_have_count(23)
+    first_upcoming = page.locator("#modal .music-queue-row").first
+    first_title = first_upcoming.locator(".music-song-copy strong").inner_text()
+    first_upcoming.locator(".music-row-menu-toggle").click()
+    first_upcoming.get_by_role("button", name=f"下移 {first_title}", exact=True).click()
+    expect(page.locator("#modal .music-queue-row").nth(1).locator(".music-song-copy strong")).to_have_text(first_title)
+    expect(page.locator("#modal .music-queue-row")).to_have_count(23)
     page.locator("#close-modal").click()
     page.locator("#music-player-back").click()
     expect(page.locator("#music-player-screen")).to_be_hidden()
@@ -1784,6 +1789,114 @@ def check_music_ui(browser, errors):
     page.locator('.bottom-nav [data-page="focus"]').click()
     expect(page.locator("#music-mini")).to_be_hidden()
     print("PASS: music playlist detail/back, playback overview and previous-period comparison, accessible day/week/month/year trends, Top 10 pagination/collapse/reset, exact date pickers and empty states, 24-track library, tabs, playback state demo, search, keyboard navigation, mini player visibility.", flush=True)
+
+
+def music_mouse_drag(page, row, distance=48):
+    row.scroll_into_view_if_needed()
+    box = row.bounding_box()
+    assert box, "missing music drag bounds"
+    x = box["x"] + min(box["width"] * 0.45, 150)
+    y = box["y"] + box["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.wait_for_timeout(360)
+    page.mouse.move(x, y + distance, steps=10)
+    page.wait_for_timeout(120)
+    page.mouse.up()
+    page.wait_for_timeout(250)
+
+
+def music_touch_drag(page, cdp, row, distance=48):
+    row.scroll_into_view_if_needed()
+    box = row.bounding_box()
+    assert box, "missing music touch drag bounds"
+    x = box["x"] + min(box["width"] * 0.45, 150)
+    y = box["y"] + box["height"] / 2
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y, "id": 1}]})
+    page.wait_for_timeout(360)
+    for index in range(1, TOUCH_MOVE_STEPS + 1):
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [
+            {"x": x, "y": y + distance * index / TOUCH_MOVE_STEPS, "id": 1},
+        ]})
+        page.wait_for_timeout(20)
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    page.wait_for_timeout(250)
+
+
+def check_music_reorder(browser, errors):
+    page = browser.new_page(viewport={"width": 390, "height": MOBILE_HEIGHT}, reduced_motion="reduce")
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    try:
+        page.goto(BASE_URL)
+        page.locator('.bottom-nav [data-page="music"]').click()
+        page.locator('[data-music-tab="playlists"]').click()
+        page.locator("#music-playlist-grid > button").first.click()
+        rows = page.locator("#music-playlist-track-list .music-playlist-track-row")
+        expect(rows).to_have_count(4)
+        first_title = rows.first.locator(".music-song-copy strong").inner_text()
+        music_mouse_drag(page, rows.first)
+        expect(rows.nth(1).locator(".music-song-copy strong")).to_have_text(first_title)
+        expect(page.locator("#music-mini-title")).to_have_text("晴天")
+        page.screenshot(path=str(SCREENSHOT_DIRECTORY / "music-playlist-reorder.png"), full_page=True)
+
+        page.locator("#music-playlist-back").click()
+        page.locator('[data-music-tab="recommend"]').click()
+        page.locator("#music-current-open").click()
+        page.locator("#music-queue").click()
+        expect(page.locator("#modal .music-queue-current")).to_have_count(1)
+        queue_rows = page.locator("#modal .music-queue-upcoming-section .music-queue-row")
+        expect(queue_rows).to_have_count(23)
+        queue_first = queue_rows.first.locator(".music-song-copy strong").inner_text()
+        music_mouse_drag(page, queue_rows.first)
+        expect(queue_rows.nth(1).locator(".music-song-copy strong")).to_have_text(queue_first)
+        expect(page.locator("#music-player-track-title")).to_have_text("晴天")
+        page.screenshot(path=str(SCREENSHOT_DIRECTORY / "music-queue.png"), full_page=True)
+
+        selected_title = queue_rows.first.locator(".music-song-copy strong").inner_text()
+        queue_rows.first.locator(".music-song-row").click()
+        expect(page.locator("#modal .music-queue-current-copy strong")).to_have_text(selected_title)
+        expect(page.locator("#modal .music-queue-played-toggle")).to_be_visible()
+        expect(page.locator("#modal .music-queue-played-list")).to_be_hidden()
+        page.locator("#modal .music-queue-played-toggle").click()
+        expect(page.locator("#modal .music-queue-played-list .music-queue-row")).to_have_count(1)
+        expect(page.locator("#modal .music-queue-played-list")).to_be_visible()
+        page.set_viewport_size({"width": 320, "height": MOBILE_HEIGHT})
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        assert page.locator("#modal").evaluate("el => el.scrollWidth <= el.clientWidth")
+        page.screenshot(path=str(SCREENSHOT_DIRECTORY / "music-queue-320.png"), full_page=True)
+    finally:
+        page.close()
+
+    context = browser.new_context(viewport={"width": 390, "height": MOBILE_HEIGHT},
+                                  is_mobile=True, has_touch=True, reduced_motion="reduce")
+    page = context.new_page()
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    cdp = context.new_cdp_session(page)
+    try:
+        page.goto(BASE_URL)
+        page.locator('.bottom-nav [data-page="music"]').tap()
+        page.locator('[data-music-tab="playlists"]').tap()
+        page.locator("#music-playlist-grid > button").first.tap()
+        rows = page.locator("#music-playlist-track-list .music-playlist-track-row")
+        first_title = rows.first.locator(".music-song-copy strong").inner_text()
+        music_touch_drag(page, cdp, rows.first)
+        expect(rows.nth(1).locator(".music-song-copy strong")).to_have_text(first_title)
+        expect(page.locator("#music-mini-title")).to_have_text("晴天")
+
+        page.locator("#music-playlist-back").tap()
+        page.locator('[data-music-tab="recommend"]').tap()
+        page.locator("#music-current-open").tap()
+        page.locator("#music-queue").tap()
+        queue_rows = page.locator("#modal .music-queue-upcoming-section .music-queue-row")
+        queue_first = queue_rows.first.locator(".music-song-copy strong").inner_text()
+        music_touch_drag(page, cdp, queue_rows.first)
+        expect(queue_rows.nth(1).locator(".music-song-copy strong")).to_have_text(queue_first)
+        expect(page.locator("#music-player-track-title")).to_have_text("晴天")
+        queue_rows.first.locator(".music-row-menu-toggle").tap()
+        expect(queue_rows.first.locator(".music-row-menu-popover")).to_be_visible()
+    finally:
+        context.close()
+    print("PASS: music playlist and upcoming queue mouse/touch long-press reordering, click suppression, fixed current track, collapsed played tracks and 320px queue layout.", flush=True)
 
 
 def check_project_navigation(browser, errors):
@@ -2961,6 +3074,7 @@ def run_checks():
         check_progress_workflow(browser, errors)
         check_progress_queue(browser, errors)
         check_music_ui(browser, errors)
+        check_music_reorder(browser, errors)
         check_profile_assets(browser, errors)
         check_alltime_statistics(browser, errors)
         assert not errors, errors

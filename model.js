@@ -1686,6 +1686,22 @@
     return next;
   }
 
+  function musicQueueSections(ids, currentId) {
+    const currentIndex = currentId ? ids.indexOf(currentId) : -1;
+    return {
+      playedIds: currentIndex > 0 ? ids.slice(0, currentIndex) : [],
+      currentId: currentIndex >= 0 ? currentId : null,
+      upcomingIds: currentIndex >= 0 ? ids.slice(currentIndex + 1) : [...ids],
+    };
+  }
+
+  function musicQueueMoveUpcoming(ids, currentId, from, to) {
+    const { upcomingIds } = musicQueueSections(ids, currentId);
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from >= upcomingIds.length || to >= upcomingIds.length) return [...ids];
+    const offset = ids.length - upcomingIds.length;
+    return musicQueueMove(ids, offset + from, offset + to);
+  }
+
   function musicQueueRemove(ids, index) {
     return Number.isInteger(index) && index >= 0 && index < ids.length ? ids.filter((_, current) => current !== index) : [...ids];
   }
@@ -1907,7 +1923,7 @@
     localDateKey, periodRange, initialFocusRecords, selectFocusRecords, focusSummary, focusTrend, focusHourDistribution, focusBreakdown, monthActivity, exportFocusCsv,
     validateProgress, initialProgressEntries, latestProjectProgress, allTimeFocusSummary,
     allTimeRecords, allTimeRange, focusMonthlyTrend, shiftPeriodAnchor, comparePeriods,
-    MUSIC_TRACKS, MUSIC_PLAY_MODES, MUSIC_PLAYLIST_NAME_MAX, initialMusicPlaylists, validateMusicPlaylist, musicQueueMove, musicQueueRemove, musicQueueClearUpcoming, musicQueueNextId, musicListenSeconds, musicListenRecordable,
+    MUSIC_TRACKS, MUSIC_PLAY_MODES, MUSIC_PLAYLIST_NAME_MAX, initialMusicPlaylists, validateMusicPlaylist, musicQueueMove, musicQueueSections, musicQueueMoveUpcoming, musicQueueRemove, musicQueueClearUpcoming, musicQueueNextId, musicListenSeconds, musicListenRecordable,
     parseBilibiliMusicEntry, bilibiliMusicCandidateTitle, BILIBILI_MUSIC_CACHE_DEPTH, bilibiliMusicCacheCid, importedBilibiliMusicCids, bilibiliMusicSourceCid, bilibiliMusicCacheRoots,
     initialMusicListens, musicListeningSummary, musicListeningTrend, compareMusicListening,
     completeTask, setTaskStep, reopenTask, groupCompletedTasks, completedTaskDate, selectCompletedTasks,

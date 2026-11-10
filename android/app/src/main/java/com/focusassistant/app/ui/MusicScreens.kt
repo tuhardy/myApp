@@ -12,6 +12,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -552,7 +554,12 @@ private fun PlaylistDetail(playlist: MusicPlaylist, tracks: List<MusicTrack>, se
     actions: MusicPlaylistActions, onBack: () -> Unit) {
     val byId = tracks.associateBy { it.id }
     val songs = playlist.trackIds.mapNotNull { byId[it] }
-    LazyColumn(modifier, contentPadding = PaddingValues(start = 23.dp, end = 23.dp, top = 14.dp, bottom = 20.dp)) {
+    val listState = rememberLazyListState()
+    val reorder = rememberMusicReorderState(songs.size) { from, to ->
+        actions.save(playlist.copy(trackIds = MusicQueue.move(playlist.trackIds, from, to)))
+    }
+    MusicReorderAutoScroll(reorder, listState)
+    LazyColumn(modifier, state = listState, contentPadding = PaddingValues(start = 23.dp, end = 23.dp, top = 14.dp, bottom = 20.dp)) {
         item {
             Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack, Modifier.size(44.dp).border(1.dp, Line, RoundedCornerShape(50))) {
@@ -593,15 +600,20 @@ private fun PlaylistDetail(playlist: MusicPlaylist, tracks: List<MusicTrack>, se
             }
         }
         if (songs.isEmpty()) item { EmptyCard("这个歌单还没有歌曲", "点击「添加歌曲」从本机曲库选择，不会自动补入其他歌曲。") }
-        else item {
-            Column {
-                songs.forEachIndexed { index, track ->
-                    PlaylistTrackRow(track, track.id == selectedTrackId, index, songs.size,
+        else {
+            itemsIndexed(songs, key = { _, track -> track.id }) { index, track ->
+                Column(Modifier.musicReorderItem(reorder, track.id, index)
+                    .background(if (reorder.draggedId == track.id) Color.White else Color.Transparent)) {
+                    PlaylistTrackRow(track, track.id == selectedTrackId, index, songs.size, reorder,
                         onMove = { target -> actions.save(playlist.copy(trackIds = MusicQueue.move(playlist.trackIds, index, target))) },
                         onRemove = { actions.save(playlist.copy(trackIds = MusicQueue.remove(playlist.trackIds, index))) },
                         onClick = { actions.play(songs, track) })
                     if (index < songs.lastIndex) HorizontalDivider(color = MusicSongLine)
                 }
+            }
+            item {
+                Text("长按歌曲可拖动排序，更多操作在「···」中", Modifier.fillMaxWidth().padding(top = 12.dp),
+                    color = MusicMuted, fontSize = 10.sp, lineHeight = 17.sp, textAlign = TextAlign.Center)
             }
         }
     }
@@ -609,24 +621,20 @@ private fun PlaylistDetail(playlist: MusicPlaylist, tracks: List<MusicTrack>, se
 
 @Composable
 private fun PlaylistTrackRow(track: MusicTrack, selected: Boolean, index: Int, count: Int,
-    onMove: (Int) -> Unit, onRemove: () -> Unit, onClick: () -> Unit) {
+    reorder: MusicReorderState, onMove: (Int) -> Unit, onRemove: () -> Unit, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().heightIn(min = 68.dp).background(if (selected) MusicCurrent else Color.Transparent)
-        .clickable(onClick = onClick).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        .clickable { if (!reorder.shouldSuppressClick(track.id)) onClick() }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         TrackCoverArt(track, Modifier.size(40.dp), radius = 6.dp)
         Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
             Text(track.title, color = if (selected) AccentDark else Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(track.artist, color = MusicMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        IconButton(onClick = { onMove(index - 1) }, enabled = index > 0, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Outlined.KeyboardArrowUp, "上移 ${track.title}", Modifier.size(18.dp))
-        }
-        IconButton(onClick = { onMove(index + 1) }, enabled = index < count - 1, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Outlined.KeyboardArrowDown, "下移 ${track.title}", Modifier.size(18.dp))
-        }
-        IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Outlined.Close, "从歌单移除 ${track.title}", Modifier.size(17.dp), tint = MusicMuted)
-        }
+        MusicRowMenu(track.title, listOf(
+            MusicRowAction("上移", index > 0) { onMove(index - 1) },
+            MusicRowAction("下移", index < count - 1) { onMove(index + 1) },
+            MusicRowAction("从歌单移除") { onRemove() },
+        ))
     }
 }
 

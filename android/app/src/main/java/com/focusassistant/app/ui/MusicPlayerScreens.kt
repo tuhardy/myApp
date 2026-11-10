@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -24,6 +26,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.focusassistant.app.domain.*
 
 private val PlayerOrange = Color(0xFFEF5B24)
@@ -122,46 +125,132 @@ internal fun MusicModeDialog(selected: MusicPlayMode, onDismiss: () -> Unit, onS
 
 @Composable
 internal fun MusicQueueDialog(
-    tracks: List<MusicTrack>, queueIds: List<String>, currentId: String?, onDismiss: () -> Unit,
-    onMove: (Int, Int) -> Unit, onRemove: (Int) -> Unit, onClear: () -> Unit
+    tracks: List<MusicTrack>, playback: MusicPlaybackSnapshot, onDismiss: () -> Unit,
+    onMove: (Int, Int) -> Unit, onRemove: (Int) -> Unit, onClear: () -> Unit, onPlay: (Int) -> Unit
 ) {
     val byId = tracks.associateBy { it.id }
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(Modifier.fillMaxWidth().heightIn(max = 620.dp), shape = RoundedCornerShape(16.dp), color = Color.White) {
-            Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("播放队列", Modifier.weight(1f), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                    TextButton(onClick = onClear, enabled = queueIds.size > 1) { Text("清空待播") }
-                }
-                Text("${queueIds.size} 首 · 随机模式由播放器另行打乱顺序", color = MusicMuted, fontSize = 11.sp,
-                    modifier = Modifier.padding(bottom = 10.dp))
-                if (queueIds.isEmpty()) Text("队列已清空，从歌曲页选择一首即可重新播放。", color = MusicMuted,
-                    modifier = Modifier.padding(vertical = 30.dp), fontSize = 13.sp)
-                else LazyColumn {
-                    items(queueIds.size, key = { queueIds[it] }) { index ->
-                        val track = byId[queueIds[index]] ?: return@items
-                        Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(track.title, color = if (track.id == currentId) AccentDark else Ink,
-                                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(if (track.id == currentId) "当前播放" else track.artist, color = MusicMuted, fontSize = 10.sp)
-                            }
-                            IconButton(onClick = { onMove(index, index - 1) }, enabled = index > 0, modifier = Modifier.size(38.dp)) {
-                                Icon(Icons.Outlined.KeyboardArrowUp, "上移 ${track.title}", Modifier.size(19.dp))
-                            }
-                            IconButton(onClick = { onMove(index, index + 1) }, enabled = index < queueIds.lastIndex, modifier = Modifier.size(38.dp)) {
-                                Icon(Icons.Outlined.KeyboardArrowDown, "下移 ${track.title}", Modifier.size(19.dp))
-                            }
-                            IconButton(onClick = { onRemove(index) }, Modifier.size(38.dp)) {
-                                Icon(Icons.Outlined.Close, "从队列移除 ${track.title}", Modifier.size(18.dp))
+    val sections = MusicQueue.sections(playback.queueIds, playback.trackId)
+    var playedOpen by remember(playback.trackId) { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val reorder = rememberMusicReorderState(sections.upcomingIds.size, onMove)
+    MusicReorderAutoScroll(reorder, listState)
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+            Surface(Modifier.fillMaxWidth().fillMaxHeight(0.92f),
+                shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp), color = Color.White) {
+                Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
+                    Box(Modifier.align(Alignment.CenterHorizontally).padding(top = 9.dp, bottom = 8.dp)
+                        .size(36.dp, 4.dp).background(MusicLine, RoundedCornerShape(2.dp)))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("播放队列", Modifier.weight(1f), fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+                        IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "关闭播放队列") }
+                    }
+                    sections.currentId?.let(byId::get)?.let { track ->
+                        BoxWithConstraints(Modifier.fillMaxWidth()) {
+                            val showPlaybackStatus = maxWidth >= 320.dp
+                            Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = Color(0xFFF5F6F6)) {
+                                Column(Modifier.padding(horizontal = 12.dp, vertical = 11.dp)) {
+                                    Text("正在播放", color = AccentDark, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        TrackCoverArt(track, Modifier.size(48.dp), radius = 7.dp)
+                                        Column(Modifier.weight(1f).padding(horizontal = 11.dp)) {
+                                            Text(track.title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text(track.artist, Modifier.padding(top = 3.dp), color = MusicMuted, fontSize = 11.sp,
+                                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                        Icon(Icons.Outlined.GraphicEq, if (playback.playing) "正在播放" else "已暂停",
+                                            Modifier.size(18.dp), tint = PlayerOrange)
+                                        if (showPlaybackStatus) {
+                                            Text(if (playback.playing) "正在播放" else "已暂停", Modifier.padding(start = 5.dp),
+                                                color = AccentDark, fontSize = 10.sp)
+                                        }
+                                        MusicRowMenu(track.title, listOf(MusicRowAction("从队列移除") {
+                                            playback.queueIds.indexOf(track.id).takeIf { it >= 0 }?.let(onRemove)
+                                        }))
+                                    }
+                                    val progress = if (playback.durationMs > 0)
+                                        (playback.positionMs.toFloat() / playback.durationMs).coerceIn(0f, 1f) else 0f
+                                    LinearProgressIndicator(progress = { progress }, Modifier.fillMaxWidth().padding(top = 10.dp).height(2.dp),
+                                        color = PlayerOrange, trackColor = MusicLine)
+                                    Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                                        Text(musicPositionText(playback.positionMs), Modifier.weight(1f), color = MusicMuted, fontSize = 10.sp)
+                                        Text(musicPositionText(playback.durationMs), color = MusicMuted, fontSize = 10.sp)
+                                    }
+                                }
                             }
                         }
-                        HorizontalDivider(color = MusicLine)
                     }
+                    Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("接下来播放 · ${sections.upcomingIds.size} 首", Modifier.weight(1f),
+                            fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        TextButton(onClick = onClear, enabled = playback.queueIds.size > 1) { Text("清空待播", fontSize = 11.sp) }
+                    }
+                    HorizontalDivider(color = MusicLine)
+                    LazyColumn(Modifier.weight(1f), state = listState) {
+                        itemsIndexed(sections.upcomingIds, key = { _, id -> id }) { index, id ->
+                            val track = byId[id] ?: return@itemsIndexed
+                            Column(Modifier.musicReorderItem(reorder, id, index)
+                                .background(if (reorder.draggedId == id) Color.White else Color.Transparent)) {
+                                MusicQueueTrackRow(track, reorder, onClick = { onPlay(playback.queueIds.indexOf(id)) }, actions = listOf(
+                                    MusicRowAction("上移", index > 0) { onMove(index, index - 1) },
+                                    MusicRowAction("下移", index < sections.upcomingIds.lastIndex) { onMove(index, index + 1) },
+                                    MusicRowAction("从队列移除") { onRemove(playback.queueIds.indexOf(id)) },
+                                ))
+                                if (index < sections.upcomingIds.lastIndex) HorizontalDivider(color = MusicLine)
+                            }
+                        }
+                        if (sections.upcomingIds.isEmpty()) item {
+                            Text(if (sections.currentId != null) "当前歌曲之后没有待播歌曲。" else "队列已清空，从歌曲页选择一首即可重新播放。",
+                                Modifier.fillMaxWidth().padding(vertical = 28.dp), color = MusicMuted, fontSize = 12.sp,
+                                lineHeight = 20.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        }
+                        if (sections.upcomingIds.size > 1) item {
+                            Text("长按歌曲拖动排序，更多操作在「···」中", Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
+                                color = MusicMuted, fontSize = 10.sp, lineHeight = 17.sp,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        }
+                        if (playback.mode == MusicPlayMode.SHUFFLE) item {
+                            Text("随机模式的实际播放顺序由播放器决定，拖动仍会保存队列顺序。",
+                                Modifier.padding(bottom = 8.dp), color = MusicMuted, fontSize = 10.sp, lineHeight = 17.sp)
+                        }
+                    }
+                    if (sections.playedIds.isNotEmpty()) {
+                        HorizontalDivider(color = MusicLine)
+                        Row(Modifier.fillMaxWidth().heightIn(min = 46.dp).clickable { playedOpen = !playedOpen },
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text("已播放 ${sections.playedIds.size} 首", Modifier.weight(1f), color = MusicMuted, fontSize = 12.sp)
+                            Text(if (playedOpen) "收起" else "展开", fontSize = 11.sp)
+                        }
+                        if (playedOpen) LazyColumn(Modifier.heightIn(max = 220.dp)) {
+                            itemsIndexed(sections.playedIds, key = { _, id -> id }) { _, id ->
+                                val track = byId[id] ?: return@itemsIndexed
+                                MusicQueueTrackRow(track, null, onClick = { onPlay(playback.queueIds.indexOf(id)) },
+                                    actions = listOf(MusicRowAction("从队列移除") { onRemove(playback.queueIds.indexOf(id)) }))
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
                 }
-                TextButton(onClick = onDismiss, Modifier.align(Alignment.End).padding(top = 8.dp)) { Text("关闭") }
             }
         }
+    }
+}
+
+@Composable
+private fun MusicQueueTrackRow(
+    track: MusicTrack, reorder: MusicReorderState?, onClick: () -> Unit, actions: List<MusicRowAction>
+) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 66.dp)
+        .clickable { if (reorder?.shouldSuppressClick(track.id) != true) onClick() }
+        .padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        TrackCoverArt(track, Modifier.size(40.dp), radius = 6.dp)
+        Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+            Text(track.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(track.artist, color = MusicMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Text(musicPositionText(track.durationSeconds * 1000), color = MusicMuted, fontSize = 10.sp)
+        MusicRowMenu(track.title, actions)
     }
 }
 

@@ -224,6 +224,23 @@ internal class MusicPlaybackClient(
         emit()
     }
 
+    fun moveUpcoming(from: Int, to: Int) {
+        val current = controller ?: return
+        val offset = current.currentMediaItemIndex + 1
+        move(offset + from, offset + to)
+    }
+
+    fun playQueueIndex(index: Int) {
+        val current = controller ?: return
+        if (index !in 0 until current.mediaItemCount) return
+        if (index == current.currentMediaItemIndex) toggle()
+        else {
+            current.seekTo(index, 0)
+            current.play()
+            emit()
+        }
+    }
+
     fun remove(index: Int) {
         val current = controller ?: return
         if (index in 0 until current.mediaItemCount) current.removeMediaItem(index)

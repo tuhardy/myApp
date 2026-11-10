@@ -42,7 +42,27 @@ data class MusicPlaybackSnapshot(
     val connected: Boolean = false
 )
 
+data class MusicQueueSections(
+    val playedIds: List<String>, val currentId: String?, val upcomingIds: List<String>
+)
+
 object MusicQueue {
+    fun sections(ids: List<String>, currentId: String?): MusicQueueSections {
+        val currentIndex = currentId?.let(ids::indexOf) ?: -1
+        return MusicQueueSections(
+            playedIds = if (currentIndex > 0) ids.subList(0, currentIndex) else emptyList(),
+            currentId = if (currentIndex >= 0) currentId else null,
+            upcomingIds = if (currentIndex >= 0) ids.subList(currentIndex + 1, ids.size) else ids,
+        )
+    }
+
+    fun moveUpcoming(ids: List<String>, currentId: String?, from: Int, to: Int): List<String> {
+        val upcoming = sections(ids, currentId).upcomingIds
+        if (from !in upcoming.indices || to !in upcoming.indices) return ids
+        val offset = ids.size - upcoming.size
+        return move(ids, offset + from, offset + to)
+    }
+
     fun move(ids: List<String>, from: Int, to: Int): List<String> {
         if (from !in ids.indices || to !in ids.indices || from == to) return ids
         return ids.toMutableList().apply { add(to, removeAt(from)) }
