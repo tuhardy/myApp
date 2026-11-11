@@ -224,6 +224,32 @@ class MusicScreenshotTest {
         }
     }
 
+    @Test fun queueMultiRowDragKeepsSettledViewportAfterCommit() {
+        val playback = MusicPlaybackSnapshot("track-2", true, 42_000, 202_000,
+            tracks.map { it.id }, MusicPlayMode.REPEAT_ALL, connected = true)
+        var moved: Pair<Int, Int>? = null
+        compose.setContent {
+            FocusTheme {
+                MusicQueueDialog(tracks, playback, onDismiss = {}, onMove = { from, to -> moved = from to to },
+                    onRemove = {}, onClear = {}, onPlay = {})
+            }
+        }
+        val firstRow = compose.onNodeWithText("测试歌曲3")
+        val settledFirstTop = firstRow.fetchSemanticsNode().boundsInRoot.top
+        firstRow.performTouchInput {
+            down(center)
+            advanceEventTime(500)
+            moveBy(Offset(0f, 540f))
+        }
+        compose.onNodeWithText("测试歌曲6").assertIsDisplayed()
+        firstRow.performTouchInput { up() }
+        compose.runOnIdle {
+            assertEquals(0 to 3, moved)
+            val finalFirstTop = compose.onNodeWithText("测试歌曲4").fetchSemanticsNode().boundsInRoot.top
+            assertEquals("跨多行提交后应保持让位后的可见窗口", settledFirstTop, finalFirstTop, 2f)
+        }
+    }
+
     @Test fun playlistEditorKeepsSelectionOrderAndShowsRealTracks() {
         var saved: MusicPlaylist? = null
         compose.setContent {

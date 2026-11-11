@@ -97,6 +97,9 @@ internal class MusicReorderState(
     private var lastDraggedId: String? = null
     private var lastDragEndedAt = 0L
 
+    private data class ScrollAnchor(val index: Int, val scrollOffset: Int)
+    private data class VisibleRow(val index: Int, val top: Float, val size: Float)
+
     fun updateItems(ids: List<String>) {
         if (ids == itemIds) return
         if (draggedId != null && !settling) clear()
@@ -178,6 +181,34 @@ internal class MusicReorderState(
         }
     }
 
+    /** 以吸附完成后的视觉位置为锚，避免 keyed LazyColumn 跟着被拖拽行重新定位视口。 */
+    private fun settledScrollAnchor(from: Int, target: Int): ScrollAnchor? {
+        val layout = listState.layoutInfo
+        val viewportStart = layout.viewportStartOffset.toFloat()
+        val rows = layout.visibleItemsInfo.mapNotNull { info ->
+            val id = info.key as? String ?: return@mapNotNull null
+            if (id == draggedId) return@mapNotNull null
+            val index = itemIds.indexOf(id)
+            if (index < 0) return@mapNotNull null
+            VisibleRow(index, info.offset + translation(id, index), info.size.toFloat())
+        } + draggedId?.let {
+            listOf(VisibleRow(from, draggedTop, draggedSize))
+        }.orEmpty()
+        val anchor = rows.firstOrNull { row ->
+            viewportStart >= row.top && viewportStart < row.top + row.size
+        } ?: return null
+        val newIndex = movedIndex(anchor.index, from, target)
+        val scrollOffset = (viewportStart - anchor.top).roundToInt().coerceAtLeast(0)
+        return ScrollAnchor(newIndex, scrollOffset)
+    }
+
+    private fun movedIndex(index: Int, from: Int, target: Int): Int = when {
+        index == from -> target
+        from < target && index in (from + 1)..target -> index - 1
+        from > target && index in target until from -> index + 1
+        else -> index
+    }
+
     fun end(scope: CoroutineScope): Boolean = finish(scope, commit = true)
 
     fun cancel(scope: CoroutineScope): Boolean = finish(scope, commit = false)
@@ -209,9 +240,12 @@ internal class MusicReorderState(
                     }
                 }
                 if (commit && target != from) {
+                    val anchor = settledScrollAnchor(from, target)
                     onMove(from, target)
                     // 新顺序使用新布局，旧的让位位移必须立即归零，不能再动画一次。
                     committed = true
+                    // 同一帧恢复吸附完成时的可见窗口，而不是跟随被拖拽 key 跳到新索引。
+                    anchor?.let { listState.scrollToItem(it.index, it.scrollOffset) }
                     withFrameNanos { }
                     withFrameNanos { }
                 }
