@@ -364,7 +364,8 @@ internal fun Modifier.musicReorderItem(
             }
         }
         .graphicsLayer {
-            translationY = if (dragging || !enabled) 0f else siblingTranslation
+            // 新顺序布局生效时必须同步清除旧让位位移，不能等 snap 动画下一帧归零。
+            translationY = if (dragging || !enabled || state.committed) 0f else siblingTranslation
         }
 }
 
