@@ -603,6 +603,57 @@ class AutoApplyTest {
         assertEquals(2, back.run.backs)
     }
 
+    @Test fun zhaopinAlreadyCommunicatedDialogReturnsWithoutNewApplication() {
+        // 真机 8.15.12：弹窗位于沟通 Activity 之上，必须优先于底层 CHAT 处理。
+        val dialog = UiNode(emptyList(), children = listOf(
+            UiNode(listOf(0), viewId = "com.zhaopin.social:id/tv_content", clickable = true,
+                text = "你与该招聘者已沟通过，是否切换职位「示例岗位」继续沟通？"),
+            UiNode(listOf(1), viewId = "com.zhaopin.social:id/tv_not_confirm", clickable = true, text = "取消"),
+            UiNode(listOf(2), viewId = "com.zhaopin.social:id/tv_confirm", clickable = true, text = "切换职位")))
+        val reading = ZhaopinScreenReader.read(dialog, noon)
+        assertEquals(BossScreen.ALREADY_COMMUNICATED, reading.observation.screen)
+
+        val run = ZhaopinRun(mode = AutoApplyMode.LIVE, phase = ZhaopinPhase.APPLYING, phaseSince = noon, target = card)
+        val step = ZhaopinApplyEngine.step(run, reading.observation, AutoApplySettings(), emptyList(), zone, newId)
+        assertEquals(ZhaopinAction.Back, step.action)
+        assertEquals(ZhaopinPhase.RETURNING, step.run.phase)
+        assertEquals(AutoApplyResult.ALREADY_CONTACTED, step.record?.result)
+        assertEquals(0, step.run.applied)
+        // 弹窗尚未关闭时不叠加返回；关闭后到底层沟通页，再返回到详情/列表，且不重复写记录。
+        assertEquals(ZhaopinAction.Wait, ZhaopinApplyEngine.step(step.run, reading.observation.copy(now = noon + 1000),
+            AutoApplySettings(), listOfNotNull(step.record), zone, newId).action)
+        val backFromChat = ZhaopinApplyEngine.step(step.run, BossObservation(BossScreen.CHAT, now = noon + 2000),
+            AutoApplySettings(), listOfNotNull(step.record), zone, newId)
+        assertEquals(ZhaopinAction.Back, backFromChat.action)
+        assertNull(backFromChat.record)
+    }
+
+    @Test fun zhaopinOfflineJobReturnsAndSkipsWithoutApplication() {
+        // 真机 8.15.12：下线职位保留详情容器，底部按钮禁用且没有投递文字。
+        val detail = UiNode(emptyList(), children = listOf(
+            UiNode(listOf(0), viewId = "com.zhaopin.social:id/tv_top_tip", text = "该职位刚刚下线，请看看其他机会吧"),
+            UiNode(listOf(1), viewId = "com.zhaopin.social:id/layout_button_deliver", children = listOf(
+                UiNode(listOf(1, 0), viewId = "com.zhaopin.social:id/tv_deliver_or_chat", text = "职位已下线")))))
+        val reading = ZhaopinScreenReader.read(detail, noon)
+        assertEquals(BossScreen.JOB_UNAVAILABLE, reading.observation.screen)
+
+        val run = ZhaopinRun(mode = AutoApplyMode.LIVE, phase = ZhaopinPhase.OPENING, phaseSince = noon, target = card)
+        val step = ZhaopinApplyEngine.step(run, reading.observation, AutoApplySettings(), emptyList(), zone, newId)
+        assertEquals(ZhaopinAction.Back, step.action)
+        assertEquals(ZhaopinPhase.RETURNING, step.run.phase)
+        assertEquals(AutoApplyResult.UNAVAILABLE, step.record?.result)
+        assertEquals(0, step.run.applied)
+        val records = listOfNotNull(step.record)
+        assertEquals(0, AutoApplyRules.contactedOn(records, AutoApplyRules.localDay(noon, zone), zone, JobPlatform.ZHAOPIN))
+        assertEquals(AutoApplyDecision.Skip("职位已下线"),
+            AutoApplyRules.decide(card, AutoApplySettings(), records, AutoApplyRules.localDay(noon, zone), zone, JobPlatform.ZHAOPIN))
+        // 返回未生效时只等待，不重复记录或连续返回。
+        val waiting = ZhaopinApplyEngine.step(step.run, reading.observation.copy(now = noon + 1000),
+            AutoApplySettings(), records, zone, newId)
+        assertEquals(ZhaopinAction.Wait, waiting.action)
+        assertNull(waiting.record)
+    }
+
     @Test fun zhaopinApplyPathSurvivesSkippedChildrenAndPrefersClickable() {
         // 下标 0 的子树在屏幕外被跳过；按钮的可点击容器原始下标为 2，children 里排第 1。
         val detail = UiNode(emptyList(), children = listOf(

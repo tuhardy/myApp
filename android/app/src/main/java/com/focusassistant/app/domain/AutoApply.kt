@@ -78,8 +78,8 @@ data class FilterPreset(
 /** name 须与 BOSS 里附件简历的文件名一致（可省略扩展名）。 */
 data class ResumeProfile(val id: String, val name: String, val keywords: List<String> = emptyList(), val isDefault: Boolean = false)
 
-/** APPLIED：智联界面上点了投递并看到成功提示，不代表 HR 已查看。 */
-enum class AutoApplyResult { CONTACTED, ALREADY_CONTACTED, FAILED, RESUME_SENT, APPLIED }
+/** APPLIED：智联界面上点了投递并看到成功提示，不代表 HR 已查看；UNAVAILABLE：职位已下线，不能投递。 */
+enum class AutoApplyResult { CONTACTED, ALREADY_CONTACTED, FAILED, RESUME_SENT, APPLIED, UNAVAILABLE }
 
 data class AutoApplyRecord(
     val id: String,
@@ -162,7 +162,9 @@ object AutoApplyRules {
         if (card.position.isBlank() || card.company.isBlank()) return AutoApplyDecision.Skip("未识别出职位或公司")
         val key = jobKey(card)
         val own = records.filter { it.platform == platform }
-        if (own.any { it.jobKey == key && it.result != AutoApplyResult.FAILED }) return AutoApplyDecision.Skip(if (platform == JobPlatform.ZHAOPIN) "已投递过" else "已沟通过")
+        val previous = own.firstOrNull { it.jobKey == key && it.result != AutoApplyResult.FAILED }
+        if (previous != null) return AutoApplyDecision.Skip(if (previous.result == AutoApplyResult.UNAVAILABLE) "职位已下线"
+            else if (platform == JobPlatform.ZHAOPIN) "已投递过" else "已沟通过")
         val company = card.company.trim().lowercase()
         if (own.any { isReach(it) && it.company.trim().lowercase() == company && localDay(it.at, zone) == day }) {
             return AutoApplyDecision.Skip("今天已联系过这家公司")
@@ -346,7 +348,7 @@ data class UiNode(
 }
 
 /** APPLY_DONE 只用于智联：投递后的成功提示。 */
-enum class BossScreen { JOB_LIST, JOB_DETAIL, CHAT, MESSAGE_LIST, RESUME_PICKER, RESUME_CONFIRM, VERIFY, LIMIT_REACHED, LOGIN, APPLY_DONE, OTHER }
+enum class BossScreen { JOB_LIST, JOB_DETAIL, JOB_UNAVAILABLE, CHAT, MESSAGE_LIST, RESUME_PICKER, RESUME_CONFIRM, VERIFY, LIMIT_REACHED, LOGIN, APPLY_DONE, ALREADY_COMMUNICATED, OTHER }
 
 /** 消息列表里的一个会话：只取公司名和有没有未读角标，不读最后一条消息。 */
 data class Conversation(val company: String, val unread: Boolean)
@@ -555,6 +557,10 @@ object ZhaopinScreenReader {
         if (labels.any { label -> limitWords.any { label.contains(it) } || (label.contains("上限") && (label.contains("投递") || label.contains("申请"))) }) {
             return BossReading(obs(BossScreen.LIMIT_REACHED))
         }
+        // 历史已沟通弹窗盖在沟通页上；必须先于底层 CHAT 识别，且不能点「切换职位」或记为本次新投递。
+        val communicatedNotice = labels.any { (it.contains("已沟通过") || it.contains("已经沟通过")) && it.contains("继续沟通") }
+        val switchJob = labels.any { it.trim() == "切换职位" || it.trim() == "切换岗位" }
+        if (communicatedNotice && switchJob) return BossReading(obs(BossScreen.ALREADY_COMMUNICATED))
         if (labels.any { label -> doneWords.any { label.contains(it) } }) return BossReading(obs(BossScreen.APPLY_DONE))
         // 智联 8.15.12 投递成功后会直接进入沟通页。只按固定控件 ID 识别，不读取聊天内容。
         val chatInput = nodes.any { it.editable && it.viewId.endsWith("/editTextMessage") }
@@ -576,11 +582,17 @@ object ZhaopinScreenReader {
             return BossReading(obs(BossScreen.RESUME_CONFIRM).copy(resumeOptions = labels.filter { it !in buttonLabels }, hasConfirm = true),
                 confirmPath = clickablePath(root, confirm.path))
         }
+        val hasDetailContainer = nodes.any { node -> detailIds.any { node.viewId.endsWith(it) } }
+        // 下线职位仍保留详情容器，但底部只有禁用的「职位已下线」，不能当成投递按钮缺失而停止整轮。
+        val unavailable = hasDetailContainer && labels.any {
+            val label = it.trim()
+            label == "职位已下线" || label.contains("该职位刚刚下线")
+        }
+        if (unavailable) return BossReading(obs(BossScreen.JOB_UNAVAILABLE))
         val applied = nodes.firstOrNull { it.label.trim() in appliedLabels }
         // 同名文字可能先出现在不可点的标题或说明里，优先取自身或祖先可点击的那一个。
         val applyNodes = nodes.filter { it.label.trim() in applyLabels }
         val apply = applyNodes.firstOrNull { hasClickable(root, it.path) } ?: applyNodes.firstOrNull()
-        val hasDetailContainer = nodes.any { node -> detailIds.any { node.viewId.endsWith(it) } }
         if (applied != null || apply != null || hasDetailContainer) {
             return BossReading(obs(BossScreen.JOB_DETAIL, applied = applied != null), contactPath = apply?.let { clickablePath(root, it.path) })
         }
@@ -1000,6 +1012,14 @@ object ZhaopinApplyEngine {
         // 成功提示可能一闪而过；回到详情页变为「已申请」或进入智联沟通页，同样视为投递完成。
         fun finished() = obs.screen == BossScreen.APPLY_DONE || obs.screen == BossScreen.CHAT ||
             (obs.screen == BossScreen.JOB_DETAIL && obs.alreadyContacted)
+        if (obs.screen == BossScreen.JOB_UNAVAILABLE && run.phase != ZhaopinPhase.RETURNING) {
+            return ZhaopinStep(returning(), ZhaopinAction.Back,
+                record(AutoApplyResult.UNAVAILABLE, "职位已下线"), "职位已下线，跳过$name")
+        }
+        if (obs.screen == BossScreen.ALREADY_COMMUNICATED && run.phase != ZhaopinPhase.RETURNING) {
+            return ZhaopinStep(returning(), ZhaopinAction.Back,
+                record(AutoApplyResult.ALREADY_CONTACTED, "智联提示已与招聘者沟通过"), "已与招聘者沟通过，跳过$name")
+        }
         return when (run.phase) {
             ZhaopinPhase.SCANNING -> scan(run, obs, settings, records, zone)
             ZhaopinPhase.OPENING -> when (obs.screen) {

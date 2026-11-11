@@ -635,6 +635,7 @@ private fun resultLabel(result: AutoApplyResult): String = when (result) {
     AutoApplyResult.FAILED -> "失败"
     AutoApplyResult.RESUME_SENT -> "已发简历"
     AutoApplyResult.APPLIED -> "已投递"
+    AutoApplyResult.UNAVAILABLE -> "职位已下线"
 }
 
 @Composable

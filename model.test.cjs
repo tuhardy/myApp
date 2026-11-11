@@ -1882,6 +1882,9 @@ test("智联：去重、计数与上限按平台分开，投递记为 applied �
   const boss = { jobKey: "示例科技|android 开发|20-30k", company: "示例科技", position: "Android 开发", day, result: "contacted" };
   assert.equal(autoApplyDecision(card, defaultAutoApplySettings(), [boss], day, "zhaopin").apply, true);
   assert.equal(autoApplyDecision(card, defaultAutoApplySettings(), [{ ...boss, platform: "zhaopin", result: "applied" }], day, "zhaopin").reason, "已投递过");
+  const unavailable = { ...boss, platform: "zhaopin", result: "unavailable" };
+  assert.equal(autoApplyDecision(card, defaultAutoApplySettings(), [unavailable], day, "zhaopin").reason, "职位已下线");
+  assert.equal(autoApplyContactedOn([unavailable], day, "zhaopin"), 0);
   const settings = { ...defaultAutoApplySettings(), platform: "zhaopin", zhaopinDailyLimit: 1, resumes: [{ id: "a", name: "张三-Android", keywords: ["Android"], isDefault: false }] };
   assert.equal(autoApplyLimit(settings), 1);
   assert.equal(autoApplyLimit(settings, "boss"), 30);

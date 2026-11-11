@@ -5061,7 +5061,7 @@
   }
 
   const AUTO_TASK_LABELS = Object.freeze({ contact: "自动沟通中", resume: "自动发简历中", apply: "智联投递中" });
-  const AUTO_RESULT_LABELS = Object.freeze({ contacted: "已沟通", already: "之前沟通过", failed: "失败", "resume-sent": "已发简历", applied: "已投递" });
+  const AUTO_RESULT_LABELS = Object.freeze({ contacted: "已沟通", already: "之前沟通过", failed: "失败", "resume-sent": "已发简历", applied: "已投递", unavailable: "职位已下线" });
 
   /** 运行中以任务平台为准，空闲时用设置里选中的平台。 */
   function autoPlatform(auto) {

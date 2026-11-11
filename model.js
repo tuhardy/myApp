@@ -1485,7 +1485,7 @@
   }
 
   /**
-   * records: [{ jobKey, company, day: "YYYY-MM-DD", result: "contacted" | "applied" | "already" | "failed", platform }]
+   * records: [{ jobKey, company, day: "YYYY-MM-DD", result: "contacted" | "applied" | "already" | "failed" | "unavailable", platform }]
    * 去重与「同公司每天一次」只看同一平台的记录。
    */
   function autoApplyDecision(card, settings, records, day, platform = "boss") {
@@ -1493,7 +1493,8 @@
     if (!String(card.position ?? "").trim() || !String(card.company ?? "").trim()) return { apply: false, reason: "未识别出职位或公司" };
     const key = autoApplyJobKey(card);
     const own = records.filter(item => recordPlatform(item) === platform);
-    if (own.some(item => item.jobKey === key && item.result !== "failed")) return { apply: false, reason: platform === "zhaopin" ? "已投递过" : "已沟通过" };
+    const previous = own.find(item => item.jobKey === key && item.result !== "failed");
+    if (previous) return { apply: false, reason: previous.result === "unavailable" ? "职位已下线" : platform === "zhaopin" ? "已投递过" : "已沟通过" };
     const company = String(card.company).trim().toLowerCase();
     if (own.some(item => isReach(item) && String(item.company).trim().toLowerCase() === company && item.day === day)) return { apply: false, reason: "今天已联系过这家公司" };
     const black = settings.companyBlacklist.find(word => includes(card.company, word));
