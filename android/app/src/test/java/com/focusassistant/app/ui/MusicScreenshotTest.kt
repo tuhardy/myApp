@@ -68,14 +68,16 @@ class MusicScreenshotTest {
         }
     }
 
-    private fun render(state: MusicUiState, withData: Boolean = true, messages: MutableList<String> = mutableListOf()) {
+    private fun render(state: MusicUiState, withData: Boolean = true, messages: MutableList<String> = mutableListOf(),
+        onSavePlaylist: (MusicPlaylist) -> Unit = {}) {
         compose.setContent {
             FocusTheme {
                 MusicScreen(if (withData) tracks else emptyList(), if (withData) listens else emptyList(),
                     if (withData) playlists else emptyList(), state, today, messages::add,
                     onPlay = { track -> state.selectedTrackId = track.id; state.playing = true },
                     onToggle = { state.playing = !state.playing },
-                    playlistActions = MusicPlaylistActions(play = { _, track -> state.selectedTrackId = track.id; state.playing = true }))
+                    playlistActions = MusicPlaylistActions(play = { _, track -> state.selectedTrackId = track.id; state.playing = true },
+                        save = onSavePlaylist))
             }
         }
     }
@@ -133,6 +135,54 @@ class MusicScreenshotTest {
         compose.onNodeWithText("我的歌单", substring = true).assertExists()
     }
 
+    @Test fun playlistDragKeepsAdjacentRowsVisibleAndSavesOrder() {
+        var saved: MusicPlaylist? = null
+        render(MusicUiState(), onSavePlaylist = { saved = it })
+        compose.onNodeWithContentDescription("歌单 通勤流行，4 首").performClick()
+        val draggedRow = compose.onNodeWithText("测试歌曲0")
+        draggedRow.performTouchInput {
+            down(center)
+            advanceEventTime(500)
+            moveBy(Offset(0f, 160f))
+        }
+        compose.onNodeWithText("测试歌曲0").assertIsDisplayed()
+        compose.onNodeWithText("测试歌曲1").assertIsDisplayed()
+        compose.onNodeWithText("测试歌曲2").assertIsDisplayed()
+        compose.waitForIdle()
+        val draggedTop = compose.onNodeWithText("测试歌曲0").fetchSemanticsNode().boundsInRoot.top
+        val siblingTop = compose.onNodeWithText("测试歌曲1").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("拖拽浮层应跟随手指越过让位行：dragged=$draggedTop sibling=$siblingTop", draggedTop > siblingTop)
+        capture("music-playlist-dragging")
+        draggedRow.performTouchInput { up() }
+        compose.runOnIdle {
+            assertEquals(listOf("track-1", "track-0", "track-2", "track-3"), saved?.trackIds)
+        }
+    }
+
+    @Test fun playlistDragCanReverseWithoutCommittingOrPlaying() {
+        var saveCount = 0
+        val state = MusicUiState()
+        render(state, onSavePlaylist = { saveCount += 1 })
+        compose.onNodeWithContentDescription("歌单 通勤流行，4 首").performClick()
+        val draggedRow = compose.onNodeWithText("测试歌曲0")
+        draggedRow.performTouchInput {
+            down(center)
+            advanceEventTime(500)
+            moveBy(Offset(0f, 380f))
+        }
+        compose.onNodeWithText("测试歌曲0").assertIsDisplayed()
+        compose.onNodeWithText("测试歌曲1").assertIsDisplayed()
+        compose.onNodeWithText("测试歌曲2").assertIsDisplayed()
+        draggedRow.performTouchInput { moveBy(Offset(0f, -300f)) }
+        compose.onNodeWithText("测试歌曲0").assertIsDisplayed()
+        compose.onNodeWithText("测试歌曲1").assertIsDisplayed()
+        draggedRow.performTouchInput { up() }
+        compose.runOnIdle {
+            assertEquals(0, saveCount)
+            assertEquals(null, state.selectedTrackId)
+        }
+    }
+
     @Test fun queuePinsCurrentAndCollapsesPlayedTracks() {
         val playback = MusicPlaybackSnapshot("track-2", true, 42_000, 202_000,
             tracks.map { it.id }, MusicPlayMode.REPEAT_ALL, connected = true)
@@ -155,14 +205,21 @@ class MusicScreenshotTest {
 
         moved = null
         compose.onNodeWithText("已播放 2 首").performClick()
-        compose.onNodeWithText("测试歌曲3").performTouchInput {
+        val draggedRow = compose.onNodeWithText("测试歌曲3")
+        draggedRow.performTouchInput {
             down(center)
             advanceEventTime(500)
-            moveBy(Offset(0f, 60f))
-            up()
+            moveBy(Offset(0f, 160f))
         }
+        compose.onNodeWithText("测试歌曲3").assertIsDisplayed()
+        compose.onNodeWithText("测试歌曲5").assertIsDisplayed()
+        val draggedTop = compose.onNodeWithText("测试歌曲3").fetchSemanticsNode().boundsInRoot.top
+        val siblingTop = compose.onNodeWithText("测试歌曲5").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("队列浮层应跟随手指越过让位行", draggedTop > siblingTop)
+        capture("music-queue-dragging", dialog = true)
+        draggedRow.performTouchInput { up() }
         compose.runOnIdle {
-            assertEquals(0 to 1, moved)
+            assertEquals(1 to 2, moved)
             assertTrue("拖拽松手不应触发播放", played == null)
         }
     }

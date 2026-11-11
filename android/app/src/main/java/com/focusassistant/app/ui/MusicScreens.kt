@@ -553,70 +553,89 @@ private fun MusicPlaylistGrid(playlists: List<MusicPlaylist>, tracks: List<Music
 private fun PlaylistDetail(playlist: MusicPlaylist, tracks: List<MusicTrack>, selectedTrackId: String?, modifier: Modifier,
     actions: MusicPlaylistActions, onBack: () -> Unit) {
     val byId = tracks.associateBy { it.id }
-    val songs = playlist.trackIds.mapNotNull { byId[it] }
+    var orderedTrackIds by remember(playlist.id, playlist.trackIds) { mutableStateOf(playlist.trackIds) }
+    val songs = orderedTrackIds.mapNotNull { byId[it] }
     val listState = rememberLazyListState()
-    val reorder = rememberMusicReorderState(songs.size) { from, to ->
-        actions.save(playlist.copy(trackIds = MusicQueue.move(playlist.trackIds, from, to)))
+    val saveOrder: (List<String>) -> Unit = { updated ->
+        orderedTrackIds = updated
+        actions.save(playlist.copy(trackIds = updated))
     }
-    MusicReorderAutoScroll(reorder, listState)
-    LazyColumn(modifier, state = listState, contentPadding = PaddingValues(start = 23.dp, end = 23.dp, top = 14.dp, bottom = 20.dp)) {
-        item {
-            Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack, Modifier.size(44.dp).border(1.dp, Line, RoundedCornerShape(50))) {
-                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回", Modifier.size(18.dp))
-                }
-                Text("歌单", fontSize = 18.sp, lineHeight = 27.sp, letterSpacing = (-0.3).sp,
-                    fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 12.dp).weight(1f))
-                TextButton(onClick = { actions.edit(playlist) }) { Text("编辑", fontSize = 12.sp) }
-                IconButton(onClick = { actions.delete(playlist) }, Modifier.size(44.dp)) {
-                    Icon(Icons.Outlined.DeleteOutline, "删除歌单", tint = MusicMuted, modifier = Modifier.size(19.dp))
-                }
-            }
-        }
-        item {
-            Column {
-                Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-                    PlaylistCoverArt(playlist, songs, Modifier.size(108.dp), radius = 9.dp)
-                    Column(Modifier.padding(start = 18.dp).weight(1f)) {
-                        Text(playlist.name, fontSize = 23.sp, lineHeight = 31.sp, letterSpacing = (-0.5).sp, fontWeight = FontWeight.SemiBold)
-                        Text("${songs.size} 首 · 本机歌单", color = MusicMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 5.dp))
-                        Button(onClick = { songs.firstOrNull()?.let { actions.play(songs, it) } }, enabled = songs.isNotEmpty(),
-                            modifier = Modifier.padding(top = 13.dp).height(40.dp), shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 7.dp)) {
-                            Icon(Icons.Outlined.PlayArrow, null, Modifier.size(15.dp)); Spacer(Modifier.width(6.dp))
-                            Text("播放全部", fontSize = 12.sp)
-                        }
+    val reorder = rememberMusicReorderState(listState, songs.map { it.id }) { from, to ->
+        saveOrder(MusicQueue.move(orderedTrackIds, from, to))
+    }
+    val listContentPadding = PaddingValues(start = 23.dp, end = 23.dp, top = 14.dp, bottom = 20.dp)
+    Box(modifier.musicReorderContainer(reorder, songs.size > 1)) {
+        LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = listContentPadding) {
+            item {
+                Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onBack, Modifier.size(44.dp).border(1.dp, Line, RoundedCornerShape(50))) {
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回", Modifier.size(18.dp))
+                    }
+                    Text("歌单", fontSize = 18.sp, lineHeight = 27.sp, letterSpacing = (-0.3).sp,
+                        fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 12.dp).weight(1f))
+                    TextButton(onClick = { actions.edit(playlist) }) { Text("编辑", fontSize = 12.sp) }
+                    IconButton(onClick = { actions.delete(playlist) }, Modifier.size(44.dp)) {
+                        Icon(Icons.Outlined.DeleteOutline, "删除歌单", tint = MusicMuted, modifier = Modifier.size(19.dp))
                     }
                 }
-                HorizontalDivider(color = MusicLine)
             }
-        }
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                MusicSectionHeading("歌单歌曲", if (songs.isEmpty()) "暂无歌曲" else "${songs.size} 首", modifier = Modifier.weight(1f))
-                TextButton(onClick = { actions.edit(playlist) }, Modifier.height(36.dp), contentPadding = PaddingValues(0.dp)) {
-                    Icon(Icons.Outlined.Add, null, Modifier.size(15.dp)); Spacer(Modifier.width(3.dp)); Text("添加歌曲", fontSize = 11.sp)
+            item {
+                Column {
+                    Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 22.dp), verticalAlignment = Alignment.CenterVertically) {
+                        PlaylistCoverArt(playlist, songs, Modifier.size(108.dp), radius = 9.dp)
+                        Column(Modifier.padding(start = 18.dp).weight(1f)) {
+                            Text(playlist.name, fontSize = 23.sp, lineHeight = 31.sp, letterSpacing = (-0.5).sp, fontWeight = FontWeight.SemiBold)
+                            Text("${songs.size} 首 · 本机歌单", color = MusicMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 5.dp))
+                            Button(onClick = { songs.firstOrNull()?.let { actions.play(songs, it) } }, enabled = songs.isNotEmpty(),
+                                modifier = Modifier.padding(top = 13.dp).height(40.dp), shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 7.dp)) {
+                                Icon(Icons.Outlined.PlayArrow, null, Modifier.size(15.dp)); Spacer(Modifier.width(6.dp))
+                                Text("播放全部", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                    HorizontalDivider(color = MusicLine)
+                }
+            }
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    MusicSectionHeading("歌单歌曲", if (songs.isEmpty()) "暂无歌曲" else "${songs.size} 首", modifier = Modifier.weight(1f))
+                    TextButton(onClick = { actions.edit(playlist) }, Modifier.height(36.dp), contentPadding = PaddingValues(0.dp)) {
+                        Icon(Icons.Outlined.Add, null, Modifier.size(15.dp)); Spacer(Modifier.width(3.dp)); Text("添加歌曲", fontSize = 11.sp)
+                    }
+                }
+            }
+            if (songs.isEmpty()) item { EmptyCard("这个歌单还没有歌曲", "点击「添加歌曲」从本机曲库选择，不会自动补入其他歌曲。") }
+            else {
+                itemsIndexed(songs, key = { _, track -> track.id }) { index, track ->
+                    Column(Modifier.musicReorderItem(reorder, track.id, index)
+                        .background(Color.White)) {
+                        PlaylistTrackRow(track, track.id == selectedTrackId, index, songs.size, reorder,
+                            onMove = { target -> saveOrder(MusicQueue.move(orderedTrackIds, index, target)) },
+                            onRemove = { saveOrder(MusicQueue.remove(orderedTrackIds, index)) },
+                            onClick = { actions.play(songs, track) })
+                        if (index < songs.lastIndex) HorizontalDivider(color = MusicSongLine)
+                    }
+                }
+                item {
+                    Text("长按歌曲可拖动排序，更多操作在「···」中", Modifier.fillMaxWidth().padding(top = 12.dp),
+                        color = MusicMuted, fontSize = 10.sp, lineHeight = 17.sp, textAlign = TextAlign.Center)
                 }
             }
         }
-        if (songs.isEmpty()) item { EmptyCard("这个歌单还没有歌曲", "点击「添加歌曲」从本机曲库选择，不会自动补入其他歌曲。") }
-        else {
-            itemsIndexed(songs, key = { _, track -> track.id }) { index, track ->
-                Column(Modifier.musicReorderItem(reorder, track.id, index)
-                    .background(if (reorder.draggedId == track.id) Color.White else Color.Transparent)) {
+        MusicReorderDragOverlay(reorder, listContentPadding) { id, index ->
+            byId[id]?.let { track ->
+                Column {
                     PlaylistTrackRow(track, track.id == selectedTrackId, index, songs.size, reorder,
-                        onMove = { target -> actions.save(playlist.copy(trackIds = MusicQueue.move(playlist.trackIds, index, target))) },
-                        onRemove = { actions.save(playlist.copy(trackIds = MusicQueue.remove(playlist.trackIds, index))) },
+                        onMove = { target -> saveOrder(MusicQueue.move(orderedTrackIds, index, target)) },
+                        onRemove = { saveOrder(MusicQueue.remove(orderedTrackIds, index)) },
                         onClick = { actions.play(songs, track) })
                     if (index < songs.lastIndex) HorizontalDivider(color = MusicSongLine)
                 }
             }
-            item {
-                Text("长按歌曲可拖动排序，更多操作在「···」中", Modifier.fillMaxWidth().padding(top = 12.dp),
-                    color = MusicMuted, fontSize = 10.sp, lineHeight = 17.sp, textAlign = TextAlign.Center)
-            }
         }
     }
+    MusicReorderAutoScroll(reorder)
 }
 
 @Composable

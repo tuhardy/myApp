@@ -1824,7 +1824,7 @@ def music_touch_drag(page, cdp, row, distance=48):
 
 
 def check_music_reorder(browser, errors):
-    page = browser.new_page(viewport={"width": 390, "height": MOBILE_HEIGHT}, reduced_motion="reduce")
+    page = browser.new_page(viewport={"width": 390, "height": MOBILE_HEIGHT}, reduced_motion="no-preference")
     page.on("pageerror", lambda error: errors.append(str(error)))
     try:
         page.goto(BASE_URL)
@@ -1844,6 +1844,7 @@ def check_music_reorder(browser, errors):
         page.locator("#music-current-open").click()
         page.locator("#music-queue").click()
         expect(page.locator("#modal .music-queue-current")).to_have_count(1)
+        page.wait_for_timeout(240)
         queue_rows = page.locator("#modal .music-queue-upcoming-section .music-queue-row")
         expect(queue_rows).to_have_count(23)
         queue_first = queue_rows.first.locator(".music-song-copy strong").inner_text()
@@ -1868,7 +1869,7 @@ def check_music_reorder(browser, errors):
         page.close()
 
     context = browser.new_context(viewport={"width": 390, "height": MOBILE_HEIGHT},
-                                  is_mobile=True, has_touch=True, reduced_motion="reduce")
+                                  is_mobile=True, has_touch=True, reduced_motion="no-preference")
     page = context.new_page()
     page.on("pageerror", lambda error: errors.append(str(error)))
     cdp = context.new_cdp_session(page)
@@ -1887,6 +1888,7 @@ def check_music_reorder(browser, errors):
         page.locator('[data-music-tab="recommend"]').tap()
         page.locator("#music-current-open").tap()
         page.locator("#music-queue").tap()
+        page.wait_for_timeout(240)
         queue_rows = page.locator("#modal .music-queue-upcoming-section .music-queue-row")
         queue_first = queue_rows.first.locator(".music-song-copy strong").inner_text()
         music_touch_drag(page, cdp, queue_rows.first)

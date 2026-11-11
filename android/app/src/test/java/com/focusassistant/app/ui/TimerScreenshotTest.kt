@@ -66,7 +66,7 @@ class TimerScreenshotTest {
 
     private fun assertControlsVisible(vararg labels: String) {
         compose.onRoot().fetchSemanticsNode().boundsInRoot.let { root ->
-            (labels + arrayOf("短休息", "长休息")).forEach { label ->
+            (labels.toList() + listOf("短休息", "长休息")).forEach { label ->
                 val node = compose.onNodeWithText(label).assertIsDisplayed().fetchSemanticsNode()
                 val bounds = node.boundsInRoot
                 assertTrue("$label 超出计时页顶部", bounds.top >= root.top)

@@ -130,10 +130,15 @@ internal fun MusicQueueDialog(
 ) {
     val byId = tracks.associateBy { it.id }
     val sections = MusicQueue.sections(playback.queueIds, playback.trackId)
+    var upcomingIds by remember { mutableStateOf(sections.upcomingIds) }
+    LaunchedEffect(sections.upcomingIds) { upcomingIds = sections.upcomingIds }
     var playedOpen by remember(playback.trackId) { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    val reorder = rememberMusicReorderState(sections.upcomingIds.size, onMove)
-    MusicReorderAutoScroll(reorder, listState)
+    val moveUpcoming: (Int, Int) -> Unit = { from, to ->
+        upcomingIds = MusicQueue.move(upcomingIds, from, to)
+        onMove(from, to)
+    }
+    val reorder = rememberMusicReorderState(listState, upcomingIds, moveUpcoming)
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
             Surface(Modifier.fillMaxWidth().fillMaxHeight(0.92f),
@@ -182,39 +187,54 @@ internal fun MusicQueueDialog(
                         }
                     }
                     Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("接下来播放 · ${sections.upcomingIds.size} 首", Modifier.weight(1f),
+                        Text("接下来播放 · ${upcomingIds.size} 首", Modifier.weight(1f),
                             fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         TextButton(onClick = onClear, enabled = playback.queueIds.size > 1) { Text("清空待播", fontSize = 11.sp) }
                     }
                     HorizontalDivider(color = MusicLine)
-                    LazyColumn(Modifier.weight(1f), state = listState) {
-                        itemsIndexed(sections.upcomingIds, key = { _, id -> id }) { index, id ->
-                            val track = byId[id] ?: return@itemsIndexed
-                            Column(Modifier.musicReorderItem(reorder, id, index)
-                                .background(if (reorder.draggedId == id) Color.White else Color.Transparent)) {
-                                MusicQueueTrackRow(track, reorder, onClick = { onPlay(playback.queueIds.indexOf(id)) }, actions = listOf(
-                                    MusicRowAction("上移", index > 0) { onMove(index, index - 1) },
-                                    MusicRowAction("下移", index < sections.upcomingIds.lastIndex) { onMove(index, index + 1) },
-                                    MusicRowAction("从队列移除") { onRemove(playback.queueIds.indexOf(id)) },
-                                ))
-                                if (index < sections.upcomingIds.lastIndex) HorizontalDivider(color = MusicLine)
+                    Box(Modifier.weight(1f).musicReorderContainer(reorder, upcomingIds.size > 1)) {
+                        LazyColumn(Modifier.fillMaxSize(), state = listState) {
+                            itemsIndexed(upcomingIds, key = { _, id -> id }) { index, id ->
+                                val track = byId[id] ?: return@itemsIndexed
+                                Column(Modifier.musicReorderItem(reorder, id, index)
+                                    .background(Color.White)) {
+                                    MusicQueueTrackRow(track, reorder, onClick = { onPlay(playback.queueIds.indexOf(id)) }, actions = listOf(
+                                        MusicRowAction("上移", index > 0) { moveUpcoming(index, index - 1) },
+                                        MusicRowAction("下移", index < upcomingIds.lastIndex) { moveUpcoming(index, index + 1) },
+                                        MusicRowAction("从队列移除") { onRemove(playback.queueIds.indexOf(id)) },
+                                    ))
+                                    if (index < upcomingIds.lastIndex) HorizontalDivider(color = MusicLine)
+                                }
+                            }
+                            if (upcomingIds.isEmpty()) item {
+                                Text(if (sections.currentId != null) "当前歌曲之后没有待播歌曲。" else "队列已清空，从歌曲页选择一首即可重新播放。",
+                                    Modifier.fillMaxWidth().padding(vertical = 28.dp), color = MusicMuted, fontSize = 12.sp,
+                                    lineHeight = 20.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                            }
+                            if (upcomingIds.size > 1) item {
+                                Text("长按歌曲拖动排序，更多操作在「···」中", Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
+                                    color = MusicMuted, fontSize = 10.sp, lineHeight = 17.sp,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                            }
+                            if (playback.mode == MusicPlayMode.SHUFFLE) item {
+                                Text("随机模式的实际播放顺序由播放器决定，拖动仍会保存队列顺序。",
+                                    Modifier.padding(bottom = 8.dp), color = MusicMuted, fontSize = 10.sp, lineHeight = 17.sp)
                             }
                         }
-                        if (sections.upcomingIds.isEmpty()) item {
-                            Text(if (sections.currentId != null) "当前歌曲之后没有待播歌曲。" else "队列已清空，从歌曲页选择一首即可重新播放。",
-                                Modifier.fillMaxWidth().padding(vertical = 28.dp), color = MusicMuted, fontSize = 12.sp,
-                                lineHeight = 20.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                        }
-                        if (sections.upcomingIds.size > 1) item {
-                            Text("长按歌曲拖动排序，更多操作在「···」中", Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
-                                color = MusicMuted, fontSize = 10.sp, lineHeight = 17.sp,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                        }
-                        if (playback.mode == MusicPlayMode.SHUFFLE) item {
-                            Text("随机模式的实际播放顺序由播放器决定，拖动仍会保存队列顺序。",
-                                Modifier.padding(bottom = 8.dp), color = MusicMuted, fontSize = 10.sp, lineHeight = 17.sp)
+                        MusicReorderDragOverlay(reorder) { id, index ->
+                            byId[id]?.let { track ->
+                                Column {
+                                    MusicQueueTrackRow(track, reorder, onClick = { onPlay(playback.queueIds.indexOf(id)) }, actions = listOf(
+                                        MusicRowAction("上移", index > 0) { moveUpcoming(index, index - 1) },
+                                        MusicRowAction("下移", index < upcomingIds.lastIndex) { moveUpcoming(index, index + 1) },
+                                        MusicRowAction("从队列移除") { onRemove(playback.queueIds.indexOf(id)) },
+                                    ))
+                                    if (index < upcomingIds.lastIndex) HorizontalDivider(color = MusicLine)
+                                }
+                            }
                         }
                     }
+                    MusicReorderAutoScroll(reorder)
                     if (sections.playedIds.isNotEmpty()) {
                         HorizontalDivider(color = MusicLine)
                         Row(Modifier.fillMaxWidth().heightIn(min = 46.dp).clickable { playedOpen = !playedOpen },

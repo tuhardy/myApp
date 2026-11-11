@@ -259,20 +259,49 @@
     let initialScroll = 0;
     let frame = 0;
     let touchInput = false;
+    let settling = false;
+    let settleAnimation = null;
 
-    const cleanup = commit => {
+    const cleanup = () => {
       clearTimeout(timer);
       cancelAnimationFrame(frame);
+      settleAnimation?.cancel();
+      settleAnimation = null;
       rows.forEach(item => {
         item.style.transform = "";
         item.classList.remove("music-dragging", "music-drop-before", "music-drop-after");
       });
       list.classList.remove("is-reordering");
       row.style.touchAction = "";
-      if (active && commit && target !== from) onMove(from, target);
       active = false;
+      settling = false;
       pointerId = null;
       start = null;
+    };
+
+    const settle = commit => {
+      if (!active || settling) return;
+      settling = true;
+      cancelAnimationFrame(frame);
+      const shouldMove = commit && target !== from;
+      const destination = shouldMove ? rects[target].top - rects[from].top : 0;
+      const complete = () => {
+        if (!active) return;
+        try {
+          if (shouldMove) onMove(from, target);
+        } finally {
+          cleanup();
+        }
+      };
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        complete();
+        return;
+      }
+      settleAnimation = row.animate([
+        { transform: `translateY(${pointerY - originY}px)` },
+        { transform: `translateY(${destination}px)` },
+      ], { duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)", fill: "forwards" });
+      settleAnimation.onfinish = complete;
     };
 
     const paint = () => {
@@ -296,7 +325,7 @@
     };
 
     const autoScroll = () => {
-      if (!active) return;
+      if (!active || settling) return;
       const bounds = scrollHost.getBoundingClientRect();
       if (pointerY < bounds.top + 48) scrollHost.scrollTop = Math.max(0, scrollHost.scrollTop - 12);
       else if (pointerY > bounds.bottom - 48) scrollHost.scrollTop += 12;
@@ -305,6 +334,7 @@
     };
 
     const begin = (id, x, y, touch) => {
+      if (active || settling) return;
       pointerId = id;
       touchInput = touch;
       start = { x, y };
@@ -313,7 +343,7 @@
       timer = setTimeout(() => {
         rows = [...list.querySelectorAll(":scope > .music-reorder-item")].filter(item => !item.hidden);
         from = rows.indexOf(row);
-        if (from < 0 || rows.length < 2) { cleanup(false); return; }
+        if (from < 0 || rows.length < 2) { cleanup(); return; }
         active = true;
         target = from;
         originY = pointerY;
@@ -333,10 +363,10 @@
       }, 260);
     };
     const move = (id, x, y, event) => {
-      if (id !== pointerId) return;
+      if (id !== pointerId || settling) return;
       pointerY = y;
       if (!active) {
-        if (start && Math.hypot(x - start.x, y - start.y) > 8) cleanup(false);
+        if (start && Math.hypot(x - start.x, y - start.y) > 8) cleanup();
         return;
       }
       event.preventDefault();
@@ -344,9 +374,14 @@
     };
     const end = (id, event) => {
       if (id !== pointerId) return;
-      suppressClick = active;
-      if (active) event.preventDefault();
-      cleanup(true);
+      if (!active) { cleanup(); return; }
+      suppressClick = true;
+      event.preventDefault();
+      settle(true);
+    };
+    const cancel = () => {
+      if (active) settle(false);
+      else cleanup();
     };
     row.addEventListener("pointerdown", event => {
       if (event.pointerType === "touch" || !event.isPrimary || event.button !== 0 || event.target.closest("[data-music-no-drag]")) return;
@@ -356,7 +391,7 @@
       if (!touchInput) move(event.pointerId, event.clientX, event.clientY, event);
     });
     row.addEventListener("pointerup", event => { if (!touchInput) end(event.pointerId, event); });
-    row.addEventListener("pointercancel", event => { if (!touchInput && event.pointerId === pointerId) cleanup(false); });
+    row.addEventListener("pointercancel", event => { if (!touchInput && event.pointerId === pointerId) cancel(); });
     row.addEventListener("touchstart", event => {
       if (event.touches.length !== 1 || event.target.closest("[data-music-no-drag]")) return;
       const touch = event.touches[0];
@@ -372,7 +407,7 @@
       const touch = [...event.changedTouches].find(item => item.identifier === pointerId);
       if (touch) end(touch.identifier, event);
     }, { passive: false });
-    row.addEventListener("touchcancel", () => { if (touchInput) cleanup(false); });
+    row.addEventListener("touchcancel", () => { if (touchInput) cancel(); });
     row.addEventListener("contextmenu", event => { if (active) event.preventDefault(); });
     row.addEventListener("click", event => {
       if (!suppressClick) return;
