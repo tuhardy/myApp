@@ -115,6 +115,9 @@ class MusicScreenshotTest {
         compose.onNodeWithText("3:20").assertExists()
         compose.onNodeWithText("列表循环").assertExists()
         compose.onNodeWithText("播放队列 · 12").assertIsDisplayed()
+        compose.onNodeWithContentDescription("上一首").assertIsDisplayed()
+        compose.onNodeWithContentDescription("暂停").assertIsDisplayed()
+        compose.onNodeWithContentDescription("下一首").assertIsDisplayed()
         capture("music-immersive-player")
         compose.onNodeWithContentDescription("返回声音馆").performClick()
         compose.runOnIdle { assertEquals(false, state.playerOpen) }

@@ -705,8 +705,7 @@ private fun SongRow(track: MusicTrack, selected: Boolean, rank: Int? = null, sta
 }
 
 @Composable
-internal fun TrackCoverArt(track: MusicTrack, modifier: Modifier = Modifier, radius: Dp = 7.dp,
-    contentScale: ContentScale = ContentScale.Crop, naturalAspectRatio: Boolean = false) {
+internal fun rememberTrackCoverBitmap(track: MusicTrack): Bitmap? {
     val context = LocalContext.current
     val bitmap by produceState<Bitmap?>(null, track.id, track.coverFile) {
         value = withContext(Dispatchers.IO) {
@@ -719,16 +718,20 @@ internal fun TrackCoverArt(track: MusicTrack, modifier: Modifier = Modifier, rad
             BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
         }
     }
+    return bitmap
+}
+
+@Composable
+internal fun TrackCoverArt(track: MusicTrack, modifier: Modifier = Modifier, radius: Dp = 7.dp,
+    contentScale: ContentScale = ContentScale.Crop) {
+    val bitmap = rememberTrackCoverBitmap(track)
     bitmap?.let {
-        val imageModifier = if (naturalAspectRatio) Modifier.aspectRatio(it.width.toFloat() / it.height)
-            .background(Color(0xFFF2F3F3), RoundedCornerShape(radius)).clip(RoundedCornerShape(radius))
-        else modifier.clip(RoundedCornerShape(radius))
-        Image(it.asImageBitmap(), null, imageModifier, contentScale = contentScale)
+        Image(it.asImageBitmap(), null, modifier.clip(RoundedCornerShape(radius)), contentScale = contentScale)
     } ?: CoverArt(track.id, modifier, radius)
 }
 
 @Composable
-private fun CoverArt(seed: String, modifier: Modifier = Modifier, radius: Dp = 7.dp) {
+internal fun CoverArt(seed: String, modifier: Modifier = Modifier, radius: Dp = 7.dp) {
     val tones = listOf(
         Color(0xFFE4E6E6) to Color(0xFF777E81), Color(0xFF35393B) to Color(0xFFD8DCDD),
         Color(0xFFD7DADB) to Color(0xFF666D70), Color(0xFFECECEA) to Color(0xFF85898A),

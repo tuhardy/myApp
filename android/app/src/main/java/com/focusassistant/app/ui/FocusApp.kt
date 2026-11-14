@@ -537,8 +537,8 @@ fun FocusApp(repository: FocusRepository, ui: NativeUiModel = viewModel(), quick
 
     FocusTheme {
         Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
-            // 全屏编辑日记时隐藏底部导航；求职辅助运行或暂停时，在导航上方显示状态条。
-            if (!writingDiary && ui.screen != Screen.JOB_ASSIST) Column {
+            // 全屏编辑日记和沉浸播放器隐藏底部导航；求职辅助运行或暂停时，在导航上方显示状态条。
+            if (!writingDiary && ui.screen != Screen.JOB_ASSIST && !(ui.screen == Screen.MUSIC && ui.music.playerOpen)) Column {
                 if (bossStatus.task?.live == true) JobRunBar(jobEntry, onOpen = { ui.screen = Screen.JOB_ASSIST }, onTogglePause = { BossAutomation.togglePause() })
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface,

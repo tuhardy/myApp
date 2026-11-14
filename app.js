@@ -1196,6 +1196,7 @@
     if (track.coverUrl) {
       const image = document.createElement("img");
       image.addEventListener("load", () => {
+        if (!cover.contains(image)) return;
         if (image.naturalWidth > 0 && image.naturalHeight > 0) cover.style.setProperty("--cover-ratio", String(image.naturalWidth / image.naturalHeight));
       });
       image.src = track.coverUrl;
@@ -1219,6 +1220,11 @@
     $("music-recent-list").replaceChildren(...recent.map(track => buildMusicSongRow(track)));
   }
 
+  function paintMusicProgressRange(range) {
+    const percent = Math.min(100, Math.max(0, Number(range.value) / Math.max(1, Number(range.max)) * 100));
+    range.style.setProperty("--player-progress", `${percent}%`);
+  }
+
   function renderMusicProgress() {
     const track = currentMusicTrack();
     const active = musicAudio && musicAudioTrackId === track.id;
@@ -1228,6 +1234,7 @@
     range.max = String(Math.max(1, Math.round(duration * 1000)));
     if (!musicProgressDragging) range.value = String(Math.round(position * 1000));
     range.disabled = !active || duration <= 0;
+    paintMusicProgressRange(range);
     $("music-player-position").textContent = musicClockText(position);
     $("music-player-duration").textContent = musicClockText(duration);
     range.setAttribute("aria-valuetext", `${musicClockText(position)}，共 ${musicClockText(duration)}`);
@@ -1248,6 +1255,7 @@
   function renderMusic() {
     const playerOpen = state.musicPlayerOpen;
     const detailOpen = !playerOpen && Boolean(state.musicPlaylist);
+    document.querySelector(".phone").classList.toggle("music-player-open", playerOpen);
     $("music-player-screen").hidden = !playerOpen;
     $("music-mini").hidden = $("page-music").hidden || playerOpen;
     $("music-mini").dataset.playing = String(state.musicPlaying);
@@ -1278,11 +1286,12 @@
     $("music-mini-artist").textContent = track.artist;
     $("music-player-track-title").textContent = track.title;
     $("music-player-track-artist").textContent = track.artist;
-    $("music-mode").textContent = MUSIC_PLAY_MODES.find(mode => mode.id === state.musicPlayMode).label;
-    $("music-queue").textContent = `播放队列 · ${state.musicQueueIds.length} 首`;
+    $("music-mode").querySelector("span").textContent = MUSIC_PLAY_MODES.find(mode => mode.id === state.musicPlayMode).label;
+    $("music-queue").querySelector("span").textContent = `播放队列 · ${state.musicQueueIds.length} 首`;
     updateMusicCover("music-current-cover", track);
     updateMusicCover("music-mini-cover", track);
     updateMusicCover("music-player-cover", track, "music-player-cover");
+    updateMusicCover("music-player-ambient", track, "music-player-ambient");
     renderMusicProgress();
     const queueEditor = document.querySelector(".music-queue-editor");
     if (queueEditor && queueEditor.dataset.currentId !== (track.id || "")) showMusicQueueDialog();
@@ -6283,6 +6292,7 @@
   $("music-edit").addEventListener("click", showMusicEditDialog);
   $("music-player-progress").addEventListener("input", event => {
     musicProgressDragging = true;
+    paintMusicProgressRange(event.target);
     $("music-player-position").textContent = musicClockText(Number(event.target.value) / 1000);
   });
   $("music-player-progress").addEventListener("change", event => {
